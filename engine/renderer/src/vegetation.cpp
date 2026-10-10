@@ -28,23 +28,112 @@ f32 trunk_radius_at(f32 y, f32 h, f32 r0) {
     return r0 * (1.0f - 0.9f * t) * (1.0f + 0.55f * std::exp(-y * 2.5f)) + 0.01f;
 }
 
-void add_trunk(MeshData& m, f32 h, f32 r0, u32 segments, f32 ring_step, f32 top) {
+// Per-tree trunk shape: irregular section, root buttresses, lean and bend. It has its own RNG so the crown
+// layout of a seed does not change when the trunk does.
+struct TrunkStyle {
+    vec2 lean;       // horizontal drift per metre of height (x, z), about 0.7 deg at most
+    vec2 bend;       // extra horizontal offset at the top (quadratic in height)
+    f32 harm_amp[3]; // irregular section: amplitudes of angular harmonics 2, 3 and 4
+    f32 harm_phase[3];
+    u32 buttress_count; // 4..6 root buttresses
+    f32 buttress_angle[6];
+    f32 buttress_size[6]; // radial size relative to the trunk radius
+    f32 buttress_height;  // metres
+};
+
+TrunkStyle make_trunk_style(u32 seed, f32 h) {
+    Rng rng(seed * 2654435761u + 99u);
+    TrunkStyle st{};
+    const f32 lean_angle = rng.range(0.0f, 0.012f), lean_dir = rng.range(0.0f, kTwoPi);
+    st.lean = {std::cos(lean_dir) * lean_angle, std::sin(lean_dir) * lean_angle};
+    const f32 bend_dir = rng.range(0.0f, kTwoPi), bend_amt = h * rng.range(0.003f, 0.012f);
+    st.bend = {std::cos(bend_dir) * bend_amt, std::sin(bend_dir) * bend_amt};
+    const f32 amps[3] = {0.06f, 0.04f, 0.025f};
+    for (int k = 0; k < 3; ++k) {
+        st.harm_amp[k] = amps[k] * rng.range(0.5f, 1.0f);
+        st.harm_phase[k] = rng.range(0.0f, kTwoPi);
+    }
+    st.buttress_count = 4 + rng.next() % 3;
+    const f32 spacing = kTwoPi / f32(st.buttress_count);
+    for (u32 i = 0; i < st.buttress_count; ++i) {
+        st.buttress_angle[i] = f32(i) * spacing + rng.range(-0.3f, 0.3f) * spacing;
+        st.buttress_size[i] = rng.range(0.7f, 1.05f);
+    }
+    st.buttress_height = h * rng.range(0.12f, 0.16f);
+    return st;
+}
+
+// Horizontal position (x, z) of the trunk axis at height y.
+vec2 trunk_axis(const TrunkStyle& st, f32 y, f32 h) {
+    const f32 t = y / h;
+    return st.lean * y + st.bend * (t * t);
+}
+vec3 axis_point(const TrunkStyle& st, f32 y, f32 h) {
+    const vec2 a = trunk_axis(st, y, h);
+    return {a.x, y, a.y};
+}
+
+// Trunk radius at height y and angle a. Below ground (y < 0) the flare keeps widening, so roots sink in.
+f32 section_radius(const TrunkStyle& st, f32 a, f32 y, f32 h, f32 r0) {
+    f32 irregular = 1.0f;
+    for (int k = 0; k < 3; ++k) irregular += st.harm_amp[k] * std::sin(f32(k + 2) * a + st.harm_phase[k]);
+    f32 r = trunk_radius_at(max(y, 0.0f), h, r0) * irregular;
+    const f32 fall = y >= 0.0f ? std::pow(std::max(0.0f, 1.0f - y / st.buttress_height), 2.0f) : 1.0f;
+    if (fall > 0.0f) {
+        const f32 spacing = kTwoPi / f32(st.buttress_count), w = spacing * 0.28f;
+        f32 bump = 0.0f;
+        for (u32 i = 0; i < st.buttress_count; ++i) {
+            const f32 d = a - st.buttress_angle[i];
+            const f32 dw = d - kTwoPi * std::round(d / kTwoPi);
+            bump += st.buttress_size[i] * std::exp(-(dw * dw) / (w * w));
+        }
+        r += r0 * bump * fall;
+    }
+    return r;
+}
+
+// Trunk as a ring grid along the axis. Normals come from the grid itself (the section is not a circle).
+// Tangent sign -1 makes the bitangent point up (+V), so the "_gl" normal map's green channel faces up.
+void add_trunk(MeshData& m, const TrunkStyle& st, f32 h, f32 r0, u32 segments, f32 ring_step, f32 top,
+               bool dense_base) {
+    std::vector<f32> ys = {-1.2f, 0.0f}; // start below ground: the buttresses sink into the soil
+    if (dense_base) ys.insert(ys.end(), {0.25f, 0.6f, 1.1f, 1.8f, 2.8f});
+    for (f32 y = ring_step; y < top - 0.05f; y += ring_step) ys.push_back(y);
+    ys.push_back(top);
+    std::sort(ys.begin(), ys.end());
+    std::vector<f32> rings_y;
+    for (f32 y : ys)
+        if (rings_y.empty() || y - rings_y.back() > 0.08f) rings_y.push_back(y);
+
+    const u32 rings = static_cast<u32>(rings_y.size()), stride = segments + 1;
     const u32 base = static_cast<u32>(m.vertices.size());
-    const u32 rings = static_cast<u32>(std::ceil(top / ring_step)) + 1;
+    std::vector<vec3> pos(usize(rings) * stride);
+    for (u32 r = 0; r < rings; ++r) {
+        const f32 y = rings_y[r];
+        const vec3 c = axis_point(st, y, h);
+        for (u32 s = 0; s <= segments; ++s) {
+            const f32 a = f32(s) / f32(segments) * kTwoPi;
+            const f32 rad = section_radius(st, a, y, h, r0);
+            pos[usize(r) * stride + s] = {c.x + std::cos(a) * rad, y, c.z + std::sin(a) * rad};
+        }
+    }
     const f32 circumference = kTwoPi * r0;
     const f32 u_scale = std::max(1.0f, std::round(circumference / 0.9f)); // bark texel density ~0.9 m per tile
     for (u32 r = 0; r < rings; ++r) {
-        const f32 y = std::min(f32(r) * ring_step, top);
-        const f32 rad = trunk_radius_at(y, h, r0);
+        const u32 rp = std::min(r + 1, rings - 1), rm = r > 0 ? r - 1 : 0;
         for (u32 s = 0; s <= segments; ++s) {
-            const f32 a = f32(s) / f32(segments) * kTwoPi;
-            const vec3 n{std::cos(a), 0.15f, std::sin(a)};
-            const vec3 p{std::cos(a) * rad, y, std::sin(a) * rad};
-            const vec3 t{-std::sin(a), 0.0f, std::cos(a)};
-            m.vertices.push_back(make_vertex(p, normalize(n), {f32(s) / f32(segments) * u_scale, y / 1.6f}, t, 1.0f));
+            const u32 s0 = s % segments, sn = (s0 + 1) % segments, sp = (s0 + segments - 1) % segments;
+            const vec3 p = pos[usize(r) * stride + s];
+            const vec3 t_angle = pos[usize(r) * stride + sn] - pos[usize(r) * stride + sp];
+            const vec3 t_axis = pos[usize(rp) * stride + s0] - pos[usize(rm) * stride + s0];
+            vec3 n = normalize(cross(t_axis, t_angle));
+            const vec3 c = axis_point(st, rings_y[r], h);
+            if (dot(n, p - c) < 0.0f) n = -n;
+            const f32 y = rings_y[r];
+            m.vertices.push_back(
+                make_vertex(p, n, {f32(s) / f32(segments) * u_scale, y / 1.6f}, normalize(t_angle), -1.0f));
         }
     }
-    const u32 stride = segments + 1;
     for (u32 r = 0; r + 1 < rings; ++r)
         for (u32 s = 0; s < segments; ++s) {
             const u32 a = base + r * stride + s, b = a + stride, c = a + 1, d = b + 1;
@@ -91,8 +180,9 @@ ConiferMeshes make_conifer(u32 seed, f32 h, f32 r0) {
     const f32 crown_r = h * 0.17f;
     out.crown_radius = crown_r;
 
-    add_trunk(out.trunk_lod0, h, r0, 12, 0.9f, h * 0.97f);
-    add_trunk(out.trunk_lod1, h, r0, 5, 4.0f, crown_start + 2.0f);
+    const TrunkStyle st = make_trunk_style(seed, h);
+    add_trunk(out.trunk_lod0, st, h, r0, 20, 0.9f, h * 0.97f, true);
+    add_trunk(out.trunk_lod1, st, h, r0, 5, 4.0f, crown_start + 2.0f, false);
 
     // LOD0 crown: whorls of drooping branch cards.
     f32 y = crown_start;
@@ -107,11 +197,12 @@ ConiferMeshes make_conifer(u32 seed, f32 h, f32 r0) {
             vec3 side = normalize(cross(vec3{0, 1, 0}, dir));
             const f32 tilt = rng.range(-0.5f, 0.5f);
             side = normalize(side * std::cos(tilt) + vec3{0, 1, 0} * std::sin(tilt));
-            const vec3 root{dir.x * trunk_radius_at(y, h, r0), y, dir.z * trunk_radius_at(y, h, r0)};
-            add_card(out.crown_lod0, root, dir, side, len, len * 0.55f + 0.3f, 0.35f, {0, y, 0}, crown_r);
+            const vec3 axis = axis_point(st, y, h);
+            const vec3 root{axis.x + dir.x * trunk_radius_at(y, h, r0), y, axis.z + dir.z * trunk_radius_at(y, h, r0)};
+            add_card(out.crown_lod0, root, dir, side, len, len * 0.55f + 0.3f, 0.35f, axis, crown_r);
             // Second card crossed at ~70 degrees around the branch axis gives volume from every angle.
             const vec3 side2 = normalize(side * 0.34f + normalize(cross(dir, side)) * 0.94f);
-            add_card(out.crown_lod0, root, dir, side2, len * 0.9f, len * 0.45f + 0.25f, 0.3f, {0, y, 0}, crown_r);
+            add_card(out.crown_lod0, root, dir, side2, len * 0.9f, len * 0.45f + 0.25f, 0.3f, axis, crown_r);
         }
         y += rng.range(0.32f, 0.48f);
         ++whorl;
@@ -119,8 +210,9 @@ ConiferMeshes make_conifer(u32 seed, f32 h, f32 r0) {
     // Leader at the top.
     for (int k = 0; k < 3; ++k) {
         const f32 a = f32(k) / 3.0f * kTwoPi;
-        add_card(out.crown_lod0, {0, h - 1.2f, 0}, normalize(vec3{std::cos(a) * 0.25f, 1.0f, std::sin(a) * 0.25f}),
-                 normalize(vec3{-std::sin(a), 0, std::cos(a)}), 1.3f, 0.5f, 0.0f, {0, h - 2.0f, 0}, crown_r);
+        add_card(out.crown_lod0, axis_point(st, h - 1.2f, h),
+                 normalize(vec3{std::cos(a) * 0.25f, 1.0f, std::sin(a) * 0.25f}),
+                 normalize(vec3{-std::sin(a), 0, std::cos(a)}), 1.3f, 0.5f, 0.0f, axis_point(st, h - 2.0f, h), crown_r);
     }
 
     // LOD1 crown: stacked skirts (cone shell) sharing the needle texture.
@@ -139,8 +231,8 @@ ConiferMeshes make_conifer(u32 seed, f32 h, f32 r0) {
             const vec3 tg{-std::sin(a), 0, std::cos(a)};
             const f32 u = f32(i) / f32(segs) * 3.0f;
             out.crown_lod1.vertices.push_back(
-                make_vertex(radial * rt + vec3{0, std::min(yt, h), 0}, n, {u, 0.0f}, tg, 1.0f));
-            out.crown_lod1.vertices.push_back(make_vertex(radial * rb + vec3{0, yb, 0}, n, {u, 1.0f}, tg, 1.0f));
+                make_vertex(radial * rt + axis_point(st, std::min(yt, h), h), n, {u, 0.0f}, tg, 1.0f));
+            out.crown_lod1.vertices.push_back(make_vertex(radial * rb + axis_point(st, yb, h), n, {u, 1.0f}, tg, 1.0f));
         }
         for (u32 i = 0; i < segs; ++i) {
             const u32 a = base + i * 2, b = a + 1, c = a + 2, d = a + 3;

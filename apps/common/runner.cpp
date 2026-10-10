@@ -209,6 +209,11 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             setup.settings.shadow_distance = max(setup.settings.shadow_distance, 300.0f);
         }
         if (cfg.no_taa) setup.settings.taa = false;
+        if (cfg.camera_override) {
+            setup.camera.position = {cfg.camera_xyz[0], cfg.camera_xyz[1], cfg.camera_xyz[2]};
+            setup.camera.yaw = cfg.camera_yaw_pitch[0];
+            setup.camera.pitch = cfg.camera_yaw_pitch[1];
+        }
         renderer = std::make_unique<render::Renderer>(*device, *heap, kFramesInFlight);
         params.camera = setup.camera;
     }
