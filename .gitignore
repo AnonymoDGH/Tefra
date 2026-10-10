@@ -9,3 +9,4 @@ compile_commands.json
 /bench-*.json
 /assets/cache/
 /.claude/worktrees/
+__pycache__/
