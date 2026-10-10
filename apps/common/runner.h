@@ -8,11 +8,29 @@
 #include "tefra/rhi/device.h"
 #include "tefra/rhi/swapchain.h"
 
+#include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
+namespace tefra::render {
+class Scene;
+class Environment;
+class Atmosphere;
+} // namespace tefra::render
+
 namespace tefra::app {
+
+struct SceneSetup;
+
+// A 3D scene supplied by a tool (tefra_avatar_demo) instead of one of the named scenes. `build` runs once, in place of
+// the named scene builders, and fills the scene and the settings. `frame` runs before every frame is recorded: the
+// tool updates its DataModel, animation and SceneSync there.
+struct CustomScene {
+    std::function<void(render::Scene&, render::Environment&, const render::Atmosphere&, SceneSetup&)> build;
+    std::function<void(u64 frame_index)> frame;
+};
 
 // Default view: 1.7 m eye height, 6 m behind the origin so both axis markers are visible.
 inline render::TestPatternParams default_scene_params() {
@@ -60,6 +78,7 @@ struct RunConfig {
     bool no_contact_shadows = false;
     bool debug_sun_shadow = false;
     render::TestPatternParams params = default_scene_params();
+    std::shared_ptr<CustomScene> custom_scene; // when set, scene is only a label and the custom build is used
 };
 
 struct RunStats {

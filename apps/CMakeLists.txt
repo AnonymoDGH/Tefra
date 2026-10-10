@@ -10,6 +10,7 @@ endif()
 
 tefra_add_executable(tefra_info SOURCES info/main.cpp DEPS tefra_app)
 tefra_add_executable(tefra_bench SOURCES bench/main.cpp DEPS tefra_app)
+tefra_add_executable(tefra_avatar_demo SOURCES avatar_demo/main.cpp DEPS tefra_app tefra_anim tefra_world)
 if(TEFRA_WITH_WINDOW)
     tefra_add_executable(tefra_viewer SOURCES viewer/main.cpp DEPS tefra_app)
 endif()

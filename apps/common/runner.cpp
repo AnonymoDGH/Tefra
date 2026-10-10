@@ -166,7 +166,10 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
         env = std::make_unique<render::Environment>(*device, *heap);
         atmosphere = std::make_unique<render::Atmosphere>(*device, *heap);
         bool built = false;
-        if (cfg.scene == "materials") {
+        if (cfg.custom_scene && cfg.custom_scene->build) {
+            cfg.custom_scene->build(*scene, *env, *atmosphere, setup);
+            built = true;
+        } else if (cfg.scene == "materials") {
             build_materials_scene(*scene, *env, setup);
             built = true;
         } else if (cfg.scene == "materials_sky") {
@@ -275,6 +278,8 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             params.time = static_cast<f32>(frame_index) / 60.0f;
             params.camera.yaw = (scene3d ? setup.camera.yaw : cfg.params.camera.yaw) + params.time * 0.2f;
         }
+
+        if (cfg.custom_scene && cfg.custom_scene->frame) cfg.custom_scene->frame(frame_index);
 
         // Swapchain acquire (with recreate on resize/out-of-date).
         u32 image_index = 0;
