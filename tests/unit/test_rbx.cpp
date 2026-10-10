@@ -851,3 +851,29 @@ TEST_CASE("rbx: missing or empty files fail cleanly") {
     CHECK_FALSE(
         import_place_memory(reinterpret_cast<const u8*>(not_roblox.data()), not_roblox.size(), dm, {}, nullptr, &err));
 }
+
+TEST_CASE("rbx: XML Content elements keep their URI (uri and url spellings); unsupported lighting is reported") {
+    const std::string text = R"XML(<roblox version="4">
+  <Item class="Workspace" referent="RBX1">
+    <Item class="Sound" referent="RBX2">
+      <Properties><string name="Name">S1</string><Content name="SoundId"><uri>rbxassetid://111</uri></Content></Properties>
+    </Item>
+    <Item class="Sound" referent="RBX3">
+      <Properties><string name="Name">S2</string><Content name="SoundId"><url>rbxassetid://222</url></Content></Properties>
+    </Item>
+  </Item>
+  <Item class="Lighting" referent="RBX4">
+    <Properties><Color3 name="Ambient"><R>0</R><G>0</G><B>0</B></Color3></Properties>
+  </Item>
+</roblox>)XML";
+    DataModel dm;
+    ImportReport rep;
+    std::string err;
+    REQUIRE(import_place_memory(reinterpret_cast<const u8*>(text.data()), text.size(), dm, {}, &rep, &err));
+    REQUIRE(dm.find_path("Workspace.S1") != nullptr);
+    CHECK(dm.find_path("Workspace.S1")->get_string("SoundId") == "rbxassetid://111");
+    CHECK(dm.find_path("Workspace.S2")->get_string("SoundId") == "rbxassetid://222");
+    bool warned = false;
+    for (const std::string& w : rep.warnings) warned = warned || w.find("Lighting.Ambient") != std::string::npos;
+    CHECK(warned);
+}

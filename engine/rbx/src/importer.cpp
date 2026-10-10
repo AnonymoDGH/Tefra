@@ -334,7 +334,10 @@ JsonValue floats_json(const f32* f, usize n) {
 }
 
 std::string truncated_base64(const std::string& bytes) {
-    std::string b64 = base64_encode(reinterpret_cast<const u8*>(bytes.data()), bytes.size());
+    // Only the bytes that can reach the cut are encoded (4 base64 chars per 3 bytes).
+    const usize max_bytes = kMaxBlobChars / 4 * 3;
+    const usize n = std::min(bytes.size(), max_bytes);
+    std::string b64 = base64_encode(reinterpret_cast<const u8*>(bytes.data()), n);
     if (b64.size() > kMaxBlobChars) b64.resize(kMaxBlobChars);
     return b64;
 }
@@ -571,6 +574,8 @@ void Converter::apply_service(const InstanceData& d, Instance& svc) {
             const f64 distance = std::max(1.0, *fog_end * s_);
             svc.set("FogDensity", WValue::number(std::min(1.0, 3.0 / distance)));
         }
+        for (const char* ignored : {"Ambient", "OutdoorAmbient", "Brightness", "FogStart", "FogColor"})
+            if (d.find(ignored)) warn(std::string("Lighting.") + ignored + " has no Tefra equivalent (ignored)");
     } else if (cls == "StarterPlayer") {
         if (auto v = num_of(d, "CharacterWalkSpeed")) svc.set("CharacterWalkSpeed", WValue::number(*v * s_));
         if (auto h = num_of(d, "CharacterJumpHeight")) {

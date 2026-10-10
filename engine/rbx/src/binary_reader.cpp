@@ -4,6 +4,7 @@
 // are zigzag-encoded, floats have the sign bit moved to the end, referent arrays are delta-encoded.
 #include "internal.h"
 
+#include <cstdio>
 #include <cstring>
 #include <unordered_map>
 

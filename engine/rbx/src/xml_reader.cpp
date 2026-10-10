@@ -255,6 +255,12 @@ const XNode* child(const Tree& t, const XNode& n, std::string_view tag) {
     return nullptr;
 }
 
+// The URI child of a Content / Family element: "uri" or "url".
+const XNode* child_uri(const Tree& t, const XNode& n) {
+    if (const XNode* u = child(t, n, "uri")) return u;
+    return child(t, n, "url");
+}
+
 bool parse_f64(std::string_view text, f64& out) {
     text = trim(text);
     if (text == "INF" || text == "+INF" || text == "inf") {
@@ -444,7 +450,7 @@ bool convert(const Ctx& c, const XNode& n, std::string_view prop_name, Value& v,
     } else if (tag == "Font") {
         v.type = Type::Font;
         if (const XNode* fam = child(c.t, n, "Family"))
-            if (const XNode* url = child(c.t, *fam, "url")) v.s = std::string(trim(url->text));
+            if (const XNode* url = child_uri(c.t, *fam)) v.s = std::string(trim(url->text));
         i64 weight = 400;
         if (const XNode* w = child(c.t, n, "Weight"))
             if (!parse_i64(w->text, weight)) return why = "malformed Font weight", false;
@@ -457,7 +463,7 @@ bool convert(const Ctx& c, const XNode& n, std::string_view prop_name, Value& v,
         // One child: <null/>, <url>, or <Ref> (object content).
         for (u32 k : n.children) {
             const XNode& e = c.t.nodes[k];
-            if (e.tag == "url") {
+            if (e.tag == "uri" || e.tag == "url") { // the format notes say uri; ContentId (legacy) uses url
                 v.aux = 1;
                 v.s = std::string(trim(e.text));
             } else if (e.tag == "Ref") {
