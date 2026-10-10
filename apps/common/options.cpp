@@ -51,6 +51,11 @@ bool parse_common_options(const CommandLine& cl, RunConfig& cfg) {
         cfg.pitch_deg = static_cast<f32>(cl.get_float("pitch", 0.0));
         cfg.has_pitch = true;
     }
+    cfg.no_volumetric = cl.has("no-volumetric");
+    if (cl.has("yaw")) {
+        cfg.has_camera_yaw = true;
+        cfg.camera_yaw_deg = static_cast<f32>(cl.get_float("yaw", 0.0));
+    }
     if (cfg.width == 0 || cfg.height == 0 || cfg.width > 8192 || cfg.height > 8192) {
         TEFRA_LOG_ERROR("invalid resolution %ux%u", cfg.width, cfg.height);
         return false;
@@ -74,6 +79,8 @@ void print_common_usage() {
                 "  --no-taa                disable temporal anti-aliasing\n"
                 "  --no-terrain-detail     terrain: disable POM, stochastic tiling and macro variation\n"
                 "  --pitch DEG             camera pitch (degrees, negative looks down) for scenes\n"
+                "  --yaw DEG               camera yaw (degrees) for scenes\n"
+                "  --no-volumetric         disable volumetric fog (keeps the analytic height fog)\n"
                 "  --camera x,y,z,yaw,pitch  override the scene camera (degrees for yaw/pitch)\n");
 }
 

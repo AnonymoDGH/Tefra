@@ -47,6 +47,9 @@ struct RunConfig {
     bool camera_override = false; // --camera x,y,z,yaw_deg,pitch_deg (scene3d)
     f64 camera_xyz[3] = {0.0, 0.0, 0.0};
     f32 camera_yaw_pitch[2] = {0.0f, 0.0f};
+    bool no_volumetric = false;  // disable volumetric fog (analytic height fog only)
+    bool has_camera_yaw = false; // --yaw DEG overrides the scene camera
+    f32 camera_yaw_deg = 0.0f;
     render::TestPatternParams params = default_scene_params();
 };
 

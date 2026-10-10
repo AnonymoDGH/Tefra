@@ -34,7 +34,12 @@ struct MeshPush {
 };
 struct LightingPush {
     VkDeviceAddress frame;
-    u32 depth, rt0, rt1, rt2, ao;
+    u32 depth, rt0, rt1, rt2, ao, vol;
+};
+struct VolumetricPush {
+    VkDeviceAddress frame;
+    u32 depth;
+    u32 pad;
 };
 struct TonemapPush {
     VkDeviceAddress frame;
@@ -129,16 +134,17 @@ Renderer::~Renderer() {
         if (history_bindless_[i] != ~0u) heap_.remove_texture(history_bindless_[i]);
         rhi::destroy_image(dev_, history_[i]);
     }
-    for (VkPipeline p : {p_gbuffer_, p_gbuffer_2s_, p_shadow_, p_lighting_, p_tonemap_, p_skyview_, p_terrain_,
-                         p_terrain_shadow_, p_veg_, p_veg_2s_, p_veg_shadow_, p_veg_cull_, p_water_, p_taa_, p_gtao_})
+    for (VkPipeline p :
+         {p_gbuffer_, p_gbuffer_2s_, p_shadow_, p_lighting_, p_tonemap_, p_skyview_, p_terrain_, p_terrain_shadow_,
+          p_veg_, p_veg_2s_, p_veg_shadow_, p_veg_cull_, p_water_, p_taa_, p_gtao_, p_volumetric_})
         if (p) vkDestroyPipeline(dev_.device(), p, nullptr);
     vkDestroyPipelineLayout(dev_.device(), layout_, nullptr);
 }
 
 void Renderer::create_pipelines(VkFormat output_format) {
-    for (VkPipeline* p :
-         {&p_gbuffer_, &p_gbuffer_2s_, &p_shadow_, &p_lighting_, &p_tonemap_, &p_skyview_, &p_terrain_,
-          &p_terrain_shadow_, &p_veg_, &p_veg_2s_, &p_veg_shadow_, &p_veg_cull_, &p_water_, &p_taa_, &p_gtao_}) {
+    for (VkPipeline* p : {&p_gbuffer_, &p_gbuffer_2s_, &p_shadow_, &p_lighting_, &p_tonemap_, &p_skyview_, &p_terrain_,
+                          &p_terrain_shadow_, &p_veg_, &p_veg_2s_, &p_veg_shadow_, &p_veg_cull_, &p_water_, &p_taa_,
+                          &p_gtao_, &p_volumetric_}) {
         if (*p) vkDestroyPipeline(dev_.device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -161,6 +167,7 @@ void Renderer::create_pipelines(VkFormat output_format) {
     VkShaderModule water_fs = rhi::load_shader(dev_, "water.frag");
     VkShaderModule taa_fs = rhi::load_shader(dev_, "taa.frag");
     VkShaderModule gtao_fs = rhi::load_shader(dev_, "gtao.frag");
+    VkShaderModule volumetric_fs = rhi::load_shader(dev_, "volumetric.frag");
     p_veg_cull_ = rhi::create_compute_pipeline(dev_, veg_cull_cs, layout_, "veg_cull");
 
     auto rp_g = compat_pass(dev_, {kRt0, kRt1, kRt2, kRt3}, kDepth);
@@ -250,6 +257,12 @@ void Renderer::create_pipelines(VkFormat output_format) {
     ta.name = "gtao";
     p_gtao_ = rhi::create_graphics_pipeline(dev_, ta);
 
+    auto rp_v = compat_pass(dev_, {VK_FORMAT_R16G16B16A16_SFLOAT}, VK_FORMAT_UNDEFINED);
+    ta.fs = volumetric_fs;
+    ta.render_pass = rp_v.pass;
+    ta.name = "volumetric";
+    p_volumetric_ = rhi::create_graphics_pipeline(dev_, ta);
+
     auto rp_t = compat_pass(dev_, {output_format}, VK_FORMAT_UNDEFINED);
     l.fs = tone_fs;
     l.render_pass = rp_t.pass;
@@ -262,10 +275,11 @@ void Renderer::create_pipelines(VkFormat output_format) {
     l.name = "skyview";
     p_skyview_ = rhi::create_graphics_pipeline(dev_, l);
 
-    for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k, &rp_w, &rp_a, &rp_o}) rhi::destroy_render_pass(dev_, *rp);
+    for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k, &rp_w, &rp_a, &rp_o, &rp_v})
+        rhi::destroy_render_pass(dev_, *rp);
     for (VkShaderModule m :
          {mesh_vs, gbuf_fs, shadow_vs, fs_vs, light_fs, tone_fs, sky_fs, terrain_vs, terrain_fs, terrain_shadow_vs,
-          veg_vs, veg_shadow_vs, shadow_alpha_fs, veg_cull_cs, water_vs, water_fs, taa_fs, gtao_fs})
+          veg_vs, veg_shadow_vs, shadow_alpha_fs, veg_cull_cs, water_vs, water_fs, taa_fs, gtao_fs, volumetric_fs})
         vkDestroyShaderModule(dev_.device(), m, nullptr);
 }
 
@@ -729,6 +743,32 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             });
     }
 
+    // Volumetric fog: half-resolution in-scatter and transmittance (volumetric.frag), composed in the lighting pass.
+    rg::TextureHandle vol;
+    const bool volumetric = s.volumetric_fog && s.fog_density > 0.0f;
+    if (volumetric) {
+        const VkExtent2D vol_ext{max(1u, ext.width / 2), max(1u, ext.height / 2)};
+        graph_.add_pass(
+            "volumetric", rg::PassType::Raster,
+            [&](rg::PassBuilder& b) {
+                vol = b.create({VK_FORMAT_R16G16B16A16_SFLOAT, vol_ext.width, vol_ext.height, "volumetric"});
+                b.read(depth, rg::Access::Sampled);
+                b.read(shadow, rg::Access::Sampled);
+                b.color(vol, rg::Load::DontCare);
+            },
+            [=, this, &fc](const rg::PassContext& ctx) {
+                // This pass samples the shadow atlas and the frame constants before the lighting pass runs.
+                fc.shadow_atlas = ctx.sampled(shadow);
+                std::memcpy(frames_[slot].constants.mapped, &fc, sizeof(fc));
+                vmaFlushAllocation(dev_.allocator(), frames_[slot].constants.allocation, 0, VK_WHOLE_SIZE);
+                vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_volumetric_);
+                VolumetricPush vp{frame_addr, ctx.sampled(depth), 0};
+                vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(vp), &vp);
+                vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
+            });
+    }
+
     graph_.add_pass(
         "lighting", rg::PassType::Raster,
         [&](rg::PassBuilder& b) {
@@ -736,6 +776,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             for (auto h : {depth, rt0, rt1, rt2, shadow}) b.read(h, rg::Access::Sampled);
             if (skyview.valid()) b.read(skyview, rg::Access::Sampled);
             if (ao.valid()) b.read(ao, rg::Access::Sampled);
+            if (vol.valid()) b.read(vol, rg::Access::Sampled);
             b.color(hdr, rg::Load::DontCare);
         },
         [=, this, &fc](const rg::PassContext& ctx) {
@@ -746,8 +787,13 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             vmaFlushAllocation(dev_.allocator(), frames_[slot].constants.allocation, 0, VK_WHOLE_SIZE);
             vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
             vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_lighting_);
-            LightingPush p{frame_addr,       ctx.sampled(depth), ctx.sampled(rt0),
-                           ctx.sampled(rt1), ctx.sampled(rt2),   ao.valid() ? ctx.sampled(ao) : 0xFFFFFFFFu};
+            LightingPush p{frame_addr,
+                           ctx.sampled(depth),
+                           ctx.sampled(rt0),
+                           ctx.sampled(rt1),
+                           ctx.sampled(rt2),
+                           ao.valid() ? ctx.sampled(ao) : 0xFFFFFFFFu,
+                           vol.valid() ? ctx.sampled(vol) : 0xFFFFFFFFu};
             vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
             vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
         });

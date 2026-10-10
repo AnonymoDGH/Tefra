@@ -216,6 +216,8 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             setup.camera.yaw = cfg.camera_yaw_pitch[0];
             setup.camera.pitch = cfg.camera_yaw_pitch[1];
         }
+        if (cfg.no_volumetric) setup.settings.volumetric_fog = false;
+        if (cfg.has_camera_yaw) setup.camera.yaw = radians(cfg.camera_yaw_deg);
         renderer = std::make_unique<render::Renderer>(*device, *heap, kFramesInFlight);
         params.camera = setup.camera;
     }
