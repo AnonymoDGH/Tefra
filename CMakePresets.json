@@ -1,0 +1,64 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    {
+      "name": "linux-debug",
+      "inherits": "base",
+      "displayName": "Linux Debug (validation, tests)",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "TEFRA_WERROR": "ON" }
+    },
+    {
+      "name": "linux-release",
+      "inherits": "base",
+      "displayName": "Linux Release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "TEFRA_WERROR": "ON" }
+    },
+    {
+      "name": "linux-asan",
+      "inherits": "base",
+      "displayName": "Linux Debug + ASan/UBSan",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "TEFRA_ASAN": "ON", "TEFRA_WITH_WINDOW": "OFF" }
+    },
+    {
+      "name": "windows-mingw-debug",
+      "inherits": "base",
+      "displayName": "Windows MinGW Debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "CMAKE_C_COMPILER": "gcc", "CMAKE_CXX_COMPILER": "g++" }
+    },
+    {
+      "name": "windows-mingw-release",
+      "inherits": "base",
+      "displayName": "Windows MinGW Release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "CMAKE_C_COMPILER": "gcc", "CMAKE_CXX_COMPILER": "g++" }
+    },
+    {
+      "name": "cross-mingw-release",
+      "inherits": "base",
+      "displayName": "Linux -> Windows cross (MinGW-w64)",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/mingw-w64.cmake",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "TEFRA_WERROR": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "linux-debug", "configurePreset": "linux-debug" },
+    { "name": "linux-release", "configurePreset": "linux-release" },
+    { "name": "linux-asan", "configurePreset": "linux-asan" },
+    { "name": "windows-mingw-debug", "configurePreset": "windows-mingw-debug" },
+    { "name": "windows-mingw-release", "configurePreset": "windows-mingw-release" },
+    { "name": "cross-mingw-release", "configurePreset": "cross-mingw-release" }
+  ],
+  "testPresets": [
+    { "name": "linux-debug", "configurePreset": "linux-debug", "output": { "outputOnFailure": true } },
+    { "name": "linux-release", "configurePreset": "linux-release", "output": { "outputOnFailure": true } },
+    { "name": "linux-asan", "configurePreset": "linux-asan", "output": { "outputOnFailure": true } },
+    { "name": "windows-mingw-debug", "configurePreset": "windows-mingw-debug", "output": { "outputOnFailure": true } },
+    { "name": "windows-mingw-release", "configurePreset": "windows-mingw-release", "output": { "outputOnFailure": true } }
+  ]
+}

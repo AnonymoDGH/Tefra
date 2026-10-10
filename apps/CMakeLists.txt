@@ -1,0 +1,15 @@
+add_library(tefra_app STATIC common/runner.cpp common/options.cpp)
+target_include_directories(tefra_app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/common)
+target_link_libraries(tefra_app PUBLIC tefra_renderer PRIVATE tefra_compile_options)
+target_compile_definitions(tefra_app PUBLIC
+    TEFRA_VERSION="${PROJECT_VERSION}" TEFRA_GIT_SHA="${TEFRA_GIT_SHA}" TEFRA_BUILD_TYPE="$<CONFIG>")
+if(TEFRA_WITH_WINDOW)
+    target_link_libraries(tefra_app PUBLIC tefra_platform)
+    target_compile_definitions(tefra_app PUBLIC TEFRA_WITH_WINDOW=1)
+endif()
+
+tefra_add_executable(tefra_info SOURCES info/main.cpp DEPS tefra_app)
+tefra_add_executable(tefra_bench SOURCES bench/main.cpp DEPS tefra_app)
+if(TEFRA_WITH_WINDOW)
+    tefra_add_executable(tefra_viewer SOURCES viewer/main.cpp DEPS tefra_app)
+endif()
