@@ -71,7 +71,14 @@ bool grass_blade(ivec2 cell, uint b, float dist, out Blade g) {
     vec4 mask = textureLod(TEX2D(t.mask, SMP_LINEAR_CLAMP), terrain_uv(t, root_xz), 0.0);
     float wet = mask.r, patchy = mask.g;
     float flat_k = smoothstep(0.60, 0.86, ny);
-    float density = (1.0 - 0.9 * wet) * mix(0.5, 1.0, patchy) * flat_k;
+    // Shade-intolerant: under a closed conifer canopy the floor is needle litter, grass survives in the gaps.
+    float shade = 1.0;
+    if (pc.frame.f.canopy_map != 0xFFFFFFFFu) {
+        vec2 cuv = (root_xz - pc.frame.f.canopy.xy) / pc.frame.f.canopy.z;
+        float cover = textureLod(TEX2D(pc.frame.f.canopy_map, SMP_LINEAR_CLAMP), cuv, 0.0).r;
+        shade = 1.0 - smoothstep(0.25, 0.75, cover) * 0.92;
+    }
+    float density = (1.0 - 0.9 * wet) * mix(0.5, 1.0, patchy) * flat_k * shade;
     float lod = mix(1.0, 0.75, smoothstep(pc.p0.y, pc.p0.x, dist));
     float fade = 1.0 - smoothstep(pc.p0.x - 4.0, pc.p0.x, dist);
     if (grass_rnd(cell, b, 2u) >= density * lod * fade) return false;
