@@ -28,10 +28,15 @@ void build_baseplate(world::DataModel& m) {
 
 Session::Session() { new_place(true); }
 
+void Session::replace_model(std::unique_ptr<world::DataModel> m) {
+    if (model_) retired_.push_back(std::move(model_));
+    model_ = std::move(m);
+    ++generation_;
+}
+
 void Session::new_place(bool baseplate) {
     if (state_ != PlayState::Edit) stop();
-    model_ = std::make_unique<world::DataModel>();
-    ++generation_;
+    replace_model(std::make_unique<world::DataModel>());
     if (baseplate) build_baseplate(*model_);
     path_.clear();
     selection_.clear();
@@ -43,8 +48,7 @@ bool Session::open(const std::string& path, std::string* error) {
     if (state_ != PlayState::Edit) stop();
     auto m = std::make_unique<world::DataModel>();
     if (!m->load(path.c_str(), error)) return false;
-    model_ = std::move(m);
-    ++generation_;
+    replace_model(std::move(m));
     path_ = path;
     selection_.clear();
     history_.clear();
@@ -329,8 +333,7 @@ void Session::stop() {
     std::string err;
     if (m->from_json(snapshot_, &err)) {
         const u64 saved_delta = model_->revision() - saved_revision_;
-        model_ = std::move(m);
-        ++generation_;
+        replace_model(std::move(m));
         saved_revision_ = saved_delta == 0 ? model_->revision() : 0;
     } else {
         TEFRA_LOG_ERROR("Stop: cannot restore the place: %s", err.c_str());

@@ -643,6 +643,17 @@ void App::draw_viewport(f32 dt) {
     viewport_hovered_ = ImGui::IsItemHovered();
     ImGuiIO& io = ImGui::GetIO();
 
+    const bool playing = session_.play_state() != PlayState::Edit;
+    if (playing) {
+        // Play mode: third-person camera following the player; no editing gizmos or picking.
+        play_camera_input(dt, avail.x / max(avail.y, 1.0f));
+        ImDrawList* pdl = ImGui::GetWindowDrawList();
+        pdl->AddRect(origin, {origin.x + avail.x, origin.y + avail.y}, IM_COL32(60, 200, 90, 255), 0.0f, 0, 3.0f);
+        pdl->AddText({origin.x + 8, origin.y + avail.y - 20}, IM_COL32(230, 230, 230, 180),
+                     "PLAY  |  WASD move  |  Space jump  |  RMB orbit  |  wheel zoom  |  F5 stop");
+        ImGui::End();
+        return;
+    }
     // Fly camera: hold the right mouse button to look, WASD/QE to move, Shift = fast, wheel = dolly.
     static bool looking = false;
     if (viewport_hovered_ && ImGui::IsMouseClicked(1)) looking = true;

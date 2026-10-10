@@ -31,6 +31,8 @@ class Session {
     world::DataModel& model() { return *model_; }
     // Bumped whenever the DataModel object is replaced (new, open, stop): systems holding a reference rebuild.
     u64 generation() const { return generation_; }
+    // Replaced models stay alive until the host has re-bound its systems (they may still hold listeners on them).
+    void release_retired() { retired_.clear(); }
     const world::DataModel& model() const { return *model_; }
 
     // ---- Files -----------------------------------------------------------------------------------------------
@@ -78,7 +80,9 @@ class Session {
 
   private:
     void record(Action a);
+    void replace_model(std::unique_ptr<world::DataModel> m);
     std::unique_ptr<world::DataModel> model_;
+    std::vector<std::unique_ptr<world::DataModel>> retired_;
     u64 generation_ = 0;
     std::string path_;
     u64 saved_revision_ = 0;

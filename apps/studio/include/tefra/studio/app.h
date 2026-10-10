@@ -39,6 +39,22 @@ class Renderer;
 namespace tefra::world {
 class SceneSync;
 }
+namespace tefra::scripting {
+class ScriptHost;
+}
+namespace tefra::physics {
+class PhysicsWorld;
+class CharacterController;
+} // namespace tefra::physics
+namespace tefra::anim {
+class AnimatorSystem;
+}
+namespace tefra::mcp {
+class Server;
+}
+namespace tefra {
+struct ImageRGBA8;
+}
 
 namespace tefra::studio {
 
@@ -49,6 +65,8 @@ struct StudioConfig {
     bool demo = false;        // build the demo scene instead of the baseplate
     std::string capture_path; // non-interactive: render `frames` frames, save the window as PNG and quit
     u32 frames = 0;
+    bool play_at_start = false; // press Play after loading (with --capture: screenshots of play mode)
+    u16 mcp_port = 44755;       // 0 = MCP server off
 };
 
 struct LogLine {
@@ -88,6 +106,15 @@ class App {
     void update_lighting(bool force);
     void sync_world();
     void frame(f32 dt, bool capture_window);
+
+    // ---- Play mode systems (play.cpp) ----
+    void setup_play_systems();
+    bool play_start(world::DataModel& dm);
+    void play_step(world::DataModel& dm, f32 dt);
+    void play_stop();
+    void play_camera_input(f32 dt, f32 aspect);
+    void setup_mcp();
+    bool capture_viewport_now(ImageRGBA8& out);
 
     // ---- UI (ui.cpp) ----
     void draw_ui(f32 dt);
@@ -162,6 +189,20 @@ class App {
     bool layout_built_ = false;
 
     std::vector<std::function<void(f32)>> frame_callbacks_;
+    // Play mode.
+    std::unique_ptr<scripting::ScriptHost> scripts_;
+    bool scripts_available_ = false;
+    std::unique_ptr<physics::PhysicsWorld> physics_;
+    std::unique_ptr<physics::CharacterController> player_;
+    std::unique_ptr<anim::AnimatorSystem> animator_;
+    u64 player_model_ = 0;
+    render::Camera edit_camera_;
+    f32 orbit_yaw_ = 0.0f, orbit_pitch_ = radians(-15.0f), orbit_dist_ = 9.0f;
+    vec3 play_move_{};
+    bool play_jump_ = false;
+    // MCP.
+    std::unique_ptr<mcp::Server> mcp_;
+    VkCommandPool oneshot_pool_ = VK_NULL_HANDLE;
     std::string pending_capture_path_;
     std::function<void(bool)> pending_capture_done_;
 };

@@ -26,8 +26,12 @@ target_include_directories(tefra_studio_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/
 target_link_libraries(tefra_studio_core PUBLIC tefra_world PRIVATE tefra_compile_options)
 if(TEFRA_WITH_WINDOW)
     tefra_add_executable(tefra_studio
-        SOURCES studio/main.cpp studio/src/app.cpp studio/src/ui.cpp
-        DEPS tefra_studio_core tefra_platform tefra_imgui tefra_imguizmo)
+        SOURCES studio/main.cpp studio/src/app.cpp studio/src/ui.cpp studio/src/play.cpp
+        DEPS tefra_studio_core tefra_platform tefra_imgui tefra_imguizmo tefra_scripting tefra_physics tefra_anim
+             tefra_mcp)
+    if(TARGET tefra_managed)
+        add_dependencies(tefra_studio tefra_managed)
+    endif()
 endif()
 tefra_add_executable(tefra_run SOURCES run/main.cpp DEPS tefra_scripting tefra_world)
 if(TARGET tefra_managed)

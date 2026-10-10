@@ -1,9 +1,13 @@
 #include "tefra/studio/app.h"
 
+#include "tefra/anim/animator.h"
 #include "tefra/core/fs.h"
 #include "tefra/core/image.h"
 #include "tefra/core/log.h"
 #include "tefra/core/time.h"
+#include "tefra/mcp/server.h"
+#include "tefra/physics/character.h"
+#include "tefra/physics/physics_world.h"
 #include "tefra/platform/window.h"
 #include "tefra/renderer/atmosphere.h"
 #include "tefra/renderer/environment.h"
@@ -15,6 +19,7 @@
 #include "tefra/rhi/frame.h"
 #include "tefra/rhi/readback.h"
 #include "tefra/rhi/swapchain.h"
+#include "tefra/scripting/script_host.h"
 #include "tefra/world/scene_sync.h"
 
 #include <GLFW/glfw3.h>
@@ -66,7 +71,11 @@ App::App(const StudioConfig& cfg) : cfg_(cfg) {
 }
 
 App::~App() {
+    if (session_.play_state() != PlayState::Edit) session_.stop();
+    sync_.reset(); // before the retired models go away
+    mcp_.reset();
     if (device_) device_->wait_idle();
+    if (oneshot_pool_) vkDestroyCommandPool(device_->device(), oneshot_pool_, nullptr);
     if (ImGui::GetCurrentContext()) {
         if (viewport_tex_) ImGui_ImplVulkan_RemoveTexture(viewport_tex_);
         viewport_tex_ = VK_NULL_HANDLE;
@@ -137,6 +146,8 @@ bool App::init(std::string* error) {
     }
     create_ui_framebuffers();
     init_imgui();
+    setup_play_systems();
+    setup_mcp();
 
     if (!cfg_.open_path.empty()) {
         std::string err;
@@ -152,6 +163,7 @@ bool App::init(std::string* error) {
     settings_.grass = false;
     settings_.cloud_coverage = 0.3f;
     TEFRA_LOG_INFO("Tefra Studio ready (%s)", device_->adapter().name.c_str());
+    if (cfg_.play_at_start) session_.play();
     return true;
 }
 
@@ -342,6 +354,7 @@ void App::sync_world() {
         else
             sync_->set_model(session_.model());
         synced_generation_ = session_.generation();
+        session_.release_retired();
         open_scripts_.clear();
         update_lighting(true);
     }
