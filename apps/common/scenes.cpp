@@ -3,6 +3,8 @@
 #include "tefra/renderer/gltf.h"
 #include "tefra/rhi/upload.h"
 
+#include "tefra/core/fs.h"
+#include "tefra/core/image.h"
 #include "tefra/core/log.h"
 
 #include <cmath>
@@ -149,6 +151,223 @@ void build_materials_sky_scene(render::Scene& scene, render::Environment& env, c
     setup.settings.fog_height = 0.0f;
     setup.settings.ev100 = 13.0f;
     build_atmosphere_environment(atmo, env, setup.settings.sun_direction);
+}
+
+} // namespace tefra::app
+
+namespace tefra::app {
+
+namespace {
+
+u32 load_texture_file(render::Scene& scene, const std::string& path, bool srgb, u32 fallback) {
+    ImageRGBA8 img;
+    if (!image_read(path.c_str(), img)) return fallback;
+    rhi::TextureUpload up;
+    up.pixels = img.pixels.data();
+    up.width = img.width;
+    up.height = img.height;
+    up.format = srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+    up.name = path.c_str();
+    return scene.add_texture(rhi::upload_texture(scene.device(), up));
+}
+
+struct LoadedModel {
+    u32 mesh[2] = {~0u, ~0u};
+    u32 material[2] = {0, 0};
+    f32 radius = 1.0f, center_y = 0.0f;
+};
+
+// Loads a glTF and keeps its first two primitives as a vegetation prototype (instances are removed).
+LoadedModel load_model(render::Scene& scene, const std::string& path) {
+    LoadedModel m;
+    const usize first = scene.instances().size();
+    if (!render::load_gltf(scene, path.c_str(), {}).ok) return m;
+    f32 top = 0.0f;
+    for (usize i = first; i < scene.instances().size() && i - first < 2; ++i) {
+        m.mesh[i - first] = scene.instances()[i].mesh;
+        m.material[i - first] = scene.instances()[i].material;
+        const auto& b = scene.meshes()[scene.instances()[i].mesh].bounds;
+        m.radius = max(m.radius, b.radius);
+        top = max(top, b.center.y);
+    }
+    m.center_y = top;
+    scene.instances().resize(first);
+    return m;
+}
+
+u32 hash_u32(u32 x) {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+f32 hash01(u32 a, u32 b, u32 c) {
+    return static_cast<f32>(hash_u32(a * 73856093u ^ b * 19349663u ^ c * 83492791u) >> 8) / 16777216.0f;
+}
+
+} // namespace
+
+void build_valley_scene(render::Scene& scene, render::Environment& env, const render::Atmosphere& atmo,
+                        const render::Terrain& terrain, render::Vegetation& veg, SceneSetup& setup) {
+    setup.use_atmosphere = true;
+    setup.use_terrain = true;
+    setup.settings.sun_direction = normalize(vec3{0.62f, 0.20f, -0.76f}); // ~11.5 deg morning sun
+    setup.settings.fog_density = 0.008f;
+    setup.settings.fog_falloff = 0.035f;
+    setup.settings.fog_height = terrain.height_at(0.0f, 0.0f);
+    setup.settings.cascades = 3;
+    setup.settings.shadow_distance = 200.0f;
+    setup.settings.ev100 = 12.5f;
+    build_atmosphere_environment(atmo, env, setup.settings.sun_direction);
+
+    // ---- Materials --------------------------------------------------------------------------------
+    const std::string tex = "assets/cache/textures/";
+    render::MaterialGPU bark = plain(scene, {1, 1, 1}, 1.0f, 0.0f);
+    bark.base_color = {0.85f, 0.80f, 0.75f, 1.0f};
+    bark.base_color_tex =
+        load_texture_file(scene, tex + "bark_brown_01/bark_brown_01_diff.jpg", true, scene.white_texture());
+    bark.normal_tex =
+        load_texture_file(scene, tex + "bark_brown_01/bark_brown_01_nor_gl.jpg", false, scene.flat_normal_texture());
+    bark.orm_tex = load_texture_file(scene, tex + "bark_brown_01/bark_brown_01_arm.jpg", false, scene.white_texture());
+    bark.occlusion_strength = 1.0f;
+    const u32 bark_mat = scene.add_material(bark);
+
+    std::vector<u8> needle_albedo, needle_normal;
+    render::make_needle_textures(7, 512, 256, needle_albedo, needle_normal);
+    rhi::TextureUpload up;
+    up.pixels = needle_albedo.data();
+    up.width = 512;
+    up.height = 256;
+    up.format = VK_FORMAT_R8G8B8A8_SRGB;
+    up.alpha_coverage_cutoff = 0.4f;
+    up.name = "needles";
+    render::MaterialGPU needles = plain(scene, {1, 1, 1}, 0.62f, 0.0f);
+    needles.base_color_tex = scene.add_texture(rhi::upload_texture(scene.device(), up));
+    needles.emissive_cutoff.w = 0.4f;
+    needles.flags = 1u | 2u; // foliage, two-sided
+    needles.translucency = 0.5f;
+    const u32 needle_mat = scene.add_material(needles);
+
+    // ---- Conifer prototypes (procedural) ---------------------------------------------------------------
+    struct Variant {
+        u32 seed;
+        f32 h, r;
+    };
+    const Variant variants[3] = {{11, 30.0f, 0.55f}, {23, 24.0f, 0.42f}, {37, 36.0f, 0.68f}};
+    u32 tree_protos[3];
+    for (int v = 0; v < 3; ++v) {
+        const render::ConiferMeshes cm = render::make_conifer(variants[v].seed, variants[v].h, variants[v].r);
+        render::VegetationPrototype p;
+        p.lods[0].mesh[0] = scene.add_mesh(cm.trunk_lod0);
+        p.lods[0].material[0] = bark_mat;
+        p.lods[0].mesh[1] = scene.add_mesh(cm.crown_lod0);
+        p.lods[0].material[1] = needle_mat;
+        p.lods[0].max_distance = 140.0f;
+        p.lods[1].mesh[0] = scene.add_mesh(cm.trunk_lod1);
+        p.lods[1].material[0] = bark_mat;
+        p.lods[1].mesh[1] = scene.add_mesh(cm.crown_lod1);
+        p.lods[1].material[1] = needle_mat;
+        p.lods[1].max_distance = 2200.0f;
+        p.lod_count = 2;
+        p.radius = cm.height * 0.55f;
+        p.center_y = cm.height * 0.5f;
+        p.wind = 0.35f;
+        p.shadow_distance = 160.0f;
+        tree_protos[v] = veg.add_prototype(p);
+    }
+
+    // ---- Undergrowth prototypes (Poly Haven CC0) ------------------------------------------------------
+    const std::string models = "assets/cache/models/";
+    struct Under {
+        const char* name;
+        f32 dist;
+        f32 spacing;
+        u32 proto = ~0u;
+    };
+    Under under[4] = {{"fern_02", 70.0f, 2.2f},
+                      {"grass_medium_02", 45.0f, 1.1f},
+                      {"rock_moss_set_01", 160.0f, 9.0f},
+                      {"tree_stump_01", 160.0f, 21.0f}};
+    for (Under& u : under) {
+        const std::string path = models + u.name + "/" + u.name + ".gltf";
+        if (!file_exists(path.c_str())) continue;
+        const LoadedModel lm = load_model(scene, path);
+        if (lm.mesh[0] == ~0u) continue;
+        render::VegetationPrototype p;
+        p.lods[0].mesh[0] = lm.mesh[0];
+        p.lods[0].material[0] = lm.material[0];
+        p.lods[0].mesh[1] = lm.mesh[1];
+        p.lods[0].material[1] = lm.material[1];
+        p.lods[0].max_distance = u.dist;
+        p.radius = lm.radius;
+        p.center_y = lm.center_y;
+        p.wind = (std::string(u.name).find("grass") != std::string::npos ||
+                  std::string(u.name).find("fern") != std::string::npos)
+                     ? 1.0f
+                     : 0.0f;
+        p.cast_shadows = std::string(u.name).find("grass") == std::string::npos;
+        p.shadow_distance = 40.0f;
+        u.proto = veg.add_prototype(p);
+    }
+    scene.upload();
+
+    // ---- Scatter ---------------------------------------------------------------------------------
+    const f32 half = terrain.world_size() * 0.5f - 4.0f;
+    u32 trees = 0;
+    const f32 spacing = 6.0f;
+    for (f32 z = -half; z < half; z += spacing)
+        for (f32 x = -half; x < half; x += spacing) {
+            const u32 ix = static_cast<u32>(i32((x + half) / spacing)),
+                      iz = static_cast<u32>(i32((z + half) / spacing));
+            const f32 px = x + (hash01(ix, iz, 1) - 0.5f) * spacing * 0.9f;
+            const f32 pz = z + (hash01(ix, iz, 2) - 0.5f) * spacing * 0.9f;
+            const vec3 n = terrain.normal_at(px, pz);
+            const f32 h = terrain.height_at(px, pz);
+            const f32 rd = std::fabs(terrain.river_distance(px, pz));
+            if (n.y < 0.80f || rd < 11.0f || h < 16.5f || h > 400.0f) continue;
+            // Clearings: low-frequency density field.
+            const f32 density =
+                0.5f + 0.5f * std::sin(px * 0.011f + std::sin(pz * 0.007f) * 2.0f) * std::cos(pz * 0.009f);
+            if (hash01(ix, iz, 3) > 0.25f + 0.75f * density) continue;
+            const u32 v = hash_u32(ix * 31u + iz * 17u) % 3u;
+            const f32 scale = 0.75f + 0.5f * hash01(ix, iz, 4);
+            veg.add_instance(tree_protos[v], {px, h - 0.3f, pz}, hash01(ix, iz, 5) * kTwoPi, scale, hash01(ix, iz, 6));
+            ++trees;
+        }
+    // Undergrowth only around the start area for now (M3 streams it by cells).
+    const f32 cz0 = -120.0f, cx0 = -terrain.river_distance(0.0f, cz0) + 18.0f;
+    u32 small = 0;
+    for (u32 k = 0; k < 4; ++k) {
+        if (under[k].proto == ~0u) continue;
+        const f32 sp = under[k].spacing, R = k < 2 ? 220.0f : 500.0f;
+        for (f32 z = cz0 - R; z < cz0 + R; z += sp)
+            for (f32 x = cx0 - R; x < cx0 + R; x += sp) {
+                const u32 ix = static_cast<u32>(i32((x - cx0 + R) / sp)),
+                          iz = static_cast<u32>(i32((z - cz0 + R) / sp));
+                const f32 px = x + (hash01(ix, iz, 11 + k) - 0.5f) * sp, pz = z + (hash01(ix, iz, 21 + k) - 0.5f) * sp;
+                const f32 rd = std::fabs(terrain.river_distance(px, pz));
+                const vec3 n = terrain.normal_at(px, pz);
+                if (rd < 5.0f || n.y < 0.7f) continue;
+                if (hash01(ix, iz, 31 + k) > (k < 2 ? 0.55f : 0.5f)) continue;
+                const f32 h = terrain.height_at(px, pz);
+                const f32 scale = (k == 3 ? 0.8f : 0.7f) + 0.6f * hash01(ix, iz, 41 + k);
+                veg.add_instance(under[k].proto, {px, h - 0.05f, pz}, hash01(ix, iz, 51 + k) * kTwoPi, scale,
+                                 hash01(ix, iz, 61 + k));
+                ++small;
+            }
+    }
+    veg.upload();
+    TEFRA_LOG_INFO("Valley: %u trees, %u undergrowth instances", trees, small);
+
+    // Stand on the valley floor beside the river, looking downstream.
+    const f32 z = cz0, x = cx0;
+    setup.camera.position = {static_cast<f64>(x), static_cast<f64>(terrain.height_at(x, z) + 1.7f),
+                             static_cast<f64>(z)};
+    setup.camera.yaw = radians(185.0f);
+    setup.camera.pitch = radians(3.0f);
+    setup.camera.fovy = radians(60.0f);
 }
 
 } // namespace tefra::app

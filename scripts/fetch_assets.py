@@ -10,8 +10,10 @@ import os
 import sys
 import urllib.request
 
-MODELS = ["boulder_01", "dead_tree_trunk", "fern_02", "fir_tree_01"]
+MODELS = ["boulder_01", "dead_tree_trunk", "fern_02", "grass_medium_02", "rock_moss_set_01", "tree_stump_01", "moss_01"]
 HDRIS = ["dark_autumn_forest", "forest_slope"]
+# Terrain layers: leaf litter, mud with moss, mossy rock, dirt.
+TEXTURES = ["forest_leaves_02", "brown_mud_leaves_01", "aerial_rocks_02", "brown_mud_02", "bark_brown_01"]
 API = "https://api.polyhaven.com"
 
 
@@ -53,6 +55,12 @@ def main():
         url = files["hdri"][args.res]["hdr"]["url"]
         download(url, os.path.join(root, "hdri", f"{h}.hdr"))
         lines.append(f"- hdri/{h}.hdr: https://polyhaven.com/a/{h} ({args.res})\n")
+    for t in TEXTURES:
+        files = get_json(f"{API}/files/{t}")
+        for kind, name in (("Diffuse", "diff"), ("nor_gl", "nor_gl"), ("arm", "arm")):
+            url = files[kind][args.res]["jpg"]["url"]
+            download(url, os.path.join(root, "textures", t, f"{t}_{name}.jpg"))
+        lines.append(f"- textures/{t}: https://polyhaven.com/a/{t} ({args.res})\n")
     with open(os.path.join(root, "PROVENANCE.md"), "w") as f:
         f.writelines(lines)
     return 0

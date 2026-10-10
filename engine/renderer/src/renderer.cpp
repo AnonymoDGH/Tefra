@@ -3,9 +3,13 @@
 #include "tefra/renderer/atmosphere.h"
 #include "tefra/renderer/environment.h"
 #include "tefra/renderer/scene.h"
+#include "tefra/renderer/terrain.h"
+#include "tefra/renderer/vegetation.h"
 #include "tefra/rhi/bindless.h"
+#include "tefra/rhi/commands.h"
 #include "tefra/rhi/device.h"
 #include "tefra/rhi/gpu_timer.h"
+#include "tefra/rhi/upload.h"
 
 #include "tefra/core/log.h"
 
@@ -35,7 +39,7 @@ struct TonemapPush {
     u32 hdr;
     u32 pad;
 };
-constexpr u32 kPushBytes = 64;
+constexpr u32 kPushBytes = 128;
 static_assert(sizeof(MeshPush) <= kPushBytes && sizeof(LightingPush) <= kPushBytes);
 
 bool format_supports(const rhi::Device& dev, VkFormat f, VkFormatFeatureFlags need) {
@@ -114,14 +118,20 @@ Renderer::~Renderer() {
     for (auto& f : frames_) {
         rhi::destroy_buffer(dev_, f.constants);
         rhi::destroy_buffer(dev_, f.instances);
+        rhi::destroy_buffer(dev_, f.terrain);
+        for (rhi::Buffer* b : {&f.veg_visible, &f.veg_shadow_visible, &f.veg_cmds, &f.veg_shadow_cmds})
+            rhi::destroy_buffer(dev_, *b);
     }
-    for (VkPipeline p : {p_gbuffer_, p_gbuffer_2s_, p_shadow_, p_lighting_, p_tonemap_, p_skyview_})
+    rhi::destroy_buffer(dev_, veg_cmd_template_);
+    for (VkPipeline p : {p_gbuffer_, p_gbuffer_2s_, p_shadow_, p_lighting_, p_tonemap_, p_skyview_, p_terrain_,
+                         p_terrain_shadow_, p_veg_, p_veg_2s_, p_veg_shadow_, p_veg_cull_})
         if (p) vkDestroyPipeline(dev_.device(), p, nullptr);
     vkDestroyPipelineLayout(dev_.device(), layout_, nullptr);
 }
 
 void Renderer::create_pipelines(VkFormat output_format) {
-    for (VkPipeline* p : {&p_gbuffer_, &p_gbuffer_2s_, &p_shadow_, &p_lighting_, &p_tonemap_, &p_skyview_}) {
+    for (VkPipeline* p : {&p_gbuffer_, &p_gbuffer_2s_, &p_shadow_, &p_lighting_, &p_tonemap_, &p_skyview_, &p_terrain_,
+                          &p_terrain_shadow_, &p_veg_, &p_veg_2s_, &p_veg_shadow_, &p_veg_cull_}) {
         if (*p) vkDestroyPipeline(dev_.device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -133,6 +143,14 @@ void Renderer::create_pipelines(VkFormat output_format) {
     VkShaderModule light_fs = rhi::load_shader(dev_, "lighting.frag");
     VkShaderModule tone_fs = rhi::load_shader(dev_, "tonemap.frag");
     VkShaderModule sky_fs = rhi::load_shader(dev_, "skyview.frag");
+    VkShaderModule terrain_vs = rhi::load_shader(dev_, "terrain.vert");
+    VkShaderModule terrain_fs = rhi::load_shader(dev_, "terrain.frag");
+    VkShaderModule terrain_shadow_vs = rhi::load_shader(dev_, "terrain_shadow.vert");
+    VkShaderModule veg_vs = rhi::load_shader(dev_, "veg.vert");
+    VkShaderModule veg_shadow_vs = rhi::load_shader(dev_, "veg_shadow.vert");
+    VkShaderModule shadow_alpha_fs = rhi::load_shader(dev_, "shadow_alpha.frag");
+    VkShaderModule veg_cull_cs = rhi::load_shader(dev_, "veg_cull.comp");
+    p_veg_cull_ = rhi::create_compute_pipeline(dev_, veg_cull_cs, layout_, "veg_cull");
 
     auto rp_g = compat_pass(dev_, {kRt0, kRt1, kRt2, kRt3}, kDepth);
     rhi::GraphicsPipelineDesc g;
@@ -150,6 +168,19 @@ void Renderer::create_pipelines(VkFormat output_format) {
     g.cull = VK_CULL_MODE_NONE;
     g.name = "gbuffer_two_sided";
     p_gbuffer_2s_ = rhi::create_graphics_pipeline(dev_, g);
+    g.vs = terrain_vs;
+    g.fs = terrain_fs;
+    g.cull = VK_CULL_MODE_BACK_BIT;
+    g.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    g.name = "terrain";
+    p_terrain_ = rhi::create_graphics_pipeline(dev_, g);
+    g.vs = veg_vs;
+    g.fs = gbuf_fs;
+    g.name = "vegetation";
+    p_veg_ = rhi::create_graphics_pipeline(dev_, g);
+    g.cull = VK_CULL_MODE_NONE;
+    g.name = "vegetation_two_sided";
+    p_veg_2s_ = rhi::create_graphics_pipeline(dev_, g);
 
     auto rp_s = compat_pass(dev_, {}, shadow_format_);
     rhi::GraphicsPipelineDesc s;
@@ -164,6 +195,13 @@ void Renderer::create_pipelines(VkFormat output_format) {
     s.depth_clamp = true; // casters behind the near plane still cast (pancaking)
     s.name = "shadow";
     p_shadow_ = rhi::create_graphics_pipeline(dev_, s);
+    s.vs = terrain_shadow_vs;
+    s.name = "terrain_shadow";
+    p_terrain_shadow_ = rhi::create_graphics_pipeline(dev_, s);
+    s.vs = veg_shadow_vs;
+    s.fs = shadow_alpha_fs;
+    s.name = "vegetation_shadow";
+    p_veg_shadow_ = rhi::create_graphics_pipeline(dev_, s);
 
     auto rp_l = compat_pass(dev_, {hdr_format_}, VK_FORMAT_UNDEFINED);
     rhi::GraphicsPipelineDesc l;
@@ -187,7 +225,8 @@ void Renderer::create_pipelines(VkFormat output_format) {
     p_skyview_ = rhi::create_graphics_pipeline(dev_, l);
 
     for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k}) rhi::destroy_render_pass(dev_, *rp);
-    for (VkShaderModule m : {mesh_vs, gbuf_fs, shadow_vs, fs_vs, light_fs, tone_fs, sky_fs})
+    for (VkShaderModule m : {mesh_vs, gbuf_fs, shadow_vs, fs_vs, light_fs, tone_fs, sky_fs, terrain_vs, terrain_fs,
+                             terrain_shadow_vs, veg_vs, veg_shadow_vs, shadow_alpha_fs, veg_cull_cs})
         vkDestroyShaderModule(dev_.device(), m, nullptr);
 }
 
@@ -245,9 +284,13 @@ void Renderer::compute_cascades(const Camera& cam, f32 aspect, const RenderSetti
     fc.shadow_params = {1.0f / (res * f32(n)), 1.0f / res, f32(n), res};
 }
 
-void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTimer* timer, const Scene& scene,
-                      const Environment& env, const Atmosphere* atmo, const Camera& camera, f32 time,
-                      const RenderSettings& settings_in, const OutputTarget& target) {
+void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTimer* timer, const RenderWorld& world,
+                      const Camera& camera, f32 time, const RenderSettings& settings_in, const OutputTarget& target) {
+    const Scene& scene = *world.scene;
+    const Environment& env = *world.env;
+    const Atmosphere* atmo = world.atmosphere;
+    const Terrain* terrain = world.terrain;
+    const Vegetation* veg = world.vegetation;
     if (output_format_ != target.format) create_pipelines(target.format);
     RenderSettings s = settings_in;
     if (atmo) {
@@ -290,7 +333,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
 
     // ---- Instances (camera-relative) and culling ---------------------------------------------------
     const auto& instances = scene.instances();
-    if (fb.instance_capacity < instances.size()) {
+    if (fb.instance_capacity < instances.size() || !fb.instances.buffer) {
         rhi::destroy_buffer(dev_, fb.instances);
         fb.instance_capacity = max<u32>(64u, static_cast<u32>(instances.size()) * 2u);
         fb.instances = rhi::create_buffer(dev_, sizeof(InstanceGPU) * fb.instance_capacity,
@@ -324,6 +367,137 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     }
     vmaFlushAllocation(dev_.allocator(), fb.instances.allocation, 0, VK_WHOLE_SIZE);
 
+    // ---- Terrain patches ---------------------------------------------------------------------------
+    constexpr VkDeviceSize kTerrainPatchOffset = 256;
+    u32 patch_count = 0, shadow_patch_count = 0;
+    if (terrain) {
+        std::vector<TerrainPatchGPU> patches;
+        terrain->build_patches(camera.position, patches);
+        // Frustum cull patches with their height range.
+        std::vector<TerrainPatchGPU> kept;
+        const f32 hmid = 0.5f * (terrain->min_height() + terrain->max_height()) - f32(camera.position.y);
+        const f32 hext = 0.5f * (terrain->max_height() - terrain->min_height());
+        for (const auto& p : patches) {
+            const f32 half = p.origin_size.z * 0.5f;
+            const vec3 c{p.origin_size.x + half, hmid, p.origin_size.y + half};
+            const f32 r = std::sqrt(2.0f * half * half + hext * hext);
+            if (sphere_in_frustum(planes, c, r)) kept.push_back(p);
+        }
+        patch_count = static_cast<u32>(kept.size());
+        const u32 all = static_cast<u32>(patches.size());
+        shadow_patch_count = all;
+        if (fb.terrain_capacity < all) {
+            rhi::destroy_buffer(dev_, fb.terrain);
+            fb.terrain_capacity = all * 2;
+            fb.terrain =
+                rhi::create_buffer(dev_, kTerrainPatchOffset + 2 * sizeof(TerrainPatchGPU) * fb.terrain_capacity,
+                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, rhi::MemoryUsage::Upload, "terrain_frame");
+        }
+        u8* dst = static_cast<u8*>(fb.terrain.mapped);
+        std::memcpy(dst, &terrain->gpu(), sizeof(TerrainGPU));
+        // Visible patches first (G-buffer), then all patches (shadows) after them.
+        std::memcpy(dst + kTerrainPatchOffset, kept.data(), kept.size() * sizeof(TerrainPatchGPU));
+        std::memcpy(dst + kTerrainPatchOffset + kept.size() * sizeof(TerrainPatchGPU), patches.data(),
+                    patches.size() * sizeof(TerrainPatchGPU));
+        vmaFlushAllocation(dev_.allocator(), fb.terrain.allocation, 0, VK_WHOLE_SIZE);
+    }
+    struct TerrainPush {
+        VkDeviceAddress frame, terrain, patches, grid;
+        u32 cascade;
+        u32 pad[3];
+    };
+    const VkDeviceAddress terrain_addr = terrain ? fb.terrain.address : 0;
+    const VkDeviceAddress grid_addr = terrain ? terrain->grid_vertices().address : 0;
+    const VkBuffer grid_ib = terrain ? terrain->grid_indices().buffer : VK_NULL_HANDLE;
+    const u32 grid_count = terrain ? terrain->grid_index_count() : 0;
+    const VkDeviceAddress terrain_frame_addr = fb.constants.address;
+    const VkPipelineLayout terrain_layout = layout_;
+    auto draw_terrain = [=](VkCommandBuffer c, VkPipeline pipe, bool shadow_pass, u32 cascade) {
+        if (!terrain_addr) return;
+        vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+        const VkDeviceAddress patches =
+            terrain_addr + kTerrainPatchOffset + (shadow_pass ? patch_count * sizeof(TerrainPatchGPU) : 0);
+        TerrainPush tp{terrain_frame_addr, terrain_addr, patches, grid_addr, cascade, {}};
+        vkCmdPushConstants(c, terrain_layout, VK_SHADER_STAGE_ALL, 0, sizeof(tp), &tp);
+        vkCmdBindIndexBuffer(c, grid_ib, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(c, grid_count, shadow_pass ? shadow_patch_count : patch_count, 0, 0, 0);
+    };
+
+    // ---- Vegetation (GPU culling + indirect draws) --------------------------------------------------
+    struct DrawCmd {
+        u32 index_count, instance_count, first_index;
+        i32 vertex_offset;
+        u32 first_instance;
+    };
+    static_assert(sizeof(DrawCmd) == 20);
+    const bool has_veg = veg && veg->draw_count() > 0;
+    if (has_veg) {
+        if (veg_template_owner_ != veg) {
+            dev_.wait_idle();
+            rhi::destroy_buffer(dev_, veg_cmd_template_);
+            std::vector<DrawCmd> tmpl;
+            for (const auto& d : veg->draws()) tmpl.push_back({d.index_count, 0, d.first_index, d.vertex_offset, 0});
+            veg_cmd_template_ = rhi::upload_buffer(dev_, tmpl.data(), tmpl.size() * sizeof(DrawCmd),
+                                                   VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "veg_cmd_template");
+            veg_template_owner_ = veg;
+        }
+        if (fb.veg_capacity < veg->visible_capacity()) {
+            for (rhi::Buffer* b : {&fb.veg_visible, &fb.veg_shadow_visible, &fb.veg_cmds, &fb.veg_shadow_cmds})
+                rhi::destroy_buffer(dev_, *b);
+            fb.veg_capacity = veg->visible_capacity();
+            const VkBufferUsageFlags ind = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            fb.veg_visible = rhi::create_buffer(dev_, fb.veg_capacity * 4ull, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                rhi::MemoryUsage::GpuOnly, "veg_visible");
+            fb.veg_shadow_visible = rhi::create_buffer(dev_, fb.veg_capacity * 4ull, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                       rhi::MemoryUsage::GpuOnly, "veg_shadow_visible");
+            fb.veg_cmds = rhi::create_buffer(dev_, Vegetation::kMaxDraws * sizeof(DrawCmd), ind,
+                                             rhi::MemoryUsage::GpuOnly, "veg_cmds");
+            fb.veg_shadow_cmds = rhi::create_buffer(dev_, Vegetation::kMaxDraws * sizeof(DrawCmd), ind,
+                                                    rhi::MemoryUsage::GpuOnly, "veg_shadow_cmds");
+        }
+    }
+    struct VegCullPush {
+        VkDeviceAddress frame, instances, protos, draws, visible, cmds, shadow_visible, shadow_cmds;
+        u32 count;
+    };
+    struct VegDrawPush {
+        VkDeviceAddress frame, vertices, instances, materials, visible;
+        u32 material;
+        f32 wind;
+        u32 cascade;
+        u32 pad;
+    };
+    const VkDeviceAddress veg_frame_addr = fb.constants.address;
+    const VkPipelineLayout veg_layout = layout_;
+    auto draw_veg = [=, this, &scene](VkCommandBuffer c, bool shadow_pass, u32 cascade) {
+        if (!has_veg) return;
+        const VkBuffer cmds = shadow_pass ? fb.veg_shadow_cmds.buffer : fb.veg_cmds.buffer;
+        const VkDeviceAddress vis = shadow_pass ? fb.veg_shadow_visible.address : fb.veg_visible.address;
+        vkCmdBindIndexBuffer(c, scene.index_buffer().buffer, 0, VK_INDEX_TYPE_UINT32);
+        VkPipeline bound = VK_NULL_HANDLE;
+        for (u32 d = 0; d < veg->draw_count(); ++d) {
+            const auto& dr = veg->draws()[d];
+            const bool two_sided = (scene.materials()[dr.material].flags & 2u) != 0;
+            const VkPipeline want = shadow_pass ? p_veg_shadow_ : (two_sided ? p_veg_2s_ : p_veg_);
+            if (want != bound) {
+                vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                bound = want;
+            }
+            VegDrawPush vp{veg_frame_addr,
+                           scene.vertex_buffer().address,
+                           veg->instances().address,
+                           scene.material_buffer().address,
+                           vis + dr.visible_base * 4ull,
+                           dr.material,
+                           veg->prototype_wind(dr.prototype),
+                           cascade,
+                           0};
+            vkCmdPushConstants(c, veg_layout, VK_SHADER_STAGE_ALL, 0, sizeof(vp), &vp);
+            vkCmdDrawIndexedIndirect(c, cmds, d * sizeof(DrawCmd), 1, sizeof(DrawCmd));
+        }
+    };
+
     // ---- Frame graph -----------------------------------------------------------------------------
     graph_.begin(slot, timer);
     const u32 sres = s.shadow_resolution;
@@ -338,6 +512,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
 
     auto draw_list = [=](VkCommandBuffer c, const std::vector<u32>& list, u32 cascade, bool shadow_pass,
                          VkPipeline one_sided, VkPipeline two_sided) {
+        if (list.empty()) return;
         MeshPush push{frame_addr, sc->vertex_buffer().address, inst_addr, sc->material_buffer().address, cascade, {}};
         vkCmdPushConstants(c, layout, VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
         vkCmdBindIndexBuffer(c, sc->index_buffer().buffer, 0, VK_INDEX_TYPE_UINT32);
@@ -356,6 +531,40 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         }
     };
 
+    if (has_veg) {
+        graph_.add_pass(
+            "veg_cull", rg::PassType::Compute, [](rg::PassBuilder&) {},
+            [=, this](const rg::PassContext& ctx) {
+                const VkDeviceSize bytes = veg->draw_count() * sizeof(DrawCmd);
+                // Previous frame's indirect reads must finish before the template copy overwrites the commands.
+                rhi::cmd_memory_barrier(ctx.cmd,
+                                        VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                                        VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                VkBufferCopy region{0, 0, bytes};
+                vkCmdCopyBuffer(ctx.cmd, veg_cmd_template_.buffer, fb.veg_cmds.buffer, 1, &region);
+                vkCmdCopyBuffer(ctx.cmd, veg_cmd_template_.buffer, fb.veg_shadow_cmds.buffer, 1, &region);
+                rhi::cmd_memory_barrier(ctx.cmd, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p_veg_cull_);
+                VegCullPush cp{frame_addr,
+                               veg->instances().address,
+                               veg->protos().address,
+                               veg->draws_table().address,
+                               fb.veg_visible.address,
+                               fb.veg_cmds.address,
+                               fb.veg_shadow_visible.address,
+                               fb.veg_shadow_cmds.address,
+                               veg->instance_count()};
+                vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(cp), &cp);
+                vkCmdDispatch(ctx.cmd, (veg->instance_count() + 63) / 64, 1, 1);
+                rhi::cmd_memory_barrier(ctx.cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                        VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                                        VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+            });
+    }
+
     graph_.add_pass(
         "shadows", rg::PassType::Raster,
         [&](rg::PassBuilder& b) {
@@ -370,6 +579,8 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                 vkCmdSetViewport(ctx.cmd, 0, 1, &vp);
                 vkCmdSetScissor(ctx.cmd, 0, 1, &sc_rect);
                 draw_list(ctx.cmd, casters[c], c, true, p_shadow_, p_shadow_);
+                draw_terrain(ctx.cmd, p_terrain_shadow_, true, c);
+                draw_veg(ctx.cmd, true, c);
             }
         });
 
@@ -390,6 +601,8 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         [=, this](const rg::PassContext& ctx) {
             vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
             draw_list(ctx.cmd, visible, 0, false, p_gbuffer_, p_gbuffer_2s_);
+            draw_terrain(ctx.cmd, p_terrain_, false, 0);
+            draw_veg(ctx.cmd, false, 0);
         });
 
     if (atmo) {

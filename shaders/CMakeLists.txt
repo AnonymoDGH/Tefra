@@ -11,4 +11,11 @@ tefra_compile_shaders(
         ${CMAKE_CURRENT_SOURCE_DIR}/shadow.vert
         ${CMAKE_CURRENT_SOURCE_DIR}/lighting.frag
         ${CMAKE_CURRENT_SOURCE_DIR}/tonemap.frag
-        ${CMAKE_CURRENT_SOURCE_DIR}/skyview.frag)
+        ${CMAKE_CURRENT_SOURCE_DIR}/skyview.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/terrain.vert
+        ${CMAKE_CURRENT_SOURCE_DIR}/terrain_shadow.vert
+        ${CMAKE_CURRENT_SOURCE_DIR}/terrain.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/veg_cull.comp
+        ${CMAKE_CURRENT_SOURCE_DIR}/veg.vert
+        ${CMAKE_CURRENT_SOURCE_DIR}/veg_shadow.vert
+        ${CMAKE_CURRENT_SOURCE_DIR}/shadow_alpha.frag)

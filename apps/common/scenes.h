@@ -4,6 +4,8 @@
 #include "tefra/renderer/environment.h"
 #include "tefra/renderer/renderer.h"
 #include "tefra/renderer/scene.h"
+#include "tefra/renderer/terrain.h"
+#include "tefra/renderer/vegetation.h"
 
 #include <string>
 
@@ -13,7 +15,12 @@ struct SceneSetup {
     render::Camera camera;
     render::RenderSettings settings;
     bool use_atmosphere = false;
+    bool use_terrain = false;
 };
+
+// "valley": the vertical slice environment (terrain, atmosphere, morning mist), camera at ground level.
+void build_valley_scene(render::Scene& scene, render::Environment& env, const render::Atmosphere& atmo,
+                        const render::Terrain& terrain, render::Vegetation& vegetation, SceneSetup& setup);
 
 // Builds the IBL environment from the atmosphere for the current sun direction.
 void build_atmosphere_environment(const render::Atmosphere& atmo, render::Environment& env, vec3 sun_dir);

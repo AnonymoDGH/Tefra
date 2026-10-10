@@ -21,6 +21,17 @@ namespace tefra::render {
 class Scene;
 class Environment;
 class Atmosphere;
+class Terrain;
+class Vegetation;
+
+// Everything the renderer draws in a frame (optional parts may be null).
+struct RenderWorld {
+    const Scene* scene = nullptr;
+    const Environment* env = nullptr;
+    const Atmosphere* atmosphere = nullptr;
+    const Terrain* terrain = nullptr;
+    const Vegetation* vegetation = nullptr;
+};
 
 struct RenderSettings {
     u32 shadow_resolution = 1024; // per cascade
@@ -57,9 +68,8 @@ class Renderer {
     Renderer& operator=(const Renderer&) = delete;
 
     // Records the whole frame into cmd. Output ends in target.final_layout.
-    void render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTimer* timer, const Scene& scene,
-                const Environment& env, const Atmosphere* atmosphere, const Camera& camera, f32 time,
-                const RenderSettings& settings, const OutputTarget& target);
+    void render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTimer* timer, const RenderWorld& world,
+                const Camera& camera, f32 time, const RenderSettings& settings, const OutputTarget& target);
 
     u32 draw_calls() const { return draw_calls_; }
     const rg::Graph& graph() const { return graph_; }
@@ -69,6 +79,10 @@ class Renderer {
         rhi::Buffer constants;
         rhi::Buffer instances;
         u32 instance_capacity = 0;
+        rhi::Buffer terrain; // TerrainGPU at 0, patches at kTerrainPatchOffset
+        u32 terrain_capacity = 0;
+        rhi::Buffer veg_visible, veg_shadow_visible, veg_cmds, veg_shadow_cmds;
+        u32 veg_capacity = 0;
     };
     void create_pipelines(VkFormat output_format);
     void compute_cascades(const Camera& camera, f32 aspect, const RenderSettings& s, FrameConstants& fc,
@@ -81,7 +95,11 @@ class Renderer {
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline p_gbuffer_ = VK_NULL_HANDLE, p_gbuffer_2s_ = VK_NULL_HANDLE, p_shadow_ = VK_NULL_HANDLE;
     VkPipeline p_lighting_ = VK_NULL_HANDLE, p_tonemap_ = VK_NULL_HANDLE;
-    VkPipeline p_skyview_ = VK_NULL_HANDLE;
+    VkPipeline p_skyview_ = VK_NULL_HANDLE, p_terrain_ = VK_NULL_HANDLE, p_terrain_shadow_ = VK_NULL_HANDLE;
+    VkPipeline p_veg_ = VK_NULL_HANDLE, p_veg_2s_ = VK_NULL_HANDLE, p_veg_shadow_ = VK_NULL_HANDLE,
+               p_veg_cull_ = VK_NULL_HANDLE;
+    rhi::Buffer veg_cmd_template_;
+    const Vegetation* veg_template_owner_ = nullptr;
     VkFormat output_format_ = VK_FORMAT_UNDEFINED;
     VkFormat hdr_format_ = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
     VkFormat shadow_format_ = VK_FORMAT_D32_SFLOAT;

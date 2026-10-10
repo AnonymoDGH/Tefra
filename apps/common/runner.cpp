@@ -152,6 +152,8 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
     std::unique_ptr<render::Scene> scene;
     std::unique_ptr<render::Environment> env;
     std::unique_ptr<render::Atmosphere> atmosphere;
+    std::unique_ptr<render::Terrain> terrain;
+    std::unique_ptr<render::Vegetation> vegetation;
     std::unique_ptr<render::Renderer> renderer;
     SceneSetup setup;
     if (scene3d) {
@@ -166,14 +168,23 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
         } else if (cfg.scene == "materials_sky") {
             build_materials_sky_scene(*scene, *env, *atmosphere, setup);
             built = true;
+        } else if (cfg.scene == "valley") {
+            render::TerrainDesc td;
+            td.texture_dir = file_exists("assets/cache/textures") ? "assets/cache/textures" : "";
+            terrain = std::make_unique<render::Terrain>(*device, *heap, td);
+            vegetation = std::make_unique<render::Vegetation>(*device, *scene);
+            build_valley_scene(*scene, *env, *atmosphere, *terrain, *vegetation, setup);
+            built = true;
         } else if (cfg.scene == "gltf") {
             built = build_gltf_scene(*scene, *env, setup, cfg.gltf_path, cfg.hdr_path);
         }
         if (!built) {
             result.error = "unknown scene or failed to load: " + cfg.scene;
             renderer.reset();
+            vegetation.reset();
             env.reset();
             atmosphere.reset();
+            terrain.reset();
             scene.reset();
             heap.reset();
             rhi::destroy_image(*device, offscreen);
@@ -262,9 +273,13 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             out.final_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             out.initial_stage = prev_stage;
             out.initial_access = prev_access;
-            renderer->render(cmd, fc.slot, frame_index, &timer, *scene, *env,
-                             setup.use_atmosphere ? atmosphere.get() : nullptr, params.camera, params.time,
-                             setup.settings, out);
+            render::RenderWorld world;
+            world.scene = scene.get();
+            world.env = env.get();
+            world.atmosphere = setup.use_atmosphere ? atmosphere.get() : nullptr;
+            world.terrain = setup.use_terrain ? terrain.get() : nullptr;
+            world.vegetation = vegetation.get();
+            renderer->render(cmd, fc.slot, frame_index, &timer, world, params.camera, params.time, setup.settings, out);
             result.draw_calls = renderer->draw_calls();
         } else {
             rhi::ImageBarrier to_color;
@@ -360,8 +375,10 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
     result.cpu_rss_mb = process_rss_mb();
 
     renderer.reset();
+    vegetation.reset();
     env.reset();
     atmosphere.reset();
+    terrain.reset();
     scene.reset();
     heap.reset();
     testpattern.reset();
