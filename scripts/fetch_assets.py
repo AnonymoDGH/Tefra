@@ -11,9 +11,14 @@ import sys
 import urllib.request
 
 MODELS = ["boulder_01", "dead_tree_trunk", "fern_02", "grass_medium_02", "rock_moss_set_01", "tree_stump_01", "moss_01"]
+# Coast scene: shore rocks, a rocky outcrop and a cliff.
+MODELS += ["coast_rocks_05", "sand_rocks_small_01", "coast_land_rocks_02", "coastal_cliff_02"]
 HDRIS = ["dark_autumn_forest", "forest_slope"]
 # Terrain layers: leaf litter, mud with moss, mossy rock, dirt.
 TERRAIN_LAYERS = ["forest_leaves_02", "brown_mud_leaves_01", "aerial_rocks_02", "brown_mud_02"]
+# Coast terrain layers: dry sand, wet sand, shore rock, sand with pebbles.
+COAST_LAYERS = ["coast_sand_01", "damp_beach_sand", "coast_land_rocks_01", "coast_sand_rocks_02"]
+TERRAIN_LAYERS += COAST_LAYERS
 TEXTURES = TERRAIN_LAYERS + ["bark_brown_01"]
 API = "https://api.polyhaven.com"
 

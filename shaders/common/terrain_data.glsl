@@ -8,7 +8,7 @@ struct TerrainData {
     uint albedo0; uint albedo1; uint albedo2; uint albedo3;
     uint normal0; uint normal1; uint normal2; uint normal3;
     uint arm0; uint arm1; uint arm2; uint arm3;
-    uint flags; uint pad;   // flags bit 0: terrain detail path (terrain.frag)
+    uint flags; uint shore; // flags bit 0: terrain detail path (terrain.frag), bit 1: coast look; shore: R16 signed shore distance
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer TerrainBuffer { TerrainData t; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Vec4Buffer { vec4 v[]; };

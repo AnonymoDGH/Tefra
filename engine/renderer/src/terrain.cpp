@@ -95,35 +95,85 @@ f32 Terrain::river_center_x(f32 z) const {
 
 f32 Terrain::river_distance(f32 x, f32 z) const { return x - river_center_x(z); }
 
+f32 Terrain::valley_height(f32 x, f32 z) const {
+    const u32 seed = desc_.seed;
+    // Domain warp for organic shapes.
+    const f32 wx = x + 60.0f * fbm(x / 700.0f, z / 700.0f, seed + 7, 3);
+    const f32 wz = z + 60.0f * fbm(x / 700.0f + 5.2f, z / 700.0f + 1.3f, seed + 9, 3);
+    const f32 d = std::fabs(wx - river_center_x(wz));
+    // Valley walls: flat floor (~60 m wide), steepening slopes, crest ridges near the map edge.
+    const f32 dv = min(d, std::fabs(x - river_center_x(z)) + 25.0f); // keep the floor around the channel
+    const f32 wall = std::pow(max(dv - 30.0f, 0.0f) / 900.0f, 1.55f) * 260.0f;
+    const f32 ridges = ridged(wx / 520.0f, wz / 520.0f, seed + 3, 5) * 70.0f * smoothstep(60.0f, 400.0f, d);
+    const f32 hills = fbm(wx / 230.0f, wz / 230.0f, seed + 11, 5) * 14.0f * smoothstep(20.0f, 200.0f, d);
+    const f32 floor_bumps = fbm(x / 35.0f, z / 35.0f, seed + 13, 4) * 1.6f;
+    f32 h = 20.0f + wall + ridges + hills + floor_bumps;
+    // River channel and banks follow the unwarped centerline (water and gameplay use it).
+    const f32 dc = std::fabs(x - river_center_x(z));
+    const f32 channel = 1.0f - smoothstep(3.0f, 9.0f, dc);
+    h -= channel * 2.6f;
+    // Lake basin downstream.
+    const f32 lx = x - river_center_x(520.0f), lz = (z - 520.0f) * 0.7f;
+    const f32 lake_d = std::sqrt(lx * lx + lz * lz);
+    const f32 lake = 1.0f - smoothstep(60.0f, 160.0f, lake_d);
+    h = lerp(h, 15.5f + floor_bumps * 0.3f, lake);
+    return h;
+}
+
+// Shoreline of the cove (world z where the beach meets the still sea): bowed inland at the centre, two rocky
+// headlands reaching out to sea at |x| ~ 450 m.
+f32 Terrain::coast_shore_z(f32 x) const {
+    const f32 u = x / 400.0f;
+    const f32 ax = std::fabs(x);
+    return -70.0f * u * u - 260.0f * smoothstep(320.0f, 560.0f, ax) + 10.0f * fbm(x / 140.0f, 0.5f, desc_.seed + 5, 3);
+}
+
+f32 Terrain::coast_height(f32 x, f32 z) const {
+    const u32 seed = desc_.seed;
+    const f32 sea = desc_.sea_level;
+    // Gentle domain warp so the beach and dunes are not ruler-straight.
+    const f32 wx = x + 18.0f * fbm(x / 260.0f, z / 260.0f, seed + 7, 3);
+    const f32 wz = z + 18.0f * fbm(x / 260.0f + 3.1f, z / 260.0f + 8.4f, seed + 9, 3);
+    const f32 s = wz - coast_shore_z(wx); // > 0 on land, < 0 at sea
+    const f32 ax = std::fabs(wx);
+    const f32 headland = smoothstep(300.0f, 470.0f, ax);
+    f32 h;
+    if (s >= 0.0f) {
+        // Beach face (~2.6 deg) up to the berm, a flat backshore, dunes, then the rising hinterland.
+        const f32 face = min(s, 35.0f) * 0.045f;
+        const f32 back = smoothstep(35.0f, 75.0f, s) * 0.8f;
+        const f32 dunes = smoothstep(60.0f, 120.0f, s) * (2.5f + 4.0f * (0.5f + 0.5f * fbm(wx / 55.0f, wz / 40.0f, seed + 3, 4)));
+        const f32 inland = max(s - 150.0f, 0.0f);
+        const f32 hills = std::pow(inland / 600.0f, 1.3f) * 90.0f + fbm(wx / 240.0f, wz / 240.0f, seed + 11, 5) * 22.0f *
+                                                                      smoothstep(150.0f, 400.0f, s);
+        h = face + back + dunes + hills;
+    } else {
+        const f32 d = -s;
+        // Foreshore, a longshore sand bar, the shelf and a steeper drop to deep water.
+        h = -min(d, 40.0f) * 0.04f - max(d - 40.0f, 0.0f) * 0.022f - max(d - 320.0f, 0.0f) * 0.045f;
+        h += 0.9f * std::exp(-((d - 78.0f) / 20.0f) * ((d - 78.0f) / 20.0f)) * (1.0f - headland);
+        h = max(h, -42.0f);
+    }
+    // Rocky headlands: cliffs rising steeply from the waterline, reefs below it.
+    if (headland > 0.0f) {
+        const f32 r = ridged(wx / 160.0f, wz / 160.0f, seed + 17, 5);
+        const f32 cliff = smoothstep(-6.0f, 22.0f, s) * (22.0f + 38.0f * r);
+        const f32 reef = (1.0f - smoothstep(0.0f, 70.0f, -s)) * 2.5f * r;
+        h += headland * (s > 0.0f ? cliff : reef + cliff);
+    }
+    // Small undulations: wind ripples are in the textures, this is the metre scale.
+    h += fbm(x / 9.0f, z / 9.0f, seed + 13, 3) * 0.08f + fbm(x / 40.0f, z / 40.0f, seed + 19, 3) * 0.25f * smoothstep(-5.0f, 5.0f, s);
+    return sea + h;
+}
+
 void Terrain::generate() {
     const u32 n = desc_.resolution;
     const f32 half = world_size() * 0.5f;
     heights_.resize(usize(n) * n);
     mask_.resize(usize(n / 2) * (n / 2) * 4);
     const u32 seed = desc_.seed;
-    auto height_fn = [&](f32 x, f32 z) {
-        // Domain warp for organic shapes.
-        const f32 wx = x + 60.0f * fbm(x / 700.0f, z / 700.0f, seed + 7, 3);
-        const f32 wz = z + 60.0f * fbm(x / 700.0f + 5.2f, z / 700.0f + 1.3f, seed + 9, 3);
-        const f32 d = std::fabs(wx - river_center_x(wz));
-        // Valley walls: flat floor (~60 m wide), steepening slopes, crest ridges near the map edge.
-        const f32 dv = min(d, std::fabs(x - river_center_x(z)) + 25.0f); // keep the floor around the channel
-        const f32 wall = std::pow(max(dv - 30.0f, 0.0f) / 900.0f, 1.55f) * 260.0f;
-        const f32 ridges = ridged(wx / 520.0f, wz / 520.0f, seed + 3, 5) * 70.0f * smoothstep(60.0f, 400.0f, d);
-        const f32 hills = fbm(wx / 230.0f, wz / 230.0f, seed + 11, 5) * 14.0f * smoothstep(20.0f, 200.0f, d);
-        const f32 floor_bumps = fbm(x / 35.0f, z / 35.0f, seed + 13, 4) * 1.6f;
-        f32 h = 20.0f + wall + ridges + hills + floor_bumps;
-        // River channel and banks follow the unwarped centerline (water and gameplay use it).
-        const f32 dc = std::fabs(x - river_center_x(z));
-        const f32 channel = 1.0f - smoothstep(3.0f, 9.0f, dc);
-        h -= channel * 2.6f;
-        // Lake basin downstream.
-        const f32 lx = x - river_center_x(520.0f), lz = (z - 520.0f) * 0.7f;
-        const f32 lake_d = std::sqrt(lx * lx + lz * lz);
-        const f32 lake = 1.0f - smoothstep(60.0f, 160.0f, lake_d);
-        h = lerp(h, 15.5f + floor_bumps * 0.3f, lake);
-        return h;
-    };
+    const bool coast = desc_.kind == TerrainKind::Coast;
+    auto height_fn = [&](f32 x, f32 z) { return coast ? coast_height(x, z) : valley_height(x, z); };
     // Parallel over rows (the reference PC has 4 threads; the cloud has 4).
     const u32 threads = max(1u, std::thread::hardware_concurrency());
     std::vector<std::thread> pool;
@@ -150,9 +200,15 @@ void Terrain::generate() {
         for (u32 x = 0; x < m; ++x) {
             const f32 wx = (f32(x) + 0.5f) * desc_.texel_size * 2.0f - half;
             const f32 wz = (f32(y) + 0.5f) * desc_.texel_size * 2.0f - half;
-            const f32 d = std::fabs(river_distance(wx, wz));
             const f32 h = height_at(wx, wz);
-            const f32 wet = max(1.0f - smoothstep(4.0f, 22.0f, d), 1.0f - smoothstep(15.6f, 17.5f, h));
+            f32 wet;
+            if (coast) {
+                // Wet sand below the swash limit (~0.9 m above the still sea); the sea bed is fully wet.
+                wet = 1.0f - smoothstep(desc_.sea_level + 0.15f, desc_.sea_level + 0.9f, h);
+            } else {
+                const f32 d = std::fabs(river_distance(wx, wz));
+                wet = max(1.0f - smoothstep(4.0f, 22.0f, d), 1.0f - smoothstep(15.6f, 17.5f, h));
+            }
             const f32 patch = 0.5f + 0.5f * fbm(wx / 9.0f, wz / 9.0f, seed + 21, 4);
             u8* p = &mask_[(usize(y) * m + x) * 4];
             p[0] = static_cast<u8>(saturate(wet) * 255.0f);
@@ -160,6 +216,105 @@ void Terrain::generate() {
             p[2] = 0;
             p[3] = 255;
         }
+    if (coast) build_shore_distance();
+}
+
+namespace {
+// Felzenszwalb & Huttenlocher 1D squared distance transform (f: 0 at sites, large elsewhere).
+void edt_1d(const f32* f, f32* d, u32 n, std::vector<i32>& v, std::vector<f32>& z) {
+    v.resize(n);
+    z.resize(n + 1);
+    u32 k = 0;
+    v[0] = 0;
+    z[0] = -1e30f;
+    z[1] = 1e30f;
+    for (u32 q = 1; q < n; ++q) {
+        f32 sq = 0;
+        for (;;) {
+            const i32 p = v[k];
+            sq = ((f[q] + f32(q) * f32(q)) - (f[p] + f32(p) * f32(p))) / (2.0f * f32(q) - 2.0f * f32(p));
+            if (sq <= z[k] && k > 0) {
+                --k;
+                continue;
+            }
+            break;
+        }
+        ++k;
+        v[k] = i32(q);
+        z[k] = sq;
+        z[k + 1] = 1e30f;
+    }
+    k = 0;
+    for (u32 q = 0; q < n; ++q) {
+        while (z[k + 1] < f32(q)) ++k;
+        const f32 dq = f32(q) - f32(v[k]);
+        d[q] = dq * dq + f[v[k]];
+    }
+}
+
+// 2D Euclidean distance (texels) to the nearest site (sites[i] != 0).
+std::vector<f32> edt_2d(const std::vector<u8>& sites, u32 n) {
+    std::vector<f32> g(usize(n) * n), col(n), out(n);
+    std::vector<i32> v;
+    std::vector<f32> z;
+    for (usize i = 0; i < g.size(); ++i) g[i] = sites[i] ? 0.0f : 1e20f;
+    for (u32 x = 0; x < n; ++x) {
+        for (u32 y = 0; y < n; ++y) col[y] = g[usize(y) * n + x];
+        edt_1d(col.data(), out.data(), n, v, z);
+        for (u32 y = 0; y < n; ++y) g[usize(y) * n + x] = out[y];
+    }
+    for (u32 y = 0; y < n; ++y) {
+        edt_1d(&g[usize(y) * n], out.data(), n, v, z);
+        for (u32 x = 0; x < n; ++x) g[usize(y) * n + x] = std::sqrt(out[x]);
+    }
+    return g;
+}
+} // namespace
+
+void Terrain::build_shore_distance() {
+    const u32 m = desc_.resolution / 2;
+    const f32 texel = desc_.texel_size * 2.0f, half = world_size() * 0.5f;
+    std::vector<u8> land(usize(m) * m), sea(usize(m) * m);
+    for (u32 y = 0; y < m; ++y)
+        for (u32 x = 0; x < m; ++x) {
+            const f32 h = height_at((f32(x) + 0.5f) * texel - half, (f32(y) + 0.5f) * texel - half);
+            land[usize(y) * m + x] = h > desc_.sea_level ? 1 : 0;
+            sea[usize(y) * m + x] = h > desc_.sea_level ? 0 : 1;
+        }
+    const std::vector<f32> to_land = edt_2d(land, m), to_sea = edt_2d(sea, m);
+    shore_.resize(usize(m) * m);
+    for (usize i = 0; i < shore_.size(); ++i)
+        shore_[i] = (land[i] ? -(to_sea[i] - 0.5f) : (to_land[i] - 0.5f)) * texel;
+    // Two box passes: the medial-axis kinks of the distance field would show up as kinks in the surf.
+    std::vector<f32> tmp(shore_.size());
+    for (int pass = 0; pass < 2; ++pass) {
+        for (u32 y = 0; y < m; ++y)
+            for (u32 x = 0; x < m; ++x) {
+                f32 acc = 0;
+                for (i32 k = -2; k <= 2; ++k) acc += shore_[usize(y) * m + u32(clamp(i32(x) + k, 0, i32(m) - 1))];
+                tmp[usize(y) * m + x] = acc / 5.0f;
+            }
+        for (u32 y = 0; y < m; ++y)
+            for (u32 x = 0; x < m; ++x) {
+                f32 acc = 0;
+                for (i32 k = -2; k <= 2; ++k) acc += tmp[usize(u32(clamp(i32(y) + k, 0, i32(m) - 1))) * m + x];
+                shore_[usize(y) * m + x] = acc / 5.0f;
+            }
+    }
+}
+
+f32 Terrain::shore_distance(f32 x, f32 z) const {
+    if (shore_.empty()) return 1e4f;
+    const u32 m = desc_.resolution / 2;
+    const f32 texel = desc_.texel_size * 2.0f, half = world_size() * 0.5f;
+    const f32 fx = clamp((x + half) / texel - 0.5f, 0.0f, f32(m - 1));
+    const f32 fz = clamp((z + half) / texel - 0.5f, 0.0f, f32(m - 1));
+    const u32 x0 = static_cast<u32>(fx), z0 = static_cast<u32>(fz);
+    const u32 x1 = min(x0 + 1, m - 1), z1 = min(z0 + 1, m - 1);
+    const f32 tx = fx - f32(x0), tz = fz - f32(z0);
+    const f32 a = lerp(shore_[usize(z0) * m + x0], shore_[usize(z0) * m + x1], tx);
+    const f32 b = lerp(shore_[usize(z1) * m + x0], shore_[usize(z1) * m + x1], tx);
+    return lerp(a, b, tz);
 }
 
 f32 Terrain::height_at(f32 x, f32 z) const {
@@ -210,8 +365,27 @@ void Terrain::upload_textures() {
     up.name = "terrain_mask";
     gpu_.mask = add(rhi::upload_texture(dev_, up));
 
-    const char* layers[4] = {"forest_leaves_02", "brown_mud_leaves_01", "aerial_rocks_02", "brown_mud_02"};
-    const u8 fallback_col[4][3] = {{78, 58, 38}, {70, 60, 45}, {95, 98, 88}, {60, 48, 38}};
+    if (!shore_.empty()) {
+        std::vector<u16> s16(shore_.size());
+        for (usize i = 0; i < shore_.size(); ++i)
+            s16[i] = static_cast<u16>(std::lround(saturate(shore_[i] / kShoreRange + 0.5f) * 65535.0f));
+        up.pixels = s16.data();
+        up.width = desc_.resolution / 2;
+        up.height = desc_.resolution / 2;
+        up.format = VK_FORMAT_R16_UNORM;
+        up.generate_mips = false;
+        up.name = "terrain_shore";
+        gpu_.shore = add(rhi::upload_texture(dev_, up));
+    }
+    // Layer order (terrain.frag): 0 = default ground, 1 = patches, 2 = rock (triplanar), 3 = wet ground.
+    const bool coast = desc_.kind == TerrainKind::Coast;
+    const char* valley_layers[4] = {"forest_leaves_02", "brown_mud_leaves_01", "aerial_rocks_02", "brown_mud_02"};
+    const char* coast_layers[4] = {"coast_sand_01", "coast_sand_rocks_02", "coast_land_rocks_01", "damp_beach_sand"};
+    const char* const* layers = coast ? coast_layers : valley_layers;
+    const u8 valley_col[4][3] = {{78, 58, 38}, {70, 60, 45}, {95, 98, 88}, {60, 48, 38}};
+    const u8 coast_col[4][3] = {{196, 180, 150}, {170, 158, 135}, {110, 104, 96}, {140, 125, 100}};
+    const u8 (*fallback_col)[3] = coast ? coast_col : valley_col;
+    gpu_.flags = coast ? 2u : 0u;
     for (int l = 0; l < 4; ++l) {
         const std::string base = path_join(path_join(desc_.texture_dir, layers[l]), layers[l]);
         const char* suffix[3] = {"_diff.jpg", "_nor_gl.jpg", "_arm.jpg"};
