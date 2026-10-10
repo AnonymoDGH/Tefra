@@ -11,6 +11,9 @@ layout(location = 2) in vec4 v_tangent;
 layout(location = 3) in vec2 v_uv;
 layout(location = 4) flat in uint v_material;
 layout(location = 5) flat in float v_rand; // per-instance random (vegetation), 0 for other meshes
+layout(location = 6) in vec4 v_cur_clip;
+layout(location = 7) in vec4 v_prev_clip;
+layout(location = 8) flat in uint v_dynamic; // skinned: velocity is written, other meshes leave it at zero
 layout(location = 0) out vec4 o_albedo;   // RGBA8_SRGB: base color, material AO
 layout(location = 1) out vec4 o_normal;   // A2B10G10R10: oct normal, roughness, class
 layout(location = 2) out vec4 o_material; // RGBA8: metallic, translucency, emissive, wetness
@@ -93,5 +96,7 @@ void main() {
     o_albedo = vec4(base.rgb, ao);
     o_normal = vec4(oct_encode01(N), rough, (m.flags & 1u) != 0u ? 1.0 / 3.0 : 0.0);
     o_material = vec4(metal, m.translucency, emissive, 0.0);
-    o_velocity = vec2(0.0);
+    // Screen-space motion in uv units (previous minus current, both unjittered), read by TAA for dynamic pixels.
+    vec2 cur_ndc = v_cur_clip.xy / v_cur_clip.w, prev_ndc = v_prev_clip.xy / v_prev_clip.w;
+    o_velocity = v_dynamic != 0u ? (prev_ndc - cur_ndc) * 0.5 : vec2(0.0);
 }

@@ -94,6 +94,8 @@ void register_builtin_classes(ClassRegistry& r) {
     b.group("Character").prop("CharacterWalkSpeed", Value::number(6.0), "Default walk speed (m/s).");
     b.prop("CharacterJumpHeight", Value::number(1.6), "Default jump height (m).");
     b.prop("CharacterRig", Value::enumeration(0), "Default avatar rig.", 0, rig);
+    b.prop("CharacterMesh", Value::string(""), "Rigged .glb used as the character (empty = the default R15 avatar).");
+    b.prop("CharacterMeshScale", Value::number(1.0), "Scale of the imported character.");
     b.prop("CameraMaxZoomDistance", Value::number(40.0), "Maximum third-person camera distance (m).");
     b.cls("StarterGui", "Instance", "UI cloned into each player's screen.").service();
     b.group("Behavior").prop("ShowDevelopmentGui", Value::boolean(true), "Shows the UI in the editor viewport.");
@@ -259,6 +261,13 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("State", Value::enumeration(0), "Current state.", kPropReadOnly | kPropNotSerialized, humanoid_state);
     b.prop("MoveDirection", Value::vector3({0, 0, 0}), "Desired movement (world, unit).", kPropNotSerialized);
     b.cls("Animator", "Instance", "Plays and blends animations on a Humanoid's rig.", "Characters");
+    // Imported glTF rigs (RigType Custom): clip names for the automatic locomotion, matched case-insensitively
+    // (exact name, then substring) among the clips of the MeshPart's file or of the Animation children.
+    b.group("Imported rigs").prop("IdleClip", Value::string("idle"), "Clip played while standing.");
+    b.prop("WalkClip", Value::string("walk"), "Clip played while walking (falls back to idle).");
+    b.prop("RunClip", Value::string("run"), "Clip played while running (falls back to walk).");
+    b.prop("JumpClip", Value::string("jump"), "Clip played while jumping.");
+    b.prop("FallClip", Value::string("fall"), "Clip played while falling.");
     b.cls("Animation", "Instance", "Reference to a keyframe animation asset.", "Characters");
     b.group("Data").prop("AnimationId", Value::string(""), "Asset path (glTF animation or built-in name).");
     b.prop("Looped", Value::boolean(true), "Loops when played.");

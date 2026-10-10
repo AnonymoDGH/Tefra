@@ -65,7 +65,20 @@ class SceneSync {
     std::unordered_map<u64, u32> part_index_; // instance id -> parts_ index
     u32 primitive_mesh_[4] = {~0u, ~0u, ~0u, ~0u};
     std::unordered_map<std::string, u32> material_cache_;
-    std::unordered_map<std::string, std::vector<std::pair<u32, u32>>> gltf_cache_; // path -> (mesh, material)
+    // A glTF primitive as render instances: mesh, material and (for skinned primitives) scene skin.
+    struct GltfPrim {
+        u32 mesh = 0;
+        u32 material = 0;
+        u32 skin = 0xFFFFFFFFu;
+    };
+    // A skinned MeshPart owns its own skins (its palette comes from DataModel::skin_pose).
+    struct SkinnedPart {
+        std::string path;
+        std::vector<GltfPrim> prims;
+        u64 seen_version = 0;
+    };
+    std::unordered_map<std::string, std::vector<GltfPrim>> gltf_cache_; // static files: path -> primitives
+    std::unordered_map<u64, SkinnedPart> skinned_parts_;                // MeshPart id -> skinned primitives
     bool uploaded_once_ = false;
 };
 

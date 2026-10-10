@@ -44,4 +44,17 @@ f32 r15_hip_height(f32 height_scale);
 // Builds the avatar as a Model under `parent` (nullptr: detached). Returns the Model.
 world::Instance* build_r15_avatar(world::DataModel& dm, world::Instance* parent, const AvatarDesc& desc);
 
+// Imported character (spec M3b): a Model with an invisible HumanoidRootPart (the controller's capsule, no collision),
+// a skinned MeshPart that shows the rigged .glb, a Humanoid (RigType Custom) and an Animator. The height comes from the
+// file's bind-pose bounds times `scale`; HipHeight is half of it.
+struct SkinnedAvatarDesc {
+    std::string name = "Character";
+    std::string mesh_path;         // .gltf/.glb with a skin (absolute or as the caller resolved it)
+    f32 scale = 1.0f;              // uniform scale of the mesh (the MeshPart Size)
+    vec3 origin{0.0f, 0.0f, 0.0f}; // ground point under the feet (m)
+    f32 yaw_deg = 0.0f;
+};
+// False when the file cannot be read or has no skin (nothing is created then).
+world::Instance* build_skinned_avatar(world::DataModel& dm, world::Instance* parent, const SkinnedAvatarDesc& desc);
+
 } // namespace tefra::anim

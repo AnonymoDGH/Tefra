@@ -4,7 +4,7 @@
 #include "common/bindless.glsl"
 // Temporal anti-aliasing: depth reprojection (static world), Catmull-Rom history, variance clipping in YCoCg,
 // luminance-weighted blend (Karis 2014, Salvi 2016).
-layout(push_constant) uniform Push { FrameBuffer frame; uint current; uint history; uint depth; uint valid; vec4 sizes; } pc;
+layout(push_constant) uniform Push { FrameBuffer frame; uint current; uint history; uint depth; uint valid; uint velocity; uint pad; vec4 sizes; } pc;
 // sizes: xy = input (render) size, zw = output size. Input may be smaller than output (TAAU).
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
@@ -62,6 +62,10 @@ void main() {
     if (best <= 0.0) p = normalize(p) * 1e6; // sky: rotation-only reprojection
     vec4 prev = f.prev_view_proj * vec4(p, 1.0);
     vec2 prev_uv = (prev.xy / prev.w) * 0.5 + 0.5;
+    // Dynamic surfaces (skinned meshes) move inside the frame: their G-buffer velocity replaces the camera-only
+    // reprojection. The current uv is unjittered first, the velocity is relative to that.
+    vec2 vel = texelFetch(TEX2D(pc.velocity, SMP_NEAREST_CLAMP), clamp(px, ivec2(0), ivec2(pc.sizes.xy) - 1), 0).rg;
+    if (dot(vel, vel) > 0.0) prev_uv = (v_uv - 0.5 * f.jitter.xy) + vel;
     vec2 size = pc.sizes.zw;
     if (any(lessThan(prev_uv, vec2(0.0))) || any(greaterThan(prev_uv, vec2(1.0)))) { o_color = vec4(cur, 1.0); return; }
 

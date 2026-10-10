@@ -302,6 +302,17 @@ bool DataModel::destroy(Instance* inst) {
     return true;
 }
 
+void DataModel::set_skin_pose(u64 part_id, std::vector<mat4> palette) {
+    SkinPose& p = skin_poses_[part_id];
+    p.palette = std::move(palette);
+    ++p.version;
+}
+
+const DataModel::SkinPose* DataModel::skin_pose(u64 part_id) const {
+    auto it = skin_poses_.find(part_id);
+    return it == skin_poses_.end() ? nullptr : &it->second;
+}
+
 Instance* DataModel::find(u64 id) const {
     auto it = instances_.find(id);
     return it == instances_.end() ? nullptr : it->second.get();

@@ -33,6 +33,16 @@ struct MeshPush {
     VkDeviceAddress frame, vertices, instances, materials;
     u32 cascade;
     u32 pad[3];
+    VkDeviceAddress prev_vertices; // skinned draws: posed vertices with the previous palette
+};
+struct SkinPush {
+    VkDeviceAddress src, attrs, palette, palette_prev, dst, dst_prev;
+    u32 count, pad;
+};
+// One skinned instance for this frame: its source vertices, palettes and posed output (device addresses).
+struct SkinDraw {
+    VkDeviceAddress src, attrs, palette, palette_prev, dst, dst_prev;
+    u32 count;
 };
 struct LightingPush {
     VkDeviceAddress frame;
@@ -204,7 +214,9 @@ Renderer::~Renderer() {
         rhi::destroy_buffer(dev_, f.terrain);
         for (rhi::Buffer* b : {&f.veg_visible, &f.veg_shadow_visible, &f.veg_cmds, &f.veg_shadow_cmds})
             rhi::destroy_buffer(dev_, *b);
-        for (rhi::Buffer* b : {&f.grass_cells, &f.grass_counter, &f.grass_readback}) rhi::destroy_buffer(dev_, *b);
+        for (rhi::Buffer* b :
+             {&f.grass_cells, &f.grass_counter, &f.grass_readback, &f.skin_palettes, &f.skin_out, &f.skin_prev})
+            rhi::destroy_buffer(dev_, *b);
     }
     rhi::destroy_buffer(dev_, veg_cmd_template_);
     for (u32 i = 0; i < 2; ++i) {
@@ -215,7 +227,7 @@ Renderer::~Renderer() {
          {p_gbuffer_,        p_gbuffer_2s_,  p_shadow_,   p_lighting_,   p_tonemap_,     p_skyview_,    p_terrain_,
           p_terrain_shadow_, p_veg_,         p_veg_2s_,   p_veg_shadow_, p_veg_cull_,    p_water_,      p_taa_,
           p_gtao_,           p_bloom_down_,  p_bloom_up_, p_expo_first_, p_expo_reduce_, p_expo_adapt_, p_volumetric_,
-          p_grass_,          p_grass_count_, p_ocean_,    p_ocean_copy_})
+          p_grass_,          p_grass_count_, p_ocean_,    p_ocean_copy_, p_skin_})
         if (p) vkDestroyPipeline(dev_.device(), p, nullptr);
     vkDestroyPipelineLayout(dev_.device(), layout_, nullptr);
 }
@@ -225,7 +237,8 @@ void Renderer::create_pipelines(VkFormat output_format) {
                           &p_skyview_,    &p_terrain_,    &p_terrain_shadow_, &p_veg_,         &p_veg_2s_,
                           &p_veg_shadow_, &p_veg_cull_,   &p_water_,          &p_taa_,         &p_gtao_,
                           &p_bloom_down_, &p_bloom_up_,   &p_expo_first_,     &p_expo_reduce_, &p_expo_adapt_,
-                          &p_volumetric_, &p_grass_,      &p_grass_count_,    &p_ocean_,       &p_ocean_copy_}) {
+                          &p_volumetric_, &p_grass_,      &p_grass_count_,    &p_ocean_,       &p_ocean_copy_,
+                          &p_skin_}) {
         if (*p) vkDestroyPipeline(dev_.device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -247,6 +260,7 @@ void Renderer::create_pipelines(VkFormat output_format) {
     VkShaderModule grass_vs = rhi::load_shader(dev_, "grass.vert");
     VkShaderModule grass_fs = rhi::load_shader(dev_, "grass.frag");
     VkShaderModule grass_count_cs = rhi::load_shader(dev_, "grass_count.comp");
+    VkShaderModule skin_cs = rhi::load_shader(dev_, "skin.comp");
     VkShaderModule water_vs = rhi::load_shader(dev_, "water.vert");
     VkShaderModule water_fs = rhi::load_shader(dev_, "water.frag");
     VkShaderModule taa_fs = rhi::load_shader(dev_, "taa.frag");
@@ -259,6 +273,7 @@ void Renderer::create_pipelines(VkFormat output_format) {
     VkShaderModule expo_adapt_cs = rhi::load_shader(dev_, "exposure_adapt.comp");
     p_veg_cull_ = rhi::create_compute_pipeline(dev_, veg_cull_cs, layout_, "veg_cull");
     p_grass_count_ = rhi::create_compute_pipeline(dev_, grass_count_cs, layout_, "grass_count");
+    p_skin_ = rhi::create_compute_pipeline(dev_, skin_cs, layout_, "skin");
 
     auto rp_g = compat_pass(dev_, {kRt0, kRt1, kRt2, kRt3}, kDepth);
     rhi::GraphicsPipelineDesc g;
@@ -422,7 +437,7 @@ void Renderer::create_pipelines(VkFormat output_format) {
                              veg_vs,        veg_shadow_vs,  shadow_alpha_fs, veg_cull_cs,   water_vs,
                              water_fs,      taa_fs,         gtao_fs,         bloom_down_fs, bloom_up_fs,
                              expo_first_fs, expo_reduce_fs, expo_adapt_cs,   volumetric_fs, grass_vs,
-                             grass_fs,      grass_count_cs})
+                             grass_fs,      grass_count_cs, skin_cs})
         vkDestroyShaderModule(dev_.device(), m, nullptr);
 }
 
@@ -593,6 +608,8 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     frustum_planes(fc.view_proj, planes);
     std::vector<u32> visible, casters[kMaxCascades];
     auto* gpu_inst = static_cast<InstanceGPU*>(fb.instances.mapped);
+    const bool have_history = instance_history_.size() == instances.size();
+    std::vector<XformHistory> history(instances.size());
     for (u32 i = 0; i < instances.size(); ++i) {
         const Instance& in = instances[i];
         const vec3 rel = relative_to(in.position, camera.position);
@@ -602,10 +619,21 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         store_rows(g.model_rows, model);
         store_rows(g.normal_rows, normal_m);
         g.material = in.material;
+        // Skinned instances move their vertices with the palette and their root with the transform: the previous
+        // frame's model matrix (relative to this frame's camera) gives the motion of the surface.
+        const bool dynamic = in.skin != kNoSkin;
+        const XformHistory prev =
+            have_history ? instance_history_[i] : XformHistory{in.position, in.rotation, in.scale};
+        const mat4 prev_model =
+            dynamic ? compose_trs(relative_to(prev.position, camera.position), prev.rotation, prev.scale) : model;
+        store_rows(g.prev_rows, prev_model);
+        g.flags = dynamic ? 1u : 0u;
+        history[i] = {in.position, in.rotation, in.scale};
         gpu_inst[i] = g;
         const MeshRange& mr = scene.meshes()[in.mesh];
         const vec3 c = transform_point(model, mr.bounds.center);
-        const f32 r = mr.bounds.radius * max(max(in.scale.x, in.scale.y), in.scale.z);
+        f32 r = mr.bounds.radius * max(max(in.scale.x, in.scale.y), in.scale.z);
+        if (dynamic) r = r * 1.5f + 0.5f; // posed vertices can leave the bind-pose sphere
         if (sphere_in_frustum(planes, c, r)) visible.push_back(i);
         if (in.cast_shadows)
             for (u32 k = 0; k < cascades; ++k) {
@@ -616,6 +644,67 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             }
     }
     vmaFlushAllocation(dev_.allocator(), fb.instances.allocation, 0, VK_WHOLE_SIZE);
+    instance_history_ = std::move(history);
+
+    // ---- Skinned meshes: palettes (current and previous) and posed vertices (current and previous) ----------------
+    std::vector<u32> skin_draw_of(instances.size(), ~0u); // instance -> index into skin_draws
+    std::vector<SkinDraw> skin_draws;
+    {
+        const auto& skins = scene.skins();
+        auto skinned = [&](u32 i) {
+            const Instance& in = instances[i];
+            return in.skin != kNoSkin && in.skin < skins.size() && scene.meshes()[in.mesh].skinned;
+        };
+        std::vector<u32> palette_base(skins.size());
+        u32 joints = 0, verts = 0;
+        for (usize k = 0; k < skins.size(); ++k) {
+            palette_base[k] = joints;
+            joints += skins[k].joint_count;
+        }
+        for (u32 i = 0; i < instances.size(); ++i)
+            if (skinned(i)) verts += scene.meshes()[instances[i].mesh].vertex_count;
+        if (joints > 0 && fb.skin_joint_capacity < joints) {
+            rhi::destroy_buffer(dev_, fb.skin_palettes);
+            fb.skin_joint_capacity = max<u32>(joints, 64u);
+            fb.skin_palettes =
+                rhi::create_buffer(dev_, 2ull * fb.skin_joint_capacity * sizeof(mat4),
+                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, rhi::MemoryUsage::Upload, "skin_palettes");
+        }
+        if (verts > 0 && fb.skin_vertex_capacity < verts) {
+            rhi::destroy_buffer(dev_, fb.skin_out);
+            rhi::destroy_buffer(dev_, fb.skin_prev);
+            fb.skin_vertex_capacity = max<u32>(verts, 1024u);
+            const VkDeviceSize bytes = VkDeviceSize(fb.skin_vertex_capacity) * sizeof(Vertex);
+            fb.skin_out = rhi::create_buffer(dev_, bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, rhi::MemoryUsage::GpuOnly,
+                                             "skin_out");
+            fb.skin_prev = rhi::create_buffer(dev_, bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                              rhi::MemoryUsage::GpuOnly, "skin_prev");
+        }
+        if (joints > 0) {
+            auto* pal = static_cast<mat4*>(fb.skin_palettes.mapped);
+            for (usize k = 0; k < skins.size(); ++k)
+                for (u32 j = 0; j < skins[k].joint_count; ++j) {
+                    pal[palette_base[k] + j] = skins[k].palette[j];
+                    pal[joints + palette_base[k] + j] = skins[k].prev_palette[j];
+                }
+            vmaFlushAllocation(dev_.allocator(), fb.skin_palettes.allocation, 0, VK_WHOLE_SIZE);
+        }
+        u32 base = 0;
+        for (u32 i = 0; i < instances.size(); ++i) {
+            if (!skinned(i)) continue;
+            const Instance& in = instances[i];
+            const MeshRange& mr = scene.meshes()[in.mesh];
+            const VkDeviceAddress off = VkDeviceAddress(base) * sizeof(Vertex);
+            skin_draw_of[i] = static_cast<u32>(skin_draws.size());
+            skin_draws.push_back(
+                SkinDraw{scene.vertex_buffer().address + VkDeviceAddress(mr.vertex_offset) * sizeof(Vertex),
+                         scene.skin_attribute_buffer().address + VkDeviceAddress(mr.skin_offset) * sizeof(SkinAttr),
+                         fb.skin_palettes.address + VkDeviceAddress(palette_base[in.skin]) * sizeof(mat4),
+                         fb.skin_palettes.address + VkDeviceAddress(joints + palette_base[in.skin]) * sizeof(mat4),
+                         fb.skin_out.address + off, fb.skin_prev.address + off, mr.vertex_count});
+            base += mr.vertex_count;
+        }
+    }
 
     // ---- Terrain patches ---------------------------------------------------------------------------
     constexpr VkDeviceSize kTerrainPatchOffset = 256;
@@ -817,10 +906,12 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     auto draw_list = [=](VkCommandBuffer c, const std::vector<u32>& list, u32 cascade, bool shadow_pass,
                          VkPipeline one_sided, VkPipeline two_sided) {
         if (list.empty()) return;
-        MeshPush push{frame_addr, sc->vertex_buffer().address, inst_addr, sc->material_buffer().address, cascade, {}};
+        MeshPush push{frame_addr, sc->vertex_buffer().address, inst_addr, sc->material_buffer().address, cascade,
+                      {},         sc->vertex_buffer().address};
         vkCmdPushConstants(c, layout, VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
         vkCmdBindIndexBuffer(c, sc->index_buffer().buffer, 0, VK_INDEX_TYPE_UINT32);
         VkPipeline bound = VK_NULL_HANDLE;
+        bool static_pushed = true;
         for (u32 i : list) {
             const Instance& in = sc->instances()[i];
             const bool two = !shadow_pass && (sc->materials()[in.material].flags & 2u);
@@ -830,7 +921,20 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                 bound = want;
             }
             const MeshRange& mr = sc->meshes()[in.mesh];
-            vkCmdDrawIndexed(c, mr.index_count, 1, mr.first_index, mr.vertex_offset, i);
+            if (skin_draw_of[i] != ~0u) {
+                // Skinned: the posed copy is indexed from 0 (indices are mesh-local).
+                const SkinDraw& d = skin_draws[skin_draw_of[i]];
+                MeshPush sp{frame_addr, d.dst, inst_addr, sc->material_buffer().address, cascade, {}, d.dst_prev};
+                vkCmdPushConstants(c, layout, VK_SHADER_STAGE_ALL, 0, sizeof(sp), &sp);
+                vkCmdDrawIndexed(c, mr.index_count, 1, mr.first_index, 0, i);
+                static_pushed = false;
+            } else {
+                if (!static_pushed) {
+                    vkCmdPushConstants(c, layout, VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+                    static_pushed = true;
+                }
+                vkCmdDrawIndexed(c, mr.index_count, 1, mr.first_index, mr.vertex_offset, i);
+            }
             ++*draw_counter;
         }
     };
@@ -892,6 +996,22 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                 vkCmdCopyBuffer(ctx.cmd, counter, fb.grass_readback.buffer, 1, &region);
                 rhi::cmd_memory_barrier(ctx.cmd, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                                         VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
+            });
+    }
+
+    if (!skin_draws.empty()) {
+        graph_.add_pass(
+            "skin", rg::PassType::Compute, [](rg::PassBuilder&) {},
+            [=, this](const rg::PassContext& ctx) {
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p_skin_);
+                for (const SkinDraw& d : skin_draws) {
+                    const SkinPush sp{d.src, d.attrs, d.palette, d.palette_prev, d.dst, d.dst_prev, d.count, 0};
+                    vkCmdPushConstants(ctx.cmd, layout_, VK_SHADER_STAGE_ALL, 0, sizeof(sp), &sp);
+                    vkCmdDispatch(ctx.cmd, (d.count + 63) / 64, 1, 1);
+                }
+                rhi::cmd_memory_barrier(ctx.cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
             });
     }
 
@@ -1169,6 +1289,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             [&](rg::PassBuilder& b) {
                 b.read(hdr, rg::Access::Sampled);
                 b.read(depth, rg::Access::Sampled);
+                b.read(rt3, rg::Access::Sampled);
                 if (valid) b.read(hist_prev, rg::Access::Sampled);
                 b.color(hist_next, rg::Load::DontCare);
             },
@@ -1176,14 +1297,15 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                 struct TaaPush {
                     VkDeviceAddress frame;
                     u32 current, history, depth, valid;
-                    u32 pad[2]; // GLSL std430 aligns the vec4 to 16 bytes
+                    u32 velocity, pad; // GLSL std430 aligns the vec4 to 16 bytes
                     vec4 sizes;
                 } tp{frame_addr,
                      ctx.sampled(hdr),
                      valid ? ctx.sampled(hist_prev) : 0u,
                      ctx.sampled(depth),
                      valid,
-                     {0, 0},
+                     ctx.sampled(rt3),
+                     0u,
                      {f32(ext.width), f32(ext.height), f32(out_ext.width), f32(out_ext.height)}};
                 static_assert(offsetof(TaaPush, sizes) == 32);
                 vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);

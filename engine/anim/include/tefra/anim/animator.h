@@ -15,9 +15,11 @@
 // Physics is not involved. Units: metres, seconds, degrees in Orientation.
 
 #include "tefra/anim/clip.h"
+#include "tefra/anim/skeleton.h"
 #include "tefra/world/datamodel.h"
 
 #include <memory>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 
@@ -45,13 +47,26 @@ class AnimatorSystem {
     // True while the clip (manual or automatic) is being played with a non-zero target weight.
     bool is_playing(const world::Instance& humanoid, std::string_view clip) const;
 
+    // Imported characters (skinned MeshPart, spec M3b): plays a clip of the MeshPart's .glb by name or "#index" on
+    // the manual layer. False when the Humanoid is not in a model with a skinned MeshPart or the clip is missing.
+    bool play_clip(world::Instance& humanoid, std::string_view clip, f32 fade = 0.2f, f32 weight = 1.0f,
+                   bool looped = true);
+
   private:
     struct State;
+    struct SkinnedState;
     State& state_for(const world::Instance& humanoid);
     void advance(const world::Instance& humanoid, world::Instance& model, State& st, f32 dt);
+    SkinnedState& skinned_state_for(const world::Instance& humanoid);
+    world::Instance* skinned_part(world::Instance& model);
+    const SkeletonAsset* asset_for(const std::string& path);
+    void advance_skinned(const world::Instance& humanoid, world::Instance& model, world::Instance& part,
+                         SkinnedState& st, f32 dt);
 
     world::DataModel& model_;
     std::unordered_map<u64, std::unique_ptr<State>> states_;
+    std::unordered_map<u64, std::unique_ptr<SkinnedState>> skinned_;
+    std::unordered_map<std::string, std::shared_ptr<const SkeletonAsset>> assets_;
 };
 
 } // namespace tefra::anim

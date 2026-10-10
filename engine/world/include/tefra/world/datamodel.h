@@ -249,6 +249,15 @@ class DataModel {
     Instance* instance_from_json(const JsonValue& j, Instance* parent, std::string* error = nullptr);
 
     u64 revision() const { return revision_; } // bumped by every structural or property change
+
+    // Transient skinning poses (not serialized, not undoable): the animator writes the joint palette of a skinned
+    // MeshPart and SceneSync uploads it to the renderer. version grows with every write.
+    struct SkinPose {
+        u64 version = 0;
+        std::vector<mat4> palette;
+    };
+    void set_skin_pose(u64 part_id, std::vector<mat4> palette);
+    const SkinPose* skin_pose(u64 part_id) const;
     usize add_listener(WorldListener l);
     void remove_listener(usize handle);
     // Delivers a GameEvent synchronously to every listener's `event` callback (listeners may change the model).
@@ -270,6 +279,7 @@ class DataModel {
     void clear_services();
 
     std::unordered_map<u64, std::unique_ptr<Instance>> instances_;
+    std::unordered_map<u64, SkinPose> skin_poses_;
     Instance* root_ = nullptr;
     u64 next_id_ = 1;
     u64 revision_ = 0;
