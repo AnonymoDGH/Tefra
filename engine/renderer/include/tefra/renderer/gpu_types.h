@@ -28,7 +28,8 @@ struct MaterialGPU {
     u32 normal_tex = 0;
     u32 orm_tex = 0;
     u32 emissive_tex = 0;
-    u32 flags = 0; // bit0: foliage (translucency), bit1: double-sided, bit2: bark (tint + moss)
+    u32 flags = 0; // bit0: foliage (translucency, normal blended with the crown normal), bit1: double-sided,
+                   // bit2: bark (tint + moss), bit3: normal map alpha holds baked AO (needles)
     f32 translucency = 0.0f;
     u32 pad[2] = {}; // bark: pad[0] = moss coverage (float bits)
 };

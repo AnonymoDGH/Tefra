@@ -141,32 +141,178 @@ void add_trunk(MeshData& m, const TrunkStyle& st, f32 h, f32 r0, u32 segments, f
         }
 }
 
-// Branch card: a curved quad strip from `root` along `dir`, drooping, oriented by `side`.
-// Foliage cards store a crown-occlusion factor in tangent_sign (their normal maps are flat).
-void add_card(MeshData& m, vec3 root, vec3 dir, vec3 side, f32 length, f32 width, f32 droop, vec3 crown_center,
-              f32 crown_radius) {
-    const u32 segs = 3;
-    const u32 base = static_cast<u32>(m.vertices.size());
-    const vec3 card_n = normalize(cross(side, dir));
-    for (u32 i = 0; i <= segs; ++i) {
-        const f32 t = f32(i) / f32(segs);
-        const vec3 c = root + dir * (length * t) - vec3{0.0f, droop * length * t * t, 0.0f};
-        const f32 w = width * (1.0f - 0.35f * t);
-        for (int k = 0; k < 2; ++k) {
-            const vec3 p = c + side * (w * (k == 0 ? -0.5f : 0.5f));
-            // Normals bent towards the crown's outward direction: soft, volumetric foliage shading.
-            vec3 out = p - crown_center;
-            out.y *= 0.6f;
-            const vec3 n = normalize(card_n * 0.35f + normalize(out) * (0.65f + 0.35f * length / crown_radius));
-            // Inner parts of the crown (near the trunk, low) receive less sky light.
-            const f32 radial = tefra::length(vec3{p.x, 0.0f, p.z}) / max(crown_radius, 0.1f);
-            const f32 ao = clamp(0.25f + 0.75f * radial, 0.25f, 1.0f);
-            m.vertices.push_back(make_vertex(p, n, {t, k == 0 ? 0.0f : 1.0f}, dir, ao));
+// ---- Needle atlas (baked twigs) ---------------------------------------------------------------------
+// The atlas is 2x2 tiles of 512x256 texels (2:1, like the cards it decorates). Tiles 0-2 hold living twigs of
+// three variants, tile 3 a dead twig (brown, sparse). A card maps its UV [0,1]^2 into its tile, inset so that
+// mip levels never bleed into the neighbouring tile.
+constexpr u32 kDeadTwigTile = 3;
+constexpr u32 kTileW = 512, kTileH = 256;
+constexpr f32 kTileInset = 0.03f;
+constexpr u32 kSupersample = 2;
+
+vec2 tile_uv(u32 tile, f32 u, f32 v) {
+    const f32 s = 0.5f - 2.0f * kTileInset;
+    return {f32(tile % 2) * 0.5f + kTileInset + u * s, f32(tile / 2) * 0.5f + kTileInset + v * s};
+}
+
+f32 smooth01(f32 e0, f32 e1, f32 x) {
+    const f32 t = saturate((x - e0) / (e1 - e0));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// A finite cylinder (needle or twig segment) in tile space: x along the card, y across it (+y = image row
+// down = texture v), z towards the viewer. Units are texels of the final tile.
+struct Needle {
+    vec3 a, u; // base and unit direction
+    f32 len, r;
+    vec3 c; // linear albedo
+};
+
+// Orthographic front hit: ray from z = +kRayZ along -z. Returns the surface depth and normal.
+bool hit_needle(const Needle& nd, f32 px, f32 py, f32& z_out, vec3& n_out) {
+    constexpr f32 kRayZ = 1000.0f;
+    const vec3 o{px, py, kRayZ};
+    const vec3 d{0.0f, 0.0f, -1.0f};
+    const vec3 oc = o - nd.a;
+    const vec3 dp = d - nd.u * dot(d, nd.u);
+    const vec3 ocp = oc - nd.u * dot(oc, nd.u);
+    const f32 qa = dot(dp, dp);
+    if (qa < 1e-6f) return false;
+    const f32 qb = 2.0f * dot(dp, ocp);
+    const f32 qc = dot(ocp, ocp) - nd.r * nd.r;
+    const f32 disc = qb * qb - 4.0f * qa * qc;
+    if (disc < 0.0f) return false;
+    const f32 t = (-qb - std::sqrt(disc)) / (2.0f * qa); // nearest root: the surface closest to the viewer
+    const vec3 p = o + d * t;
+    const f32 s = dot(p - nd.a, nd.u);
+    if (s < 0.0f || s > nd.len) return false;
+    z_out = p.z;
+    n_out = normalize((p - nd.a) - nd.u * s);
+    return true;
+}
+
+// Builds one twig: a curved stem with alternating branchlets, each carrying combed needles that age from dark
+// green at the base to pale yellow-green at the tip. Dead twigs keep brown stems and a few needle stubs.
+void build_twig(u32 variant, Rng& rng, std::vector<Needle>& out) {
+    const bool dead = variant == kDeadTwigTile;
+    const vec3 tint = variant == 1 ? vec3{1.08f, 1.0f, 0.85f} : variant == 2 ? vec3{0.9f, 1.04f, 1.12f} : vec3{1, 1, 1};
+    const vec3 stem_c = dead ? vec3{0.22f, 0.16f, 0.10f} : vec3{0.07f, 0.055f, 0.04f};
+    const f32 cy = f32(kTileH) * 0.5f;
+    const f32 ph = rng.range(0.0f, kTwoPi), bow = rng.range(8.0f, 13.0f);
+    auto stem_pt = [&](f32 x) {
+        return vec3{x, cy + bow * 0.6f * std::sin(x * 0.011f + ph), 14.0f * std::sin(x / f32(kTileW) * kPi)};
+    };
+    auto push_seg = [&](vec3 p0, vec3 p1, f32 r, vec3 c) {
+        const vec3 d = p1 - p0;
+        const f32 l = std::sqrt(dot(d, d));
+        if (l > 1e-4f) out.push_back({p0, d * (1.0f / l), l, r, c});
+    };
+    for (f32 x = 4.0f; x < f32(kTileW) - 10.0f; x += 6.0f)
+        push_seg(stem_pt(x), stem_pt(x + 6.0f), dead ? 4.5f : 1.5f, stem_c);
+
+    const u32 nb = dead ? 10 : 23;
+    for (u32 k = 0; k < nb; ++k) {
+        const f32 x = 18.0f + f32(k) * (480.0f / f32(nb)) + rng.range(-4.0f, 4.0f);
+        const f32 side = (k % 2 == 0) ? 1.0f : -1.0f;
+        const vec3 base = stem_pt(x);
+        const f32 theta = dead ? rng.range(0.8f, 1.2f) : rng.range(0.55f, 0.85f);
+        const f32 len = dead ? rng.range(55.0f, 85.0f) : rng.range(80.0f, 112.0f) * (1.0f - 0.25f * x / f32(kTileW));
+        const vec3 d = normalize(vec3{std::cos(theta), side * std::sin(theta), rng.range(-0.45f, 0.45f)});
+        push_seg(base, base + d * len, dead ? 2.4f : 0.8f, stem_c);
+
+        const vec3 ref = std::fabs(d.z) < 0.9f ? vec3{0, 0, 1} : vec3{1, 0, 0};
+        const vec3 p1 = normalize(cross(d, ref)), p2 = cross(d, p1);
+        const f32 spacing = dead ? 4.5f : rng.range(1.6f, 2.2f);
+        for (f32 sp = 2.5f; sp < len - 1.0f; sp += spacing) {
+            const f32 f = sp / len; // 0 at the base, 1 at the tip
+            for (int s = 0; s < 2; ++s) {
+                if (dead && rng.f() > 0.35f) continue;
+                const f32 phi = dead ? rng.range(0.6f, 1.0f) : rng.range(0.35f, 0.7f);
+                // Living twigs comb their needles into two flanks (Douglas fir); variant 2 is radial (spruce-like).
+                const f32 beta = variant == 2 ? rng.range(0.0f, kTwoPi)
+                                              : (s == 0 ? rng.range(-0.3f, 0.3f) : kPi + rng.range(-0.3f, 0.3f));
+                const vec3 lat = p1 * std::cos(beta) + p2 * std::sin(beta);
+                const vec3 u =
+                    normalize(d * std::cos(phi) + lat * std::sin(phi) + vec3{0, 0, rng.range(-0.25f, 0.25f)});
+                const f32 nlen = (dead ? 0.6f : 1.0f) * rng.range(18.0f, 26.0f);
+                vec3 col;
+                if (dead) {
+                    col = vec3{0.17f, 0.12f, 0.07f} * rng.range(0.7f, 1.1f);
+                } else {
+                    const f32 age = smooth01(0.45f, 1.0f, f) * rng.range(0.6f, 1.0f);
+                    const vec3 old_c{0.020f, 0.052f, 0.040f}, young_c{0.085f, 0.150f, 0.060f};
+                    col = (old_c + (young_c - old_c) * age) * rng.range(0.85f, 1.15f) * tint;
+                }
+                out.push_back({base + d * sp, u, nlen, dead ? 1.2f : 1.0f, col});
+            }
         }
     }
-    for (u32 i = 0; i < segs; ++i) {
-        const u32 a = base + i * 2, b = a + 1, c = a + 2, d = a + 3;
-        m.indices.insert(m.indices.end(), {a, c, b, b, c, d});
+}
+
+// ---- Cards and crown --------------------------------------------------------------------------------
+
+struct CardSpec {
+    vec3 root, dir, side; // cross(side, dir) is the card normal (front side, the one the viewer sees)
+    f32 length, width, droop;
+    vec3 crown_center;
+    f32 crown_radius;
+    u32 tile, segs;
+};
+
+// Card with its normal leaning towards `outward` (orthogonalised to dir) and rotated by psi about dir.
+vec3 card_side(vec3 dir, vec3 outward, f32 psi) {
+    vec3 nt = outward - dir * dot(outward, dir);
+    nt = normalize(nt);
+    nt = nt * std::cos(psi) + cross(dir, nt) * std::sin(psi);
+    return normalize(cross(dir, nt));
+}
+
+// Two-sided foliage card. Vertex AO travels in tangent_sign (the shader reads abs()); the tangent is dir.
+void add_card(MeshData& m, const CardSpec& c) {
+    const u32 base = static_cast<u32>(m.vertices.size());
+    const vec3 card_n = normalize(cross(c.side, c.dir));
+    for (u32 i = 0; i <= c.segs; ++i) {
+        const f32 t = f32(i) / f32(c.segs);
+        const vec3 ctr = c.root + c.dir * (c.length * t) - vec3{0.0f, c.droop * c.length * t * t, 0.0f};
+        const f32 w = c.width * (1.0f - 0.35f * t);
+        for (int k = 0; k < 2; ++k) {
+            const vec3 p = ctr + c.side * (w * (k == 0 ? -0.5f : 0.5f));
+            // Normals bent towards the crown's outward direction: soft, volumetric foliage shading.
+            vec3 out = p - c.crown_center;
+            out.y *= 0.6f;
+            const vec3 n = normalize(card_n * 0.35f + normalize(out) * (0.65f + 0.35f * c.length / c.crown_radius));
+            // Inner parts of the crown (near the trunk, low) receive less sky light.
+            const f32 radial =
+                length(vec3{p.x - c.crown_center.x, 0.0f, p.z - c.crown_center.z}) / max(c.crown_radius, 0.1f);
+            const f32 ao = clamp(0.25f + 0.75f * radial, 0.25f, 1.0f);
+            m.vertices.push_back(make_vertex(p, n, tile_uv(c.tile, t, k == 0 ? 0.0f : 1.0f), c.dir, ao));
+        }
+    }
+    for (u32 i = 0; i < c.segs; ++i) {
+        const u32 a = base + i * 2, b = a + 1, cc = a + 2, d = a + 3;
+        m.indices.insert(m.indices.end(), {a, cc, b, b, cc, d});
+    }
+}
+
+// A drooping limb: four stations along its axis, each with two single-segment sub-branch cards on both flanks.
+void add_limb(MeshData& m, Rng& rng, vec3 root, vec3 dir, f32 len, vec3 crown_c, f32 crown_r) {
+    constexpr f32 kDroop = 0.32f;
+    auto axis = [&](f32 t) { return root + dir * (len * t) - vec3{0.0f, kDroop * len * t * t, 0.0f}; };
+    const f32 stations[3] = {0.25f, 0.50f, 0.76f};
+    for (const f32 ts : stations) {
+        const vec3 p = axis(ts);
+        const vec3 tang = normalize(axis(ts + 0.03f) - axis(ts - 0.03f));
+        const vec3 flank = normalize(cross(tang, vec3{0.0f, 1.0f, 0.0f}));
+        for (int k = 0; k < 2; ++k) {
+            const f32 sg = k == 0 ? 1.0f : -1.0f;
+            const f32 theta = rng.range(0.6f, 0.9f);
+            const vec3 sdir =
+                normalize(tang * std::cos(theta) + flank * (sg * std::sin(theta)) + vec3{0.0f, -0.15f, 0.0f});
+            const f32 sl = len * 0.52f * (1.0f - 0.30f * ts) * rng.range(0.85f, 1.15f);
+            // Normals lean outward so cards stay visible from the side; the random roll varies the planes.
+            const vec3 side = card_side(sdir, flank * (sg * 0.8f) + vec3{0.0f, 0.4f, 0.0f}, rng.range(-0.9f, 0.9f));
+            add_card(m, {p, sdir, side, sl, sl * 0.8f, 0.25f, crown_c, crown_r, rng.next() % 3u, 1u});
+        }
     }
 }
 
@@ -186,38 +332,53 @@ ConiferMeshes make_conifer(u32 seed, f32 h, f32 r0) {
     add_trunk(out.trunk_lod0, st, h, r0, 20, 0.9f, h * 0.97f, true);
     add_trunk(out.trunk_lod1, st, h, r0, 5, 4.0f, crown_start + 2.0f, false);
 
-    // LOD0 crown: whorls of drooping branch cards.
-    f32 y = crown_start;
-    u32 whorl = 0;
-    while (y < h - 0.4f) {
-        const f32 t = (y - crown_start) / (h - crown_start);
-        const u32 n = 6 + (rng.next() % 3);
-        const f32 len = std::max(0.45f, (h - y) * 0.27f * rng.range(0.8f, 1.15f) * (1.0f - 0.2f * t));
-        for (u32 i = 0; i < n; ++i) {
-            const f32 a = f32(whorl) * 2.399963f + f32(i) / f32(n) * kTwoPi + rng.range(-0.3f, 0.3f);
-            const vec3 dir = normalize(vec3{std::cos(a), rng.range(-0.15f, 0.05f), std::sin(a)});
-            vec3 side = normalize(cross(vec3{0, 1, 0}, dir));
-            const f32 tilt = rng.range(-0.5f, 0.5f);
-            side = normalize(side * std::cos(tilt) + vec3{0, 1, 0} * std::sin(tilt));
-            const vec3 axis = axis_point(st, y, h);
-            const vec3 root{axis.x + dir.x * trunk_radius_at(y, h, r0), y, axis.z + dir.z * trunk_radius_at(y, h, r0)};
-            add_card(out.crown_lod0, root, dir, side, len, len * 0.55f + 0.3f, 0.35f, axis, crown_r);
-            // Second card crossed at ~70 degrees around the branch axis gives volume from every angle.
-            const vec3 side2 = normalize(side * 0.34f + normalize(cross(dir, side)) * 0.94f);
-            add_card(out.crown_lod0, root, dir, side2, len * 0.9f, len * 0.45f + 0.25f, 0.3f, axis, crown_r);
+    // Dead lower branches: sparse brown cards hanging from the bare trunk.
+    const u32 dead_n = 9 + rng.next() % 4;
+    for (u32 d = 0; d < dead_n; ++d) {
+        const f32 y = rng.range(1.0f, crown_start + 1.0f);
+        const f32 a = rng.range(0.0f, kTwoPi);
+        const vec3 hd{std::cos(a), 0.0f, std::sin(a)};
+        const vec3 dir = normalize(hd + vec3{0.0f, rng.range(-0.5f, -0.15f), 0.0f});
+        const vec3 root = hd * trunk_radius_at(y, h, r0) + axis_point(st, y, h);
+        const vec3 flank = normalize(cross(dir, vec3{0.0f, 1.0f, 0.0f}));
+        const f32 len = rng.range(1.4f, 2.6f);
+        for (int k = 0; k < 2; ++k) {
+            const f32 sg = k == 0 ? 1.0f : -1.0f;
+            const vec3 side = card_side(dir, flank * (sg * 0.7f) + vec3{0.0f, 0.4f, 0.0f}, rng.range(-0.6f, 0.6f));
+            add_card(out.crown_lod0,
+                     {root, dir, side, len, len * 0.5f, 0.3f, axis_point(st, y, h), crown_r, kDeadTwigTile, 1u});
         }
-        y += rng.range(0.32f, 0.48f);
-        ++whorl;
-    }
-    // Leader at the top.
-    for (int k = 0; k < 3; ++k) {
-        const f32 a = f32(k) / 3.0f * kTwoPi;
-        add_card(out.crown_lod0, axis_point(st, h - 1.2f, h),
-                 normalize(vec3{std::cos(a) * 0.25f, 1.0f, std::sin(a) * 0.25f}),
-                 normalize(vec3{-std::sin(a), 0, std::cos(a)}), 1.3f, 0.5f, 0.0f, axis_point(st, h - 2.0f, h), crown_r);
     }
 
-    // LOD1 crown: stacked skirts (cone shell) sharing the needle texture.
+    // LOD0 crown: whorls of drooping limbs. Spacing, count, length and missing limbs leave irregular gaps.
+    f32 y = crown_start + 0.8f;
+    u32 whorl = 0;
+    while (y < h - 1.2f) {
+        const f32 t = (y - crown_start) / (h - crown_start);
+        const u32 n = 7 + (rng.next() % 2);
+        const f32 base_len = std::max(0.6f, (h - y) * 0.27f * (1.0f - 0.2f * t));
+        const f32 R = trunk_radius_at(y, h, r0);
+        for (u32 i = 0; i < n; ++i) {
+            if (rng.f() < 0.1f) continue;
+            const f32 a = f32(whorl) * 2.399963f + f32(i) / f32(n) * kTwoPi + rng.range(-0.35f, 0.35f);
+            const vec3 hd{std::cos(a), 0.0f, std::sin(a)};
+            const vec3 dir = normalize(hd + vec3{0.0f, rng.range(-0.25f, 0.02f), 0.0f});
+            const vec3 axis = axis_point(st, y, h);
+            add_limb(out.crown_lod0, rng, hd * R + axis, dir, base_len * rng.range(0.6f, 1.15f), axis, crown_r);
+        }
+        y += rng.range(0.55f, 0.75f);
+        ++whorl;
+    }
+    // Leader: a few short upright cards at the top.
+    for (int k = 0; k < 3; ++k) {
+        const f32 a = f32(k) / 3.0f * kTwoPi + rng.range(0.0f, 0.5f);
+        const vec3 dir = normalize(vec3{std::cos(a) * 0.3f, 1.0f, std::sin(a) * 0.3f});
+        const vec3 side = card_side(dir, vec3{std::cos(a), 0.0f, std::sin(a)}, 0.0f);
+        add_card(out.crown_lod0, {axis_point(st, h - 1.6f, h), dir, side, 1.4f, 0.7f, 0.0f, axis_point(st, h - 2.0f, h),
+                                  crown_r, rng.next() % 3u, 2u});
+    }
+
+    // LOD1 crown: stacked skirts (cone shell) sampling a living twig tile.
     const u32 skirts = 7, segs = 8;
     for (u32 s = 0; s < skirts; ++s) {
         const f32 t0 = f32(s) / f32(skirts);
@@ -231,10 +392,11 @@ ConiferMeshes make_conifer(u32 seed, f32 h, f32 r0) {
             const vec3 radial{std::cos(a), 0, std::sin(a)};
             const vec3 n = normalize(radial + vec3{0, 0.55f, 0});
             const vec3 tg{-std::sin(a), 0, std::cos(a)};
-            const f32 u = f32(i) / f32(segs) * 3.0f;
+            const f32 u = std::fmod(f32(i) / f32(segs) * 3.0f, 1.0f);
             out.crown_lod1.vertices.push_back(
-                make_vertex(radial * rt + axis_point(st, std::min(yt, h), h), n, {u, 0.0f}, tg, 1.0f));
-            out.crown_lod1.vertices.push_back(make_vertex(radial * rb + axis_point(st, yb, h), n, {u, 1.0f}, tg, 1.0f));
+                make_vertex(radial * rt + axis_point(st, std::min(yt, h), h), n, tile_uv(1, u, 0.0f), tg, 1.0f));
+            out.crown_lod1.vertices.push_back(
+                make_vertex(radial * rb + axis_point(st, yb, h), n, tile_uv(1, u, 1.0f), tg, 1.0f));
         }
         for (u32 i = 0; i < segs; ++i) {
             const u32 a = base + i * 2, b = a + 1, c = a + 2, d = a + 3;
@@ -245,72 +407,91 @@ ConiferMeshes make_conifer(u32 seed, f32 h, f32 r0) {
 }
 
 void make_needle_textures(u32 seed, u32 w, u32 h, std::vector<u8>& albedo, std::vector<u8>& normal) {
-    Rng rng(seed);
+    TEFRA_VERIFY(w == 2 * kTileW && h == 2 * kTileH);
+    const u32 ss = kSupersample;
+    const u32 tw = kTileW * ss, th = kTileH * ss; // supersampled tile
     std::vector<f32> cov(usize(w) * h, 0.0f);
     std::vector<vec3> col(usize(w) * h, vec3{});
-    auto plot_line = [&](vec2 a, vec2 b, f32 thick, vec3 c) {
-        const vec2 d = b - a;
-        const f32 len = std::sqrt(dot(d, d));
-        const int steps = static_cast<int>(len * 2.0f) + 1;
-        for (int i = 0; i <= steps; ++i) {
-            const f32 t = f32(i) / f32(steps);
-            const vec2 p = a + d * t;
-            const f32 r = thick * 0.5f * (1.0f - 0.5f * t);
-            const int x0 = static_cast<int>(p.x - r - 1), x1 = static_cast<int>(p.x + r + 1);
-            const int y0 = static_cast<int>(p.y - r - 1), y1 = static_cast<int>(p.y + r + 1);
-            for (int y = y0; y <= y1; ++y)
-                for (int x = x0; x <= x1; ++x) {
-                    if (x < 0 || y < 0 || x >= int(w) || y >= int(h)) continue;
-                    const f32 dx = f32(x) + 0.5f - p.x, dy = f32(y) + 0.5f - p.y;
-                    const f32 cv = saturate(r + 0.5f - std::sqrt(dx * dx + dy * dy));
-                    const usize idx = usize(y) * w + usize(x);
-                    if (cv > cov[idx]) {
-                        cov[idx] = cv;
-                        col[idx] = c;
+    std::vector<vec3> nrm(usize(w) * h, vec3{0, 0, 1});
+    std::vector<f32> ao(usize(w) * h, 1.0f);
+
+    std::vector<f32> z(usize(tw) * th), sao(usize(tw) * th);
+    std::vector<vec3> sn(usize(tw) * th), sc(usize(tw) * th);
+    std::vector<u8> hit(usize(tw) * th);
+    for (u32 tile = 0; tile < 4; ++tile) {
+        Rng rng(seed * 131u + tile * 977u + 1u);
+        std::vector<Needle> needles;
+        build_twig(tile, rng, needles);
+        std::fill(z.begin(), z.end(), -1e30f);
+        std::fill(hit.begin(), hit.end(), u8(0));
+        for (const Needle& nd : needles) {
+            const vec3 e = nd.a + nd.u * nd.len;
+            const f32 fx0 = std::min(nd.a.x, e.x) - nd.r, fx1 = std::max(nd.a.x, e.x) + nd.r;
+            const f32 fy0 = std::min(nd.a.y, e.y) - nd.r, fy1 = std::max(nd.a.y, e.y) + nd.r;
+            const u32 x0 = u32(std::max(0.0f, std::floor(fx0 * ss))),
+                      x1 = u32(std::min(f32(tw - 1), std::ceil(fx1 * ss)));
+            const u32 y0 = u32(std::max(0.0f, std::floor(fy0 * ss))),
+                      y1 = u32(std::min(f32(th - 1), std::ceil(fy1 * ss)));
+            for (u32 y = y0; y <= y1; ++y)
+                for (u32 x = x0; x <= x1; ++x) {
+                    const f32 px = (f32(x) + 0.5f) / f32(ss), py = (f32(y) + 0.5f) / f32(ss);
+                    f32 zh;
+                    vec3 nh;
+                    if (!hit_needle(nd, px, py, zh, nh)) continue;
+                    const usize i = usize(y) * tw + x;
+                    if (zh > z[i]) {
+                        z[i] = zh;
+                        sn[i] = nh;
+                        sc[i] = nd.c;
+                        hit[i] = 1;
                     }
                 }
         }
-    };
-    const f32 cy = f32(h) * 0.5f;
-    // Side twigs then needles along main twig and side twigs.
-    struct Twig {
-        vec2 a, b;
-    };
-    std::vector<Twig> twigs = {{{2.0f, cy}, {f32(w) - 4.0f, cy + rng.range(-6.0f, 6.0f)}}};
-    for (int i = 0; i < 14; ++i) {
-        const f32 x = f32(w) * rng.range(0.06f, 0.78f);
-        const f32 side = (i % 2) ? 1.0f : -1.0f;
-        const f32 len = f32(w) * 0.28f * (1.0f - x / f32(w) * 0.7f);
-        twigs.push_back({{x, cy}, {x + len * 0.8f, cy + side * len * rng.range(0.45f, 0.7f)}});
-    }
-    for (const Twig& tw : twigs) plot_line(tw.a, tw.b, 3.0f, {0.16f, 0.11f, 0.07f});
-    for (const Twig& tw : twigs) {
-        const vec2 d = tw.b - tw.a;
-        const f32 len = std::sqrt(dot(d, d));
-        const vec2 dn = d * (1.0f / len);
-        const vec2 perp{-dn.y, dn.x};
-        for (f32 s = 2.0f; s < len; s += 1.1f) {
-            const f32 t = s / len;
-            const vec2 p = tw.a + dn * s;
-            for (int k = 0; k < 2; ++k) {
-                const f32 sign = k == 0 ? 1.0f : -1.0f;
-                const f32 ang = rng.range(0.6f, 1.1f);
-                const f32 nl = f32(h) * rng.range(0.13f, 0.19f) * (1.0f - 0.4f * t);
-                const vec2 nd = dn * std::cos(ang) + perp * (std::sin(ang) * sign);
-                const f32 g = rng.range(0.85f, 1.15f);
-                const vec3 c = vec3{0.045f, 0.085f, 0.035f} * g + vec3{0.01f, 0.015f, 0.0f} * rng.f();
-                plot_line(p, p + nd * nl, 2.0f, c);
+        // Depth AO: fraction of a disc of neighbours that sit clearly in front of each hit surface.
+        constexpr int kAoSamples = 16;
+        const f32 ao_radius = 4.0f * f32(ss);
+        for (u32 y = 0; y < th; ++y)
+            for (u32 x = 0; x < tw; ++x) {
+                const usize i = usize(y) * tw + x;
+                sao[i] = 1.0f;
+                if (!hit[i]) continue;
+                int front = 0;
+                for (int k = 0; k < kAoSamples; ++k) {
+                    const f32 ang = f32(k) * 2.3999632f, rr = ao_radius * std::sqrt((f32(k) + 0.5f) / f32(kAoSamples));
+                    const int nx = int(x) + int(std::cos(ang) * rr), ny = int(y) + int(std::sin(ang) * rr);
+                    if (nx < 0 || ny < 0 || nx >= int(tw) || ny >= int(th)) continue;
+                    const usize j = usize(ny) * tw + usize(nx);
+                    if (hit[j] && z[j] > z[i] + 0.6f) ++front;
+                }
+                sao[i] = 1.0f - 0.7f * f32(front) / f32(kAoSamples);
             }
-        }
+        // Box-filter the supersampled tile into its atlas quadrant.
+        const u32 ox = (tile % 2) * kTileW, oy = (tile / 2) * kTileH;
+        for (u32 y = 0; y < kTileH; ++y)
+            for (u32 x = 0; x < kTileW; ++x) {
+                vec3 c_acc{}, n_acc{};
+                f32 ao_acc = 0.0f;
+                int hits = 0;
+                for (u32 sy = 0; sy < ss; ++sy)
+                    for (u32 sx = 0; sx < ss; ++sx) {
+                        const usize i = usize(y * ss + sy) * tw + (x * ss + sx);
+                        if (!hit[i]) continue;
+                        ++hits;
+                        c_acc += sc[i];
+                        n_acc += sn[i];
+                        ao_acc += sao[i];
+                    }
+                const usize ai = usize(oy + y) * w + (ox + x);
+                cov[ai] = f32(hits) / f32(ss * ss);
+                if (hits > 0) {
+                    col[ai] = c_acc * (1.0f / f32(hits));
+                    nrm[ai] = normalize(n_acc);
+                    ao[ai] = ao_acc / f32(hits);
+                }
+            }
     }
-    albedo.resize(usize(w) * h * 4);
-    normal.resize(usize(w) * h * 4);
-    auto srgb = [](f32 v) {
-        v = saturate(v);
-        const f32 e = v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
-        return static_cast<u8>(std::lround(e * 255.0f));
-    };
-    // Dilate color into transparent texels so filtering never pulls in black.
+
+    // Dilate colour into transparent texels so filtering never pulls in black.
     std::vector<vec3> dil = col;
     for (int pass = 0; pass < 4; ++pass) {
         std::vector<vec3> next = dil;
@@ -332,16 +513,28 @@ void make_needle_textures(u32 seed, u32 w, u32 h, std::vector<u8>& albedo, std::
             }
         dil = next;
     }
+    albedo.resize(usize(w) * h * 4);
+    normal.resize(usize(w) * h * 4);
+    auto srgb = [](f32 v) {
+        v = saturate(v);
+        const f32 e = v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
+        return static_cast<u8>(std::lround(e * 255.0f));
+    };
+    auto unorm = [](f32 v) { return static_cast<u8>(std::lround(saturate(v) * 255.0f)); };
     for (usize i = 0; i < cov.size(); ++i) {
-        const vec3 c = length(dil[i]) > 0.0f ? dil[i] : vec3{0.045f, 0.08f, 0.035f};
+        const vec3 c = length(dil[i]) > 0.0f ? dil[i] : vec3{0.030f, 0.065f, 0.050f};
         albedo[i * 4 + 0] = srgb(c.x);
         albedo[i * 4 + 1] = srgb(c.y);
         albedo[i * 4 + 2] = srgb(c.z);
-        albedo[i * 4 + 3] = static_cast<u8>(std::lround(cov[i] * 255.0f));
-        normal[i * 4 + 0] = 128;
-        normal[i * 4 + 1] = 128;
-        normal[i * 4 + 2] = 255;
-        normal[i * 4 + 3] = 255;
+        albedo[i * 4 + 3] = unorm(cov[i]);
+        // Tangent-space normal. The engine's bitangent is cross(N, T) = -side, so G carries -v.
+        vec3 n = nrm[i];
+        n.z = std::max(n.z, 0.05f);
+        n = normalize(n);
+        normal[i * 4 + 0] = unorm(n.x * 0.5f + 0.5f);
+        normal[i * 4 + 1] = unorm(-n.y * 0.5f + 0.5f);
+        normal[i * 4 + 2] = unorm(n.z * 0.5f + 0.5f);
+        normal[i * 4 + 3] = unorm(ao[i]); // depth AO (material flag 4)
     }
 }
 

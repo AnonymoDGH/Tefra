@@ -244,18 +244,25 @@ void build_valley_scene(render::Scene& scene, render::Environment& env, const re
     const u32 bark_mat = scene.add_material(bark);
 
     std::vector<u8> needle_albedo, needle_normal;
-    render::make_needle_textures(7, 512, 256, needle_albedo, needle_normal);
+    render::make_needle_textures(7, 1024, 512, needle_albedo, needle_normal);
     rhi::TextureUpload up;
     up.pixels = needle_albedo.data();
-    up.width = 512;
-    up.height = 256;
+    up.width = 1024;
+    up.height = 512;
     up.format = VK_FORMAT_R8G8B8A8_SRGB;
     up.alpha_coverage_cutoff = 0.4f;
     up.name = "needles";
+    rhi::TextureUpload nup;
+    nup.pixels = needle_normal.data();
+    nup.width = 1024;
+    nup.height = 512;
+    nup.format = VK_FORMAT_R8G8B8A8_UNORM;
+    nup.name = "needles_normal";
     render::MaterialGPU needles = plain(scene, {1, 1, 1}, 0.62f, 0.0f);
     needles.base_color_tex = scene.add_texture(rhi::upload_texture(scene.device(), up));
+    needles.normal_tex = scene.add_texture(rhi::upload_texture(scene.device(), nup));
     needles.emissive_cutoff.w = 0.4f;
-    needles.flags = 1u | 2u; // foliage, two-sided
+    needles.flags = 1u | 2u | 8u; // foliage, two-sided, normal alpha = baked AO
     needles.translucency = 0.5f;
     const u32 needle_mat = scene.add_material(needles);
 
@@ -268,6 +275,9 @@ void build_valley_scene(render::Scene& scene, render::Environment& env, const re
     u32 tree_protos[3];
     for (int v = 0; v < 3; ++v) {
         const render::ConiferMeshes cm = render::make_conifer(variants[v].seed, variants[v].h, variants[v].r);
+        TEFRA_LOG_INFO("Conifer %d: LOD0 %u triangles (trunk %u, crown %u)", v,
+                       u32((cm.trunk_lod0.indices.size() + cm.crown_lod0.indices.size()) / 3),
+                       u32(cm.trunk_lod0.indices.size() / 3), u32(cm.crown_lod0.indices.size() / 3));
         render::VegetationPrototype p;
         p.lods[0].mesh[0] = scene.add_mesh(cm.trunk_lod0);
         p.lods[0].material[0] = bark_mat;
@@ -380,6 +390,7 @@ void build_valley_scene(render::Scene& scene, render::Environment& env, const re
     setup.camera.yaw = radians(185.0f);
     setup.camera.pitch = radians(3.0f);
     setup.camera.fovy = radians(60.0f);
+    TEFRA_LOG_INFO("Valley camera: --camera %.1f,%.1f,%.1f,185,3", x, setup.camera.position.y, z);
 }
 
 } // namespace tefra::app

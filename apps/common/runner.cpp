@@ -1,6 +1,8 @@
 #include "runner.h"
 #include "scenes.h"
 
+#include <cstdio>
+
 #include "tefra/core/fs.h"
 #include "tefra/core/json.h"
 #include "tefra/core/log.h"
