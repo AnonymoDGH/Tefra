@@ -49,6 +49,7 @@ struct RenderSettings {
     f32 fog_falloff = 0.02f; // 1/m
     f32 fog_height = 0.0f;   // m (world y)
     f32 fog_anisotropy = 0.6f;
+    bool taa = true;
 };
 
 struct OutputTarget {
@@ -101,6 +102,18 @@ class Renderer {
     VkPipeline p_veg_ = VK_NULL_HANDLE, p_veg_2s_ = VK_NULL_HANDLE, p_veg_shadow_ = VK_NULL_HANDLE,
                p_veg_cull_ = VK_NULL_HANDLE, p_water_ = VK_NULL_HANDLE;
     rhi::Buffer veg_cmd_template_;
+    // TAA history (ping-pong), persistent across frames.
+    rhi::Image history_[2];
+    u32 history_bindless_[2] = {~0u, ~0u};
+    VkImageLayout history_layout_[2] = {VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_UNDEFINED};
+    u32 history_cur_ = 0;
+    bool history_valid_ = false;
+    VkExtent2D history_extent_{};
+    mat4 prev_view_proj_{};
+    dvec3 prev_camera_{};
+    bool has_prev_ = false;
+    VkPipeline p_taa_ = VK_NULL_HANDLE;
+    rg::TextureHandle taa_handles_[2];
     const Vegetation* veg_template_owner_ = nullptr;
     VkFormat output_format_ = VK_FORMAT_UNDEFINED;
     VkFormat hdr_format_ = VK_FORMAT_B10G11R11_UFLOAT_PACK32;

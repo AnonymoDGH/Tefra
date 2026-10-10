@@ -124,15 +124,19 @@ Renderer::~Renderer() {
             rhi::destroy_buffer(dev_, *b);
     }
     rhi::destroy_buffer(dev_, veg_cmd_template_);
+    for (u32 i = 0; i < 2; ++i) {
+        if (history_bindless_[i] != ~0u) heap_.remove_texture(history_bindless_[i]);
+        rhi::destroy_image(dev_, history_[i]);
+    }
     for (VkPipeline p : {p_gbuffer_, p_gbuffer_2s_, p_shadow_, p_lighting_, p_tonemap_, p_skyview_, p_terrain_,
-                         p_terrain_shadow_, p_veg_, p_veg_2s_, p_veg_shadow_, p_veg_cull_, p_water_})
+                         p_terrain_shadow_, p_veg_, p_veg_2s_, p_veg_shadow_, p_veg_cull_, p_water_, p_taa_})
         if (p) vkDestroyPipeline(dev_.device(), p, nullptr);
     vkDestroyPipelineLayout(dev_.device(), layout_, nullptr);
 }
 
 void Renderer::create_pipelines(VkFormat output_format) {
     for (VkPipeline* p : {&p_gbuffer_, &p_gbuffer_2s_, &p_shadow_, &p_lighting_, &p_tonemap_, &p_skyview_, &p_terrain_,
-                          &p_terrain_shadow_, &p_veg_, &p_veg_2s_, &p_veg_shadow_, &p_veg_cull_, &p_water_}) {
+                          &p_terrain_shadow_, &p_veg_, &p_veg_2s_, &p_veg_shadow_, &p_veg_cull_, &p_water_, &p_taa_}) {
         if (*p) vkDestroyPipeline(dev_.device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -153,6 +157,7 @@ void Renderer::create_pipelines(VkFormat output_format) {
     VkShaderModule veg_cull_cs = rhi::load_shader(dev_, "veg_cull.comp");
     VkShaderModule water_vs = rhi::load_shader(dev_, "water.vert");
     VkShaderModule water_fs = rhi::load_shader(dev_, "water.frag");
+    VkShaderModule taa_fs = rhi::load_shader(dev_, "taa.frag");
     p_veg_cull_ = rhi::create_compute_pipeline(dev_, veg_cull_cs, layout_, "veg_cull");
 
     auto rp_g = compat_pass(dev_, {kRt0, kRt1, kRt2, kRt3}, kDepth);
@@ -228,6 +233,15 @@ void Renderer::create_pipelines(VkFormat output_format) {
     w.name = "water";
     p_water_ = rhi::create_graphics_pipeline(dev_, w);
 
+    auto rp_a = compat_pass(dev_, {VK_FORMAT_R16G16B16A16_SFLOAT}, VK_FORMAT_UNDEFINED);
+    rhi::GraphicsPipelineDesc ta;
+    ta.vs = fs_vs;
+    ta.fs = taa_fs;
+    ta.layout = layout_;
+    ta.render_pass = rp_a.pass;
+    ta.name = "taa";
+    p_taa_ = rhi::create_graphics_pipeline(dev_, ta);
+
     auto rp_t = compat_pass(dev_, {output_format}, VK_FORMAT_UNDEFINED);
     l.fs = tone_fs;
     l.render_pass = rp_t.pass;
@@ -240,10 +254,10 @@ void Renderer::create_pipelines(VkFormat output_format) {
     l.name = "skyview";
     p_skyview_ = rhi::create_graphics_pipeline(dev_, l);
 
-    for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k, &rp_w}) rhi::destroy_render_pass(dev_, *rp);
+    for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k, &rp_w, &rp_a}) rhi::destroy_render_pass(dev_, *rp);
     for (VkShaderModule m :
          {mesh_vs, gbuf_fs, shadow_vs, fs_vs, light_fs, tone_fs, sky_fs, terrain_vs, terrain_fs, terrain_shadow_vs,
-          veg_vs, veg_shadow_vs, shadow_alpha_fs, veg_cull_cs, water_vs, water_fs})
+          veg_vs, veg_shadow_vs, shadow_alpha_fs, veg_cull_cs, water_vs, water_fs, taa_fs})
         vkDestroyShaderModule(dev_.device(), m, nullptr);
 }
 
@@ -326,8 +340,37 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     FrameConstants fc{};
     fc.view = camera.view_rotation();
     fc.proj = camera.projection(aspect);
+    const mat4 unjittered_vp = fc.proj * fc.view;
+    // TAA: sub-pixel Halton(2,3) jitter applied to the projection.
+    auto halton = [](u32 i, u32 b) {
+        f32 f = 1.0f, r = 0.0f;
+        while (i > 0) {
+            f /= f32(b);
+            r += f * f32(i % b);
+            i /= b;
+        }
+        return r;
+    };
+    vec2 jitter{};
+    if (s.taa) {
+        const u32 hi = static_cast<u32>(frame_index % 8) + 1;
+        jitter = {(halton(hi, 2) - 0.5f) * 2.0f / f32(ext.width), (halton(hi, 3) - 0.5f) * 2.0f / f32(ext.height)};
+        fc.proj.c[2].x -= jitter.x; // ndc.x += jitter.x (clip.w = -z)
+        fc.proj.c[2].y -= jitter.y;
+    }
     fc.view_proj = fc.proj * fc.view;
     fc.inv_view_proj = inverse(fc.view_proj);
+    fc.jitter = {jitter.x, jitter.y, 0.0f, 0.0f};
+    // Previous frame's view-projection, re-expressed for the current camera-relative positions.
+    const vec3 cam_delta = relative_to(camera.position, prev_camera_);
+    if (has_prev_)
+        fc.prev_view_proj = prev_view_proj_ * translate(cam_delta);
+    else
+        fc.prev_view_proj = unjittered_vp;
+    const bool camera_cut = has_prev_ && length(cam_delta) > 20.0f;
+    prev_view_proj_ = unjittered_vp;
+    prev_camera_ = camera.position;
+    has_prev_ = true;
     vec4 cascade_spheres[kMaxCascades];
     const u32 cascades = clamp<u32>(s.cascades, 1u, kMaxCascades);
     compute_cascades(camera, aspect, s, fc, cascade_spheres);
@@ -452,6 +495,10 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         if (veg_template_owner_ != veg) {
             dev_.wait_idle();
             rhi::destroy_buffer(dev_, veg_cmd_template_);
+            for (u32 i = 0; i < 2; ++i) {
+                if (history_bindless_[i] != ~0u) heap_.remove_texture(history_bindless_[i]);
+                rhi::destroy_image(dev_, history_[i]);
+            }
             std::vector<DrawCmd> tmpl;
             for (const auto& d : veg->draws()) tmpl.push_back({d.index_count, 0, d.first_index, d.vertex_offset, 0});
             veg_cmd_template_ = rhi::upload_buffer(dev_, tmpl.data(), tmpl.size() * sizeof(DrawCmd),
@@ -682,6 +729,69 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             });
     }
 
+    // ---- TAA ---------------------------------------------------------------------------------------
+    rg::TextureHandle resolved = hdr;
+    if (s.taa) {
+        if (history_extent_.width != ext.width || history_extent_.height != ext.height) {
+            dev_.wait_idle();
+            for (u32 i = 0; i < 2; ++i) {
+                if (history_bindless_[i] != ~0u) heap_.remove_texture(history_bindless_[i]);
+                rhi::destroy_image(dev_, history_[i]);
+                rhi::ImageDesc hd;
+                hd.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+                hd.width = ext.width;
+                hd.height = ext.height;
+                hd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+                hd.name = i == 0 ? "taa_history_0" : "taa_history_1";
+                history_[i] = rhi::create_image(dev_, hd);
+                history_bindless_[i] = heap_.add_texture(history_[i].view);
+                history_layout_[i] = VK_IMAGE_LAYOUT_UNDEFINED;
+            }
+            history_extent_ = ext;
+            history_valid_ = false;
+        }
+        if (camera_cut) history_valid_ = false;
+        const u32 prev_i = history_cur_, next_i = history_cur_ ^ 1u;
+        auto import_history = [&](u32 i, const char* name) {
+            rg::ImportDesc d;
+            d.name = name;
+            d.image = history_[i].image;
+            d.view = history_[i].view;
+            d.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+            d.extent = ext;
+            d.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            d.initial_layout = history_layout_[i];
+            d.initial_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            d.initial_access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            d.bindless = history_bindless_[i];
+            return graph_.import(d);
+        };
+        const rg::TextureHandle hist_prev = import_history(prev_i, "taa_history_prev");
+        const rg::TextureHandle hist_next = import_history(next_i, "taa_history_next");
+        const u32 valid = history_valid_ ? 1u : 0u;
+        graph_.add_pass(
+            "taa", rg::PassType::Raster,
+            [&](rg::PassBuilder& b) {
+                b.read(hdr, rg::Access::Sampled);
+                b.read(depth, rg::Access::Sampled);
+                if (valid) b.read(hist_prev, rg::Access::Sampled);
+                b.color(hist_next, rg::Load::DontCare);
+            },
+            [=, this](const rg::PassContext& ctx) {
+                struct TaaPush {
+                    VkDeviceAddress frame;
+                    u32 current, history, depth, valid;
+                } tp{frame_addr, ctx.sampled(hdr), valid ? ctx.sampled(hist_prev) : 0u, ctx.sampled(depth), valid};
+                vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_taa_);
+                vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(tp), &tp);
+                vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
+            });
+        resolved = hist_next;
+        taa_handles_[0] = hist_prev;
+        taa_handles_[1] = hist_next;
+    }
+
     rg::ImportDesc out;
     out.name = "output";
     out.image = target.image;
@@ -698,18 +808,25 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     graph_.add_pass(
         "tonemap", rg::PassType::Raster,
         [&](rg::PassBuilder& b) {
-            b.read(hdr, rg::Access::Sampled);
+            b.read(resolved, rg::Access::Sampled);
             b.color(output, rg::Load::DontCare);
         },
         [=, this](const rg::PassContext& ctx) {
             vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
             vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_tonemap_);
-            TonemapPush p{frame_addr, ctx.sampled(hdr), 0};
+            TonemapPush p{frame_addr, ctx.sampled(resolved), 0};
             vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
             vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
         });
 
     graph_.execute(cmd);
+    if (s.taa) {
+        const u32 prev_i = history_cur_, next_i = history_cur_ ^ 1u;
+        history_layout_[prev_i] = graph_.final_state(taa_handles_[0]).layout;
+        history_layout_[next_i] = graph_.final_state(taa_handles_[1]).layout;
+        history_cur_ = next_i;
+        history_valid_ = true;
+    }
 }
 
 } // namespace tefra::render
