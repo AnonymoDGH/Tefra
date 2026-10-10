@@ -47,10 +47,10 @@ struct ImportOptions {
 };
 
 struct ImportReport {
-    u32 instances = 0;               // instances decoded from the file
-    u32 converted = 0;               // turned into a native Tefra class (services merged count as converted)
-    u32 imported_as_unsupported = 0; // kept as ImportedInstance
-    u32 scripts = 0;                 // Script / LocalScript / ModuleScript converted (subset of `converted`)
+    u32 instances = 0;                 // instances decoded from the file
+    u32 converted = 0;                 // turned into a native Tefra class (services merged count as converted)
+    u32 imported_as_unsupported = 0;   // kept as ImportedInstance
+    u32 scripts = 0;                   // Script / LocalScript / ModuleScript converted (subset of `converted`)
     std::vector<std::string> warnings; // de-duplicated, "message (xN)" when repeated
     std::unordered_map<std::string, u32> unsupported_classes; // original class -> ImportedInstance count
 };

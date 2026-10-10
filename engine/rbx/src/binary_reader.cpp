@@ -311,7 +311,7 @@ struct BinaryParser {
                 for (int j = 0; j < 6; ++j) v.f[j] = c.f32le();
             }
             return true;
-        case 0x09: // Faces
+        case 0x09:   // Faces
         case 0x0a: { // Axes
             const u8* p = c.take(n);
             if (!p) return false;

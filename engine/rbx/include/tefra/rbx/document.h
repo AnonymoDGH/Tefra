@@ -91,9 +91,9 @@ struct Property {
 
 struct InstanceData {
     std::string class_name;
-    bool service = false;  // marked as a service in the file
-    bool dropped = false;  // not part of the tree (nesting beyond kMaxDepth)
-    i32 parent = -1;       // index in Document::instances; -1 = root
+    bool service = false; // marked as a service in the file
+    bool dropped = false; // not part of the tree (nesting beyond kMaxDepth)
+    i32 parent = -1;      // index in Document::instances; -1 = root
     std::vector<u32> children;
     std::vector<Property> props;
 
@@ -114,10 +114,10 @@ struct Document {
 enum class Format : u8 { Unknown, Binary, Xml };
 
 // Limits (defence against malformed or hostile files).
-constexpr u32 kMaxDepth = 512;                     // deeper instances are dropped with a warning
-constexpr u32 kMaxInstances = 4u * 1024u * 1024u;  // per file
-constexpr u64 kMaxChunkBytes = 256ull << 20;       // decompressed size of one binary chunk
-constexpr u64 kMaxTotalBytes = 1024ull << 20;      // decompressed size of all chunks together
+constexpr u32 kMaxDepth = 512;                    // deeper instances are dropped with a warning
+constexpr u32 kMaxInstances = 4u * 1024u * 1024u; // per file
+constexpr u64 kMaxChunkBytes = 256ull << 20;      // decompressed size of one binary chunk
+constexpr u64 kMaxTotalBytes = 1024ull << 20;     // decompressed size of all chunks together
 
 // Binary files start with "<roblox!" + 89 FF 0D 0A 1A 0A; XML files with "<roblox" (after an optional BOM / XML
 // declaration). Anything else is Unknown.
