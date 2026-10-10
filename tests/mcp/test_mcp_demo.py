@@ -220,7 +220,7 @@ def world_checks(http, scratch):
 
     place = os.path.join(scratch, "level.tefra")
     saved = http.ok("save_place", {"path": place})
-    check(saved["instances"] == 10 and os.path.exists(place), "save_place writes a .tefra file (6 services + 4 parts)")
+    check(saved["instances"] == 12 and os.path.exists(place), "save_place writes a .tefra file (8 services + 4 parts)")
     is_error, _ = http.tool("save_place", {"path": os.path.join(scratch, "level.json")})
     check(is_error, "save_place insists on the .tefra extension")
     http.ok("delete_instance", {"id": part_id})

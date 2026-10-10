@@ -27,7 +27,7 @@ target_link_libraries(tefra_studio_core PUBLIC tefra_world PRIVATE tefra_compile
 if(TEFRA_WITH_WINDOW)
     tefra_add_executable(tefra_studio
         SOURCES studio/main.cpp studio/src/app.cpp studio/src/ui.cpp studio/src/play.cpp
-        DEPS tefra_studio_core tefra_platform tefra_imgui tefra_imguizmo tefra_scripting tefra_physics tefra_anim
+        DEPS tefra_studio_core tefra_platform tefra_imgui tefra_imguizmo tefra_runtime tefra_audio tefra_ui
              tefra_mcp)
     if(TARGET tefra_managed)
         add_dependencies(tefra_studio tefra_managed)

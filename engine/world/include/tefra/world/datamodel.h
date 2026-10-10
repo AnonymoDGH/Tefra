@@ -116,6 +116,7 @@ struct ClassInfo {
     std::vector<PropInfo> props; // own properties only
     u32 first_prop = 0;          // = base->prop_count()
     bool creatable = true;       // Instance.new / Insert menu
+    bool is_abstract = false;    // base class only (BasePart, GuiObject): never instantiated
     bool service = false;        // singleton child of the DataModel
     std::string category;        // Insert menu group
     std::string doc;
@@ -190,12 +191,27 @@ class Instance {
     std::vector<Value> props_;
 };
 
+struct GameEvent;
+
 // Change events for engine systems (renderer bridge, physics, scripting, editor).
 struct WorldListener {
     std::function<void(Instance&)> added;             // after the instance is parented into the tree
     std::function<void(Instance&)> removing;          // before it leaves the tree (descendants first)
     std::function<void(Instance&, u32 prop)> changed; // property changed (index); Name = 0
     std::function<void(Instance&, Instance* old_parent)> reparented;
+    std::function<void(const GameEvent&)> event; // fire_event(): Touched, Activated, Died, ...
+};
+
+// A gameplay signal raised by an engine system (physics, UI, humanoids) and delivered to scripts. Names follow the
+// Roblox events: "Touched" / "TouchEnded" (other = the other part), "Activated" / "MouseButton1Click" (GUI buttons),
+// "Died" / "HealthChanged" (Humanoid; number = health), "Ended" / "Looped" (Sound), "InputBegan" / "InputEnded"
+// (source = UserInputService-less: the DataModel root; text = key name).
+struct GameEvent {
+    Instance* source = nullptr;
+    std::string_view name;
+    Instance* other = nullptr;
+    f64 number = 0.0;
+    std::string_view text;
 };
 
 class DataModel {
@@ -213,6 +229,8 @@ class DataModel {
     // Creates an instance of a creatable class (nullptr for unknown / non-creatable / services). Parent may be null
     // (detached; it is destroyed with the model unless parented).
     Instance* create(std::string_view class_name, Instance* parent = nullptr, std::string name = {});
+    // Engine-side creation: also allows non-creatable concrete classes (Player, PlayerGui, ImportedInstance).
+    Instance* create_internal(std::string_view class_name, Instance* parent = nullptr, std::string name = {});
     // Destroys the instance and its descendants. Services and the root cannot be destroyed.
     bool destroy(Instance* inst);
     bool set_parent(Instance* inst, Instance* parent);
@@ -233,6 +251,9 @@ class DataModel {
     u64 revision() const { return revision_; } // bumped by every structural or property change
     usize add_listener(WorldListener l);
     void remove_listener(usize handle);
+    // Delivers a GameEvent synchronously to every listener's `event` callback (listeners may change the model).
+    void fire_event(Instance& source, std::string_view name, Instance* other = nullptr, f64 number = 0.0,
+                    std::string_view text = {});
 
     // Value <-> JSON (by property type).
     static JsonValue value_to_json(const PropInfo& p, const Value& v);

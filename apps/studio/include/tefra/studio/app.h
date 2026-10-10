@@ -5,6 +5,7 @@
 
 #include "tefra/studio/session.h"
 
+#include "tefra/core/input.h"
 #include "tefra/core/log.h"
 
 #include "tefra/renderer/camera.h"
@@ -42,12 +43,11 @@ class SceneSync;
 namespace tefra::scripting {
 class ScriptHost;
 }
-namespace tefra::physics {
-class PhysicsWorld;
-class CharacterController;
-} // namespace tefra::physics
-namespace tefra::anim {
-class AnimatorSystem;
+namespace tefra::runtime {
+class GameRuntime;
+}
+namespace tefra::ui {
+class GameGui;
 }
 namespace tefra::mcp {
 class Server;
@@ -112,7 +112,7 @@ class App {
     bool play_start(world::DataModel& dm);
     void play_step(world::DataModel& dm, f32 dt);
     void play_stop();
-    void play_camera_input(f32 dt, f32 aspect);
+    void play_input(vec2 view_min, vec2 view_size);
     void setup_mcp();
     bool capture_viewport_now(ImageRGBA8& out);
 
@@ -192,14 +192,10 @@ class App {
     // Play mode.
     std::unique_ptr<scripting::ScriptHost> scripts_;
     bool scripts_available_ = false;
-    std::unique_ptr<physics::PhysicsWorld> physics_;
-    std::unique_ptr<physics::CharacterController> player_;
-    std::unique_ptr<anim::AnimatorSystem> animator_;
-    u64 player_model_ = 0;
+    std::unique_ptr<runtime::GameRuntime> runtime_;
+    std::unique_ptr<ui::GameGui> game_gui_;
+    InputState play_input_;
     render::Camera edit_camera_;
-    f32 orbit_yaw_ = 0.0f, orbit_pitch_ = radians(-15.0f), orbit_dist_ = 9.0f;
-    vec3 play_move_{};
-    bool play_jump_ = false;
     // MCP.
     std::unique_ptr<mcp::Server> mcp_;
     VkCommandPool oneshot_pool_ = VK_NULL_HANDLE;

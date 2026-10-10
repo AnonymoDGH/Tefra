@@ -2,20 +2,20 @@
 // controller and animated by the Animator, a third-person camera, and the MCP server with Studio's own tools.
 #include "tefra/studio/app.h"
 
-#include "tefra/anim/animator.h"
-#include "tefra/anim/avatar.h"
+#include "tefra/audio/audio_system.h"
 #include "tefra/core/fs.h"
 #include "tefra/core/image.h"
 #include "tefra/core/log.h"
 #include "tefra/mcp/server.h"
 #include "tefra/mcp/world_tools.h"
-#include "tefra/physics/character.h"
-#include "tefra/physics/physics_world.h"
 #include "tefra/rhi/commands.h"
 #include "tefra/rhi/device.h"
 #include "tefra/rhi/frame.h"
 #include "tefra/rhi/readback.h"
+#include "tefra/runtime/game_runtime.h"
 #include "tefra/scripting/script_host.h"
+#include "tefra/ui/game_gui.h"
+#include "tefra/ui/imgui_input.h"
 #include "tefra/world/scene_sync.h"
 
 #include <imgui.h>
@@ -45,11 +45,6 @@ std::string base64(const std::vector<u8>& data) {
     return out;
 }
 
-Instance* find_spawn(world::DataModel& dm) {
-    for (Instance* i : dm.workspace()->descendants())
-        if (i->is_a("SpawnLocation") && i->get_bool("Enabled", true)) return i;
-    return nullptr;
-}
 } // namespace
 
 void App::setup_play_systems() {
@@ -74,105 +69,40 @@ void App::setup_play_systems() {
 
 bool App::play_start(world::DataModel& dm) {
     edit_camera_ = camera_;
-    physics_ = std::make_unique<physics::PhysicsWorld>(dm);
-    // The player's avatar appears on the first enabled SpawnLocation (or at the origin).
-    anim::AvatarDesc desc;
-    desc.name = "Player";
-    if (Instance* spawn = find_spawn(dm)) {
-        const vec3 p = spawn->get_vec3("Position"), s = spawn->get_vec3("Size");
-        desc.origin = p + vec3{0, s.y * 0.5f + 0.05f, 0};
-    } else {
-        desc.origin = {0, 0.5f, 0};
-    }
-    Instance* model = anim::build_r15_avatar(dm, dm.workspace(), desc);
-    player_model_ = model ? model->id() : 0;
-    if (model) {
-        if (Instance* hum = model->find_first_child_of_class("Humanoid")) {
-            const Instance* sp = dm.service("StarterPlayer");
-            hum->set("WalkSpeed", Value::number(sp ? sp->get_float("CharacterWalkSpeed", 6.0f) : 6.0f));
-            hum->set("JumpHeight", Value::number(sp ? sp->get_float("CharacterJumpHeight", 1.6f) : 1.6f));
-        }
-        player_ = std::make_unique<physics::CharacterController>(*physics_, *model);
-        if (!player_->valid()) {
-            TEFRA_LOG_WARN("Play: the player character is not valid");
-            player_.reset();
-        }
-    }
-    animator_ = std::make_unique<anim::AnimatorSystem>(dm);
-    orbit_yaw_ = camera_.yaw;
-    orbit_pitch_ = radians(-15.0f);
-    orbit_dist_ = 9.0f;
-    if (scripts_available_) scripts_->start(dm);
-    return true;
+    runtime::RuntimeConfig rc;
+    rc.scripts = scripts_available_ ? scripts_.get() : nullptr;
+    rc.project_dir = session_.path().empty() ? std::string() : path_parent(session_.path());
+    runtime_ = std::make_unique<runtime::GameRuntime>(dm, rc);
+    runtime_->add_system(audio::make_audio_system());
+    if (!game_gui_) game_gui_ = std::make_unique<ui::GameGui>();
+    game_gui_->set_asset_root(rc.project_dir);
+    return runtime_->start();
 }
 
 void App::play_step(world::DataModel& dm, f32 dt) {
-    if (scripts_available_ && scripts_->running()) scripts_->step(dt);
-    if (player_) {
-        player_->set_move_direction(play_move_);
-        if (play_jump_) player_->jump();
-    }
-    play_jump_ = false;
-    if (physics_) physics_->step(dt);
-    if (player_) {
-        if (Instance* model = dm.find(player_model_))
-            if (Instance* root = model->find_first_child("HumanoidRootPart"))
-                root->set("AssemblyLinearVelocity", Value::vector3(player_->velocity()), true);
-    }
-    if (animator_) animator_->update(dt);
+    (void)dm;
+    if (!runtime_) return;
+    runtime_->step(dt, play_input_);
+    const runtime::CameraState& c = runtime_->camera();
+    camera_.position = {f64(c.position.x), f64(c.position.y), f64(c.position.z)};
+    camera_.yaw = c.yaw;
+    camera_.pitch = c.pitch;
 }
 
 void App::play_stop() {
-    if (scripts_ && scripts_->running()) scripts_->stop();
-    animator_.reset();
-    player_.reset();
-    physics_.reset();
-    player_model_ = 0;
+    if (runtime_) runtime_->stop();
+    runtime_.reset();
     camera_ = edit_camera_;
 }
 
-// Third-person camera: right mouse orbits, wheel zooms, WASD moves relative to the camera, Space jumps.
-void App::play_camera_input(f32 dt, f32 aspect) {
-    (void)aspect;
-    ImGuiIO& io = ImGui::GetIO();
-    if (viewport_hovered_ && io.MouseDown[1]) {
-        orbit_yaw_ -= io.MouseDelta.x * 0.005f;
-        orbit_pitch_ = clamp(orbit_pitch_ - io.MouseDelta.y * 0.005f, radians(-80.0f), radians(60.0f));
-    }
-    if (viewport_hovered_ && io.MouseWheel != 0.0f)
-        orbit_dist_ = clamp(orbit_dist_ - io.MouseWheel * 1.2f, 2.0f, 40.0f);
-    vec3 m{};
-    const bool typing = io.WantTextInput;
-    if (!typing) {
-        const vec3 f{-std::sin(orbit_yaw_), 0.0f, -std::cos(orbit_yaw_)};
-        const vec3 r{std::cos(orbit_yaw_), 0.0f, -std::sin(orbit_yaw_)};
-        if (ImGui::IsKeyDown(ImGuiKey_W) || ImGui::IsKeyDown(ImGuiKey_UpArrow)) m = m + f;
-        if (ImGui::IsKeyDown(ImGuiKey_S) || ImGui::IsKeyDown(ImGuiKey_DownArrow)) m = m - f;
-        if (ImGui::IsKeyDown(ImGuiKey_D) || ImGui::IsKeyDown(ImGuiKey_RightArrow)) m = m + r;
-        if (ImGui::IsKeyDown(ImGuiKey_A) || ImGui::IsKeyDown(ImGuiKey_LeftArrow)) m = m - r;
-        if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) play_jump_ = true;
-    }
-    play_move_ = length(m) > 0.01f ? normalize(m) : vec3{};
-    // Follow the head of the avatar (smoothly).
-    Instance* model = session_.model().find(player_model_);
-    Instance* head = model ? model->find_first_child("Head") : nullptr;
-    if (!head) return;
-    const vec3 target = head->get_vec3("Position") + vec3{0, 0.4f, 0};
-    const vec3 dir{-std::sin(orbit_yaw_) * std::cos(orbit_pitch_), std::sin(orbit_pitch_),
-                   -std::cos(orbit_yaw_) * std::cos(orbit_pitch_)};
-    vec3 want = target - dir * orbit_dist_;
-    // Keep the camera out of walls: pull it in front of the first part between the head and the camera.
-    if (sync_) {
-        world::RayHit hit = sync_->raycast(target, -dir, orbit_dist_, nullptr);
-        if (hit.instance && !hit.instance->is_descendant_of(model))
-            want = target - dir * max(hit.distance - 0.3f, 1.0f);
-    }
-    const vec3 cur{f32(camera_.position.x), f32(camera_.position.y), f32(camera_.position.z)};
-    const f32 k = 1.0f - std::exp(-dt * 14.0f);
-    const vec3 p = cur + (want - cur) * k;
-    camera_.position = {f64(p.x), f64(p.y), f64(p.z)};
-    camera_.yaw = orbit_yaw_;
-    camera_.pitch = orbit_pitch_;
+// Play input: the viewport is the game view (WASD move, Space jump, right mouse orbits, wheel zooms); the in-game
+// UI is drawn over it and gets the clicks first.
+void App::play_input(vec2 view_min, vec2 view_size) {
+    const ImGuiIO& io = ImGui::GetIO();
+    ui::input_from_imgui(play_input_, view_min, view_size, viewport_hovered_, !io.WantTextInput);
+    if (runtime_ && game_gui_)
+        if (world::Instance* gui = runtime_->player_gui())
+            game_gui_->draw(ImGui::GetWindowDrawList(), {view_min, view_size}, *gui, &play_input_, true);
 }
 
 // ---- MCP ----------------------------------------------------------------------------------------------------------

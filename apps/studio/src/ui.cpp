@@ -646,7 +646,7 @@ void App::draw_viewport(f32 dt) {
     const bool playing = session_.play_state() != PlayState::Edit;
     if (playing) {
         // Play mode: third-person camera following the player; no editing gizmos or picking.
-        play_camera_input(dt, avail.x / max(avail.y, 1.0f));
+        play_input({origin.x, origin.y}, {avail.x, avail.y});
         ImDrawList* pdl = ImGui::GetWindowDrawList();
         pdl->AddRect(origin, {origin.x + avail.x, origin.y + avail.y}, IM_COL32(60, 200, 90, 255), 0.0f, 0, 3.0f);
         pdl->AddText({origin.x + 8, origin.y + avail.y - 20}, IM_COL32(230, 230, 230, 180),

@@ -1,13 +1,10 @@
 #include "tefra/studio/app.h"
 
-#include "tefra/anim/animator.h"
 #include "tefra/core/fs.h"
 #include "tefra/core/image.h"
 #include "tefra/core/log.h"
 #include "tefra/core/time.h"
 #include "tefra/mcp/server.h"
-#include "tefra/physics/character.h"
-#include "tefra/physics/physics_world.h"
 #include "tefra/platform/window.h"
 #include "tefra/renderer/atmosphere.h"
 #include "tefra/renderer/environment.h"
@@ -19,7 +16,9 @@
 #include "tefra/rhi/frame.h"
 #include "tefra/rhi/readback.h"
 #include "tefra/rhi/swapchain.h"
+#include "tefra/runtime/game_runtime.h"
 #include "tefra/scripting/script_host.h"
+#include "tefra/ui/game_gui.h"
 #include "tefra/world/scene_sync.h"
 
 #include <GLFW/glfw3.h>

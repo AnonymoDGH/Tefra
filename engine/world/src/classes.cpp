@@ -18,6 +18,11 @@ struct Builder {
     }
     Builder& abstract() {
         c->creatable = false;
+        c->is_abstract = true;
+        return *this;
+    }
+    Builder& engine_only() { // concrete, but created by the engine only (not in the Insert menu / Instance.new)
+        c->creatable = false;
         return *this;
     }
     Builder& service() {
@@ -55,6 +60,10 @@ void register_builtin_classes(ClassRegistry& r) {
     const EnumInfo* humanoid_state = r.add_enum("HumanoidState", {"Idle", "Walking", "Running", "Jumping", "Freefall",
                                                                   "Landed", "Dead", "Seated", "Climbing", "Swimming"});
     const EnumInfo* rig = r.add_enum("RigType", {"R15", "Custom"});
+    const EnumInfo* text_x = r.add_enum("TextXAlignment", {"Left", "Center", "Right"});
+    const EnumInfo* text_y = r.add_enum("TextYAlignment", {"Top", "Center", "Bottom"});
+    const EnumInfo* scale_type = r.add_enum("ScaleType", {"Stretch", "Fit", "Crop"});
+    const EnumInfo* font = r.add_enum("Font", {"Default", "Bold", "Mono"});
 
     Builder b{r};
     // Every class starts with Name (property index 0).
@@ -87,9 +96,33 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("CharacterRig", Value::enumeration(0), "Default avatar rig.", 0, rig);
     b.prop("CameraMaxZoomDistance", Value::number(40.0), "Maximum third-person camera distance (m).");
     b.cls("StarterGui", "Instance", "UI cloned into each player's screen.").service();
+    b.group("Behavior").prop("ShowDevelopmentGui", Value::boolean(true), "Shows the UI in the editor viewport.");
+    b.cls("Players", "Instance", "The players in a running game (one, the local player, in Studio).").service();
+    b.group("Data").prop("RespawnTime", Value::number(3.0), "Seconds before a dead character respawns.");
+    b.cls("SoundService", "Instance", "Global sound settings.").service();
+    b.group("Data").prop("Volume", Value::number(1.0), "Master volume (0-1).");
+    b.prop("RolloffScale", Value::number(1.0), "Scales the distance attenuation of every 3D sound.");
 
     // ---- Containers ----------------------------------------------------------------------------------------
     b.cls("Folder", "Instance", "Groups instances without any behaviour.", "Containers");
+    // Created at play start under Players (not insertable).
+    b.cls("Player", "Instance", "A player connected to the game.").engine_only();
+    b.group("Data").prop("DisplayName", Value::string("Player"), "Name shown to other players.");
+    b.prop("Character", Value::reference(0), "The player's avatar Model (nil while dead).", kPropNotSerialized);
+    b.prop("UserId", Value::integer(1), "Player id (1 for the local player).", kPropReadOnly);
+    b.prop("RespawnLocation", Value::reference(0), "SpawnLocation used when the character respawns (checkpoints).");
+    b.cls("PlayerGui", "Instance", "The player's screen UI (StarterGui is copied here at spawn).").engine_only();
+    b.cls("PlayerScripts", "Instance", "The player's client scripts (StarterPlayerScripts is copied here).")
+        .engine_only();
+    b.cls("StarterPlayerScripts", "Instance", "LocalScripts that run for each player.", "Containers");
+    b.cls("StarterCharacterScripts", "Instance", "LocalScripts copied into each character when it spawns.",
+          "Containers");
+    // Kept by importers for content Tefra cannot represent yet (GUI, constraints, effects...).
+    b.cls("ImportedInstance", "Instance", "An object imported from another tool that Tefra does not support yet.")
+        .engine_only();
+    b.group("Data").prop("OriginalClass", Value::string(""), "Class name in the source file.", kPropReadOnly);
+    b.prop("OriginalProperties", Value::string(""), "Source properties as JSON (kept for later conversion).",
+           kPropReadOnly | kPropHidden);
     b.cls("Model", "Instance", "A group of parts that moves as one (e.g. a car, a character).", "Containers");
     b.prop("PrimaryPart", Value::reference(0), "Part that defines the model's pivot.");
 
@@ -148,11 +181,69 @@ void register_builtin_classes(ClassRegistry& r) {
     b.cls("BaseScript", "Instance", "C# code that runs in play mode.").abstract();
     b.group("Behavior").prop("Enabled", Value::boolean(true), "Runs when the game starts.");
     b.prop("Source", Value::string(""), "C# source code.", kPropHidden);
+    b.prop("LuauSource", Value::string(""), "Original Luau code of an imported Roblox script (reference only).",
+           kPropHidden);
     b.cls("Script", "BaseScript", "Server-side C# script (runs once per game).", "Scripts");
     b.group("Behavior").prop("RunContext", Value::enumeration(0), "Where the script runs.", 0, script_ctx);
     b.cls("LocalScript", "BaseScript", "Client-side C# script (input, camera, UI).", "Scripts");
     b.cls("ModuleScript", "Instance", "Shared C# code used by other scripts.", "Scripts");
     b.group("Behavior").prop("Source", Value::string(""), "C# source code.", kPropHidden);
+    b.prop("LuauSource", Value::string(""), "Original Luau code of an imported Roblox module (reference only).",
+           kPropHidden);
+
+    // ---- In-game UI (positions/sizes: scale in X/Y of the parent + pixel offset) ----------------------------
+    b.cls("GuiBase", "Instance", "Base class of 2D user interface objects.").abstract();
+    b.group("Behavior").prop("Visible", Value::boolean(true), "Drawn and clickable.");
+    b.prop("ZIndex", Value::integer(1), "Higher draws on top of siblings.");
+    b.cls("ScreenGui", "GuiBase", "A layer of UI drawn over the 3D view.", "UI");
+    b.group("Behavior").prop("Enabled", Value::boolean(true), "Drawn when true.");
+    b.prop("DisplayOrder", Value::integer(0), "Higher ScreenGuis draw on top.");
+    b.prop("ResetOnSpawn", Value::boolean(true), "Copied again from StarterGui when the character respawns.");
+    b.cls("GuiObject", "GuiBase", "A rectangle of UI.").abstract();
+    b.group("Layout").prop("Position", Value::vector3({0, 0, 0}), "Position: fraction of the parent (x, y).");
+    b.prop("PositionOffset", Value::vector3({0, 0, 0}), "Position offset in pixels (x, y).");
+    b.prop("Size", Value::vector3({0, 0, 0}), "Size: fraction of the parent (x, y).");
+    b.prop("SizeOffset", Value::vector3({200, 50, 0}), "Size offset in pixels (x, y).");
+    b.prop("AnchorPoint", Value::vector3({0, 0, 0}), "Pivot inside the object (0-1, 0-1).");
+    b.prop("Rotation", Value::number(0.0), "Rotation (degrees).");
+    b.group("Appearance").prop("BackgroundColor", Value::color3({0.16f, 0.17f, 0.19f}), "Fill colour.");
+    b.prop("BackgroundTransparency", Value::number(0.0), "0 = opaque, 1 = invisible.");
+    b.prop("CornerRadius", Value::number(0.0), "Rounded corners (pixels).");
+    b.prop("BorderColor", Value::color3({0, 0, 0}), "Outline colour.");
+    b.prop("BorderSize", Value::number(0.0), "Outline thickness (pixels).");
+    b.cls("Frame", "GuiObject", "A plain rectangle that groups other UI.", "UI");
+    b.cls("TextLabel", "GuiObject", "Shows text.", "UI");
+    b.group("Text").prop("Text", Value::string("Label"), "The text.");
+    b.prop("TextColor", Value::color3({1, 1, 1}), "Text colour.");
+    b.prop("TextSize", Value::number(20.0), "Font size (pixels).");
+    b.prop("TextScaled", Value::boolean(false), "Grows the text to fill the box.");
+    b.prop("TextTransparency", Value::number(0.0), "0 = opaque.");
+    b.prop("TextStrokeTransparency", Value::number(1.0), "Outline around the letters (1 = none).");
+    b.prop("TextXAlignment", Value::enumeration(1), "Horizontal alignment.", 0, text_x);
+    b.prop("TextYAlignment", Value::enumeration(1), "Vertical alignment.", 0, text_y);
+    b.prop("Font", Value::enumeration(0), "Typeface.", 0, font);
+    b.cls("TextButton", "TextLabel", "Clickable text: fires Activated.", "UI");
+    b.group("Behavior").prop("AutoButtonColor", Value::boolean(true), "Darkens when hovered or pressed.");
+    b.cls("ImageLabel", "GuiObject", "Shows an image (.png/.jpg file).", "UI");
+    b.group("Image").prop("Image", Value::string(""), "Image file path.");
+    b.prop("ImageColor", Value::color3({1, 1, 1}), "Tint.");
+    b.prop("ImageTransparency", Value::number(0.0), "0 = opaque.");
+    b.prop("ScaleType", Value::enumeration(0), "How the image fits the box.", 0, scale_type);
+    b.cls("ImageButton", "ImageLabel", "Clickable image: fires Activated.", "UI");
+    b.group("Behavior").prop("AutoButtonColor", Value::boolean(true), "Darkens when hovered or pressed.");
+
+    // ---- Audio ---------------------------------------------------------------------------------------------
+    b.cls("Sound", "Instance", "Plays an audio file; 3D when parented to a part.", "Audio");
+    b.group("Data").prop("SoundId", Value::string(""), "Audio file path (.wav, .ogg, .mp3, .flac).");
+    b.prop("Volume", Value::number(0.5), "Loudness (0-10).");
+    b.prop("PlaybackSpeed", Value::number(1.0), "Speed and pitch multiplier.");
+    b.prop("Looped", Value::boolean(false), "Restarts when it ends.");
+    b.prop("Playing", Value::boolean(false), "True while playing; set it to start or stop the sound.");
+    b.prop("PlayOnRemove", Value::boolean(false), "Plays once when destroyed.");
+    b.prop("RollOffMinDistance", Value::number(3.0), "Full volume up to this distance (m).");
+    b.prop("RollOffMaxDistance", Value::number(120.0), "Silent beyond this distance (m).");
+    b.prop("TimePosition", Value::number(0.0), "Current position (s).", kPropNotSerialized);
+    b.prop("TimeLength", Value::number(0.0), "Length of the file (s).", kPropReadOnly | kPropNotSerialized);
 
     // ---- Characters ------------------------------------------------------------------------------------------
     b.cls("Humanoid", "Instance", "Makes a Model a character: health, walking, jumping, animation state.",

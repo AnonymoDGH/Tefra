@@ -233,7 +233,13 @@ Instance* DataModel::service(std::string_view class_name) const {
 
 Instance* DataModel::create(std::string_view class_name, Instance* parent, std::string name) {
     const ClassInfo* cls = ClassRegistry::get().find(class_name);
-    if (!cls || !cls->creatable || cls->service) return nullptr;
+    if (!cls || !cls->creatable) return nullptr;
+    return create_internal(class_name, parent, std::move(name));
+}
+
+Instance* DataModel::create_internal(std::string_view class_name, Instance* parent, std::string name) {
+    const ClassInfo* cls = ClassRegistry::get().find(class_name);
+    if (!cls || cls->is_abstract || cls->service) return nullptr;
     Instance* inst = make(cls, next_id_++);
     if (!name.empty()) inst->props_[0].s = std::move(name);
     ++revision_;
@@ -326,6 +332,19 @@ usize DataModel::add_listener(WorldListener l) {
 
 void DataModel::remove_listener(usize handle) {
     if (handle < listeners_.size()) listeners_[handle].reset();
+}
+
+void DataModel::fire_event(Instance& source, std::string_view name, Instance* other, f64 number,
+                           std::string_view text) {
+    GameEvent e;
+    e.source = &source;
+    e.name = name;
+    e.other = other;
+    e.number = number;
+    e.text = text;
+    // By index: a listener may add listeners while handling the event.
+    for (usize i = 0; i < listeners_.size(); ++i)
+        if (listeners_[i] && listeners_[i]->event) listeners_[i]->event(e);
 }
 
 void DataModel::notify_changed(Instance& inst, u32 prop) {
