@@ -6,6 +6,7 @@
 #include "tefra/renderer/scene.h"
 #include "tefra/renderer/terrain.h"
 #include "tefra/renderer/vegetation.h"
+#include "tefra/renderer/water.h"
 
 #include <string>
 

@@ -101,3 +101,15 @@ TEST_CASE("materials: deferred PBR + IBL + cascades, matches golden, zero valida
     REQUIRE(r.capture.width == 640);
     check_golden("materials", r.capture);
 }
+
+TEST_CASE("valley: terrain + atmosphere + GPU-driven vegetation + water render with zero validation errors") {
+    app::RunConfig cfg = base_config();
+    cfg.scene = "valley";
+    cfg.width = 320;
+    cfg.height = 180;
+    cfg.frames = 3; // > frames in flight: exercises cross-frame hazards on cached transients
+    const app::RunResult r = app::run(cfg);
+    REQUIRE_MESSAGE(r.ok, r.error);
+    CHECK(r.validation_errors == 0);
+    CHECK(r.frames_rendered == 3);
+}

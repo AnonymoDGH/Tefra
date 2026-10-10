@@ -5,6 +5,7 @@
 #include "tefra/renderer/scene.h"
 #include "tefra/renderer/terrain.h"
 #include "tefra/renderer/vegetation.h"
+#include "tefra/renderer/water.h"
 #include "tefra/rhi/bindless.h"
 #include "tefra/rhi/commands.h"
 #include "tefra/rhi/device.h"
@@ -124,14 +125,14 @@ Renderer::~Renderer() {
     }
     rhi::destroy_buffer(dev_, veg_cmd_template_);
     for (VkPipeline p : {p_gbuffer_, p_gbuffer_2s_, p_shadow_, p_lighting_, p_tonemap_, p_skyview_, p_terrain_,
-                         p_terrain_shadow_, p_veg_, p_veg_2s_, p_veg_shadow_, p_veg_cull_})
+                         p_terrain_shadow_, p_veg_, p_veg_2s_, p_veg_shadow_, p_veg_cull_, p_water_})
         if (p) vkDestroyPipeline(dev_.device(), p, nullptr);
     vkDestroyPipelineLayout(dev_.device(), layout_, nullptr);
 }
 
 void Renderer::create_pipelines(VkFormat output_format) {
     for (VkPipeline* p : {&p_gbuffer_, &p_gbuffer_2s_, &p_shadow_, &p_lighting_, &p_tonemap_, &p_skyview_, &p_terrain_,
-                          &p_terrain_shadow_, &p_veg_, &p_veg_2s_, &p_veg_shadow_, &p_veg_cull_}) {
+                          &p_terrain_shadow_, &p_veg_, &p_veg_2s_, &p_veg_shadow_, &p_veg_cull_, &p_water_}) {
         if (*p) vkDestroyPipeline(dev_.device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -150,6 +151,8 @@ void Renderer::create_pipelines(VkFormat output_format) {
     VkShaderModule veg_shadow_vs = rhi::load_shader(dev_, "veg_shadow.vert");
     VkShaderModule shadow_alpha_fs = rhi::load_shader(dev_, "shadow_alpha.frag");
     VkShaderModule veg_cull_cs = rhi::load_shader(dev_, "veg_cull.comp");
+    VkShaderModule water_vs = rhi::load_shader(dev_, "water.vert");
+    VkShaderModule water_fs = rhi::load_shader(dev_, "water.frag");
     p_veg_cull_ = rhi::create_compute_pipeline(dev_, veg_cull_cs, layout_, "veg_cull");
 
     auto rp_g = compat_pass(dev_, {kRt0, kRt1, kRt2, kRt3}, kDepth);
@@ -212,6 +215,19 @@ void Renderer::create_pipelines(VkFormat output_format) {
     l.name = "lighting";
     p_lighting_ = rhi::create_graphics_pipeline(dev_, l);
 
+    auto rp_w = compat_pass(dev_, {hdr_format_}, kDepth);
+    rhi::GraphicsPipelineDesc w;
+    w.vs = water_vs;
+    w.fs = water_fs;
+    w.layout = layout_;
+    w.render_pass = rp_w.pass;
+    w.depth_test = true;
+    w.depth_write = false;
+    w.depth_compare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+    w.premultiplied_blend = true;
+    w.name = "water";
+    p_water_ = rhi::create_graphics_pipeline(dev_, w);
+
     auto rp_t = compat_pass(dev_, {output_format}, VK_FORMAT_UNDEFINED);
     l.fs = tone_fs;
     l.render_pass = rp_t.pass;
@@ -224,9 +240,10 @@ void Renderer::create_pipelines(VkFormat output_format) {
     l.name = "skyview";
     p_skyview_ = rhi::create_graphics_pipeline(dev_, l);
 
-    for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k}) rhi::destroy_render_pass(dev_, *rp);
-    for (VkShaderModule m : {mesh_vs, gbuf_fs, shadow_vs, fs_vs, light_fs, tone_fs, sky_fs, terrain_vs, terrain_fs,
-                             terrain_shadow_vs, veg_vs, veg_shadow_vs, shadow_alpha_fs, veg_cull_cs})
+    for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k, &rp_w}) rhi::destroy_render_pass(dev_, *rp);
+    for (VkShaderModule m :
+         {mesh_vs, gbuf_fs, shadow_vs, fs_vs, light_fs, tone_fs, sky_fs, terrain_vs, terrain_fs, terrain_shadow_vs,
+          veg_vs, veg_shadow_vs, shadow_alpha_fs, veg_cull_cs, water_vs, water_fs})
         vkDestroyShaderModule(dev_.device(), m, nullptr);
 }
 
@@ -642,6 +659,28 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
             vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
         });
+
+    if (world.water) {
+        const Water* water = world.water;
+        graph_.add_pass(
+            "water", rg::PassType::Raster,
+            [&](rg::PassBuilder& b) {
+                b.color(hdr, rg::Load::Load);
+                b.depth(depth, rg::Load::Load, 0.0f, false);
+                b.read(depth, rg::Access::Sampled);
+            },
+            [=, this](const rg::PassContext& ctx) {
+                struct WaterPush {
+                    VkDeviceAddress frame, verts;
+                    u32 depth;
+                } wp{frame_addr, water->vertices().address, ctx.sampled(depth)};
+                vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_water_);
+                vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(wp), &wp);
+                vkCmdBindIndexBuffer(ctx.cmd, water->indices().buffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(ctx.cmd, water->index_count(), 1, 0, 0, 0);
+            });
+    }
 
     rg::ImportDesc out;
     out.name = "output";

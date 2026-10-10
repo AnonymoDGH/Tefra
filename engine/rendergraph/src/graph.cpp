@@ -45,6 +45,8 @@ struct Virtual {
     VkImageLayout final_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     Physical* phys = nullptr;
     bool touched = false; // accessed by an executed pass this frame
+    // True once a barrier defined the current state: later reads at other stages need a dependency on it.
+    bool barrier_stage_scope_only = true;
 };
 
 struct AccessRec {
@@ -110,8 +112,10 @@ Requirement requirement(Access a, PassType type, bool depth_format, Load load) {
                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT};
     case Access::DepthRead:
+        // The attachment store op still counts as a write for synchronization purposes.
         return {VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, depth_stages,
-                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT};
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT};
     case Access::Sampled:
         return {depth_format ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
                              : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -246,7 +250,10 @@ struct GraphImpl {
     void transition(u32 tex, const Requirement& req, bool discard) {
         Virtual& v = textures[tex];
         const bool layout_change = v.layout != req.layout;
-        const bool needs = layout_change || has_write(v.access) || has_write(req.access) || discard;
+        // Read after read in the same layout still needs an execution dependency when the new stages were not
+        // part of the scope that made the image visible (e.g. sampled -> depth-test read after a transition).
+        const bool new_stages = (req.stage & ~v.stage) != 0 && v.barrier_stage_scope_only;
+        const bool needs = layout_change || has_write(v.access) || has_write(req.access) || discard || new_stages;
         if (!needs) {
             // Read after read in the same layout: widen the scope so a later write waits for all readers.
             v.stage |= req.stage;
@@ -268,6 +275,7 @@ struct GraphImpl {
         v.layout = req.layout;
         v.stage = req.stage;
         v.access = req.access;
+        v.barrier_stage_scope_only = true;
     }
 
     void flush_barriers(VkCommandBuffer cmd) {
@@ -429,13 +437,35 @@ void Graph::execute(VkCommandBuffer cmd) {
     ctx.slot = g.slot;
     ctx.impl = &g;
     for (Pass& p : g.passes) {
+        // Accesses to the same texture within one pass happen concurrently: merge them into one requirement
+        // (same layout required) so no barrier is placed between them and their writes are all tracked.
+        struct Merged {
+            u32 tex;
+            Requirement req;
+            bool discard;
+        };
+        Merged merged[16];
+        u32 merged_count = 0;
         for (const AccessRec& a : p.accesses) {
-            Virtual& v = g.textures[a.tex];
+            const Virtual& v = g.textures[a.tex];
             const Requirement req = requirement(a.access, p.type, rhi::is_depth_format(v.format), a.load);
             // First touch of a transient that is fully overwritten: previous contents can be discarded.
             const bool discard = !v.touched && !v.imported && is_write_access(a.access) && a.load != Load::Load;
-            g.transition(a.tex, req, discard);
-            v.touched = true;
+            u32 k = 0;
+            while (k < merged_count && merged[k].tex != a.tex) ++k;
+            if (k == merged_count) {
+                TEFRA_VERIFY(merged_count < 16);
+                merged[merged_count++] = {a.tex, req, discard};
+            } else {
+                TEFRA_VERIFY(merged[k].req.layout == req.layout); // conflicting layouts in one pass
+                merged[k].req.stage |= req.stage;
+                merged[k].req.access |= req.access;
+                merged[k].discard = merged[k].discard && discard;
+            }
+        }
+        for (u32 k = 0; k < merged_count; ++k) {
+            g.transition(merged[k].tex, merged[k].req, merged[k].discard);
+            g.textures[merged[k].tex].touched = true;
         }
         const u32 scope = g.timer ? g.timer->begin(cmd, p.name) : ~0u;
         if (!g.timer) rhi::cmd_begin_label(cmd, p.name);

@@ -23,6 +23,7 @@ class Environment;
 class Atmosphere;
 class Terrain;
 class Vegetation;
+class Water;
 
 // Everything the renderer draws in a frame (optional parts may be null).
 struct RenderWorld {
@@ -31,6 +32,7 @@ struct RenderWorld {
     const Atmosphere* atmosphere = nullptr;
     const Terrain* terrain = nullptr;
     const Vegetation* vegetation = nullptr;
+    const Water* water = nullptr;
 };
 
 struct RenderSettings {
@@ -97,7 +99,7 @@ class Renderer {
     VkPipeline p_lighting_ = VK_NULL_HANDLE, p_tonemap_ = VK_NULL_HANDLE;
     VkPipeline p_skyview_ = VK_NULL_HANDLE, p_terrain_ = VK_NULL_HANDLE, p_terrain_shadow_ = VK_NULL_HANDLE;
     VkPipeline p_veg_ = VK_NULL_HANDLE, p_veg_2s_ = VK_NULL_HANDLE, p_veg_shadow_ = VK_NULL_HANDLE,
-               p_veg_cull_ = VK_NULL_HANDLE;
+               p_veg_cull_ = VK_NULL_HANDLE, p_water_ = VK_NULL_HANDLE;
     rhi::Buffer veg_cmd_template_;
     const Vegetation* veg_template_owner_ = nullptr;
     VkFormat output_format_ = VK_FORMAT_UNDEFINED;

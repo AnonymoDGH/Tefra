@@ -154,6 +154,7 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
     std::unique_ptr<render::Atmosphere> atmosphere;
     std::unique_ptr<render::Terrain> terrain;
     std::unique_ptr<render::Vegetation> vegetation;
+    std::unique_ptr<render::Water> water;
     std::unique_ptr<render::Renderer> renderer;
     SceneSetup setup;
     if (scene3d) {
@@ -174,6 +175,7 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             terrain = std::make_unique<render::Terrain>(*device, *heap, td);
             vegetation = std::make_unique<render::Vegetation>(*device, *scene);
             build_valley_scene(*scene, *env, *atmosphere, *terrain, *vegetation, setup);
+            water = std::make_unique<render::Water>(*device, *terrain);
             built = true;
         } else if (cfg.scene == "gltf") {
             built = build_gltf_scene(*scene, *env, setup, cfg.gltf_path, cfg.hdr_path);
@@ -279,6 +281,7 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             world.atmosphere = setup.use_atmosphere ? atmosphere.get() : nullptr;
             world.terrain = setup.use_terrain ? terrain.get() : nullptr;
             world.vegetation = vegetation.get();
+            world.water = water.get();
             renderer->render(cmd, fc.slot, frame_index, &timer, world, params.camera, params.time, setup.settings, out);
             result.draw_calls = renderer->draw_calls();
         } else {
@@ -375,6 +378,7 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
     result.cpu_rss_mb = process_rss_mb();
 
     renderer.reset();
+    water.reset();
     vegetation.reset();
     env.reset();
     atmosphere.reset();

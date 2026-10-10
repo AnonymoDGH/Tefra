@@ -107,13 +107,15 @@ void Terrain::generate() {
         const f32 wz = z + 60.0f * fbm(x / 700.0f + 5.2f, z / 700.0f + 1.3f, seed + 9, 3);
         const f32 d = std::fabs(wx - river_center_x(wz));
         // Valley walls: flat floor (~60 m wide), steepening slopes, crest ridges near the map edge.
-        const f32 wall = std::pow(max(d - 30.0f, 0.0f) / 900.0f, 1.55f) * 260.0f;
+        const f32 dv = min(d, std::fabs(x - river_center_x(z)) + 25.0f); // keep the floor around the channel
+        const f32 wall = std::pow(max(dv - 30.0f, 0.0f) / 900.0f, 1.55f) * 260.0f;
         const f32 ridges = ridged(wx / 520.0f, wz / 520.0f, seed + 3, 5) * 70.0f * smoothstep(60.0f, 400.0f, d);
         const f32 hills = fbm(wx / 230.0f, wz / 230.0f, seed + 11, 5) * 14.0f * smoothstep(20.0f, 200.0f, d);
         const f32 floor_bumps = fbm(x / 35.0f, z / 35.0f, seed + 13, 4) * 1.6f;
         f32 h = 20.0f + wall + ridges + hills + floor_bumps;
-        // River channel and banks.
-        const f32 channel = 1.0f - smoothstep(3.0f, 9.0f, d);
+        // River channel and banks follow the unwarped centerline (water and gameplay use it).
+        const f32 dc = std::fabs(x - river_center_x(z));
+        const f32 channel = 1.0f - smoothstep(3.0f, 9.0f, dc);
         h -= channel * 2.6f;
         // Lake basin downstream.
         const f32 lx = x - river_center_x(520.0f), lz = (z - 520.0f) * 0.7f;
