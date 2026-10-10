@@ -35,6 +35,9 @@ namespace Tefra
         /// <summary>The instance that contains the script (script.Parent).</summary>
         public Instance Parent => Script == null ? null : Script.Parent;
 
+        /// <summary>The Workspace service, as in Roblox scripts: `Workspace.Raycast(origin, direction)`.</summary>
+        protected static Workspace Workspace => Game.Workspace;
+
         /// <summary>Called once, when the script starts. Use `async void` and `await Task.Wait(s)` to yield.</summary>
         public virtual void Start()
         {
@@ -63,6 +66,45 @@ namespace Tefra
         public TefraScript Obj;
         public bool Started;
         public bool Failed;        // disabled by a compile or runtime error
+        public bool Retired;       // destroyed, disabled, moved or edited: its handlers and resumptions no longer run
+    }
+
+    // A handler subscribed by user code, with the script that subscribed it (null: engine code). Handlers of a
+    // retired script are skipped, so a destroyed Script stops responding to Touched, Heartbeat, InputBegan and so on.
+    internal struct Handler
+    {
+        public Delegate Fn;
+        public ScriptSlot Owner;
+    }
+
+    internal static class Handlers
+    {
+        public static void Add(List<Handler> list, Delegate fn)
+        {
+            if (fn == null) return;
+            list.Add(new Handler { Fn = fn, Owner = ScriptEngine.Current });
+        }
+
+        // Removes the first subscription equal to fn (same rule as Delegate.Remove).
+        public static void Remove(List<Handler> list, Delegate fn)
+        {
+            if (fn == null) return;
+            for (int i = list.Count - 1; i >= 0; i--)
+            {
+                if (!list[i].Fn.Equals(fn)) continue;
+                list.RemoveAt(i);
+                return;
+            }
+        }
+
+        // The handlers that may run now, in subscription order. A copy: a handler may subscribe or unsubscribe.
+        public static List<Handler> Live(List<Handler> list)
+        {
+            var live = new List<Handler>(list.Count);
+            foreach (Handler h in list)
+                if (ScriptEngine.IsLive(h.Owner)) live.Add(h);
+            return live;
+        }
     }
 
     internal static class ScriptEngine
@@ -84,6 +126,25 @@ namespace Tefra
         private static bool _running;
         private static bool _dirty;
         private static int _unitCounter;
+
+        // The script whose user code is running (Start, Update, an event handler, a resumed Task.Wait), or null in
+        // engine code. Subscriptions and waits made now are attributed to it.
+        public static ScriptSlot Current;
+
+        // False once the script was retired, or its instance is gone (destroyed from managed code, not yet re-scanned):
+        // its handlers and resumptions must not run. Null (engine code) is always live.
+        public static bool IsLive(ScriptSlot owner)
+        {
+            return owner == null || (!owner.Retired && Native.Exists(owner.Id));
+        }
+
+        // Makes `owner` the current script and returns the previous one (restore it with Current = previous).
+        internal static ScriptSlot Enter(ScriptSlot owner)
+        {
+            ScriptSlot previous = Current;
+            Current = owner;
+            return previous;
+        }
 
         // Set by the DataModel listeners (added, removed, reparented, Source/Enabled changed): the next step re-scans.
         public static void MarkDirty()
@@ -127,6 +188,7 @@ namespace Tefra
                     _dirty = true; // destroyed during this step: retired at the next sync
                     continue;
                 }
+                ScriptSlot previous = Enter(s);
                 try
                 {
                     s.Obj.Update(dt);
@@ -134,6 +196,10 @@ namespace Tefra
                 catch (Exception e)
                 {
                     Fault(s, "Update", e);
+                }
+                finally
+                {
+                    Current = previous;
                 }
             }
             EngineSyncContext.Instance.Pump();
@@ -230,6 +296,7 @@ namespace Tefra
             {
                 if (s.Started || s.Failed || s.Obj == null) continue;
                 s.Started = true;
+                ScriptSlot previous = Enter(s);
                 try
                 {
                     s.Obj.Start();
@@ -238,11 +305,16 @@ namespace Tefra
                 {
                     Fault(s, "Start", e);
                 }
+                finally
+                {
+                    Current = previous;
+                }
             }
         }
 
         private static void Retire(ScriptSlot s)
         {
+            s.Retired = true;
             Slots.Remove(s);
             SlotById.Remove(s.Id);
             s.Unit.Slots.Remove(s);
@@ -339,6 +411,7 @@ namespace Tefra
         private static void Fault(ScriptSlot s, string phase, Exception e)
         {
             s.Failed = true;
+            s.Retired = true; // a disabled script keeps no handler running either
             if (e is TargetInvocationException tie && tie.InnerException != null) e = tie.InnerException;
             Native.Log(Native.LogError, s.DisplayName + ": exception in " + phase + "; the script was disabled.\n" + e);
         }
@@ -351,7 +424,12 @@ namespace Tefra
             UserInputService.Clear();
             Yield.Clear();
             Instance.ClearAll();
-            foreach (ScriptSlot s in Slots) s.Obj = null;
+            foreach (ScriptSlot s in Slots)
+            {
+                s.Obj = null;
+                s.Retired = true;
+            }
+            Current = null;
             Slots.Clear();
             SlotById.Clear();
             Units.Clear();

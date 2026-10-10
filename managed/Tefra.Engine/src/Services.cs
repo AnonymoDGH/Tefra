@@ -93,10 +93,21 @@ namespace Tefra
     public static class UserInputService
     {
         /// <summary>Fires when a key or mouse button goes down. Use `io.KeyCode == KeyCode.E` to filter.</summary>
-        public static event Action<InputObject> InputBegan;
+        public static event Action<InputObject> InputBegan
+        {
+            add => Handlers.Add(BeganHandlers, value);
+            remove => Handlers.Remove(BeganHandlers, value);
+        }
 
         /// <summary>Fires when a key or mouse button goes up.</summary>
-        public static event Action<InputObject> InputEnded;
+        public static event Action<InputObject> InputEnded
+        {
+            add => Handlers.Add(EndedHandlers, value);
+            remove => Handlers.Remove(EndedHandlers, value);
+        }
+
+        private static readonly List<Handler> BeganHandlers = new List<Handler>();
+        private static readonly List<Handler> EndedHandlers = new List<Handler>();
 
         public static bool IsKeyDown(KeyCode key) => Native.IsReady && Native.KeyDown((int)key);
 
@@ -120,26 +131,31 @@ namespace Tefra
 
         internal static void Dispatch(bool began, string text)
         {
-            Action<InputObject> handlers = began ? InputBegan : InputEnded;
-            if (handlers == null) return;
+            List<Handler> handlers = Handlers.Live(began ? BeganHandlers : EndedHandlers);
+            if (handlers.Count == 0) return;
             var io = new InputObject(text);
-            foreach (Delegate d in handlers.GetInvocationList())
+            foreach (Handler h in handlers)
             {
+                ScriptSlot previous = ScriptEngine.Enter(h.Owner);
                 try
                 {
-                    ((Action<InputObject>)d)(io);
+                    ((Action<InputObject>)h.Fn)(io);
                 }
                 catch (Exception e)
                 {
                     Native.Log(Native.LogError, (began ? "InputBegan" : "InputEnded") + " handler failed: " + e);
+                }
+                finally
+                {
+                    ScriptEngine.Current = previous;
                 }
             }
         }
 
         internal static void Clear()
         {
-            InputBegan = null;
-            InputEnded = null;
+            BeganHandlers.Clear();
+            EndedHandlers.Clear();
         }
     }
 
@@ -147,28 +163,38 @@ namespace Tefra
     public static class RunService
     {
         /// <summary>Fires once per engine step with the frame time in seconds.</summary>
-        public static event Action<float> Heartbeat;
+        public static event Action<float> Heartbeat
+        {
+            add => Handlers.Add(HeartbeatHandlers, value);
+            remove => Handlers.Remove(HeartbeatHandlers, value);
+        }
+
+        private static readonly List<Handler> HeartbeatHandlers = new List<Handler>();
 
         internal static void Fire(float dt)
         {
-            Action<float> handlers = Heartbeat;
-            if (handlers == null) return;
-            foreach (Delegate d in handlers.GetInvocationList())
+            if (HeartbeatHandlers.Count == 0) return;
+            foreach (Handler h in Handlers.Live(HeartbeatHandlers))
             {
+                ScriptSlot previous = ScriptEngine.Enter(h.Owner);
                 try
                 {
-                    ((Action<float>)d)(dt);
+                    ((Action<float>)h.Fn)(dt);
                 }
                 catch (Exception e)
                 {
                     Native.Log(Native.LogError, "RunService.Heartbeat handler failed: " + e);
+                }
+                finally
+                {
+                    ScriptEngine.Current = previous;
                 }
             }
         }
 
         internal static void Clear()
         {
-            Heartbeat = null;
+            HeartbeatHandlers.Clear();
         }
     }
 
@@ -190,6 +216,7 @@ namespace Tefra
 
         private float _remaining;
         private Action _continuation;
+        private ScriptSlot _owner; // the script that awaited it: a retired script is never resumed
 
         internal Yield(float seconds)
         {
@@ -203,6 +230,7 @@ namespace Tefra
         public void OnCompleted(Action continuation)
         {
             _continuation = continuation;
+            _owner = ScriptEngine.Current;
             Waiting.Add(this);
         }
 
@@ -230,15 +258,22 @@ namespace Tefra
             // Resume in the order the waits were started.
             for (int i = ready.Count - 1; i >= 0; i--)
             {
-                Action c = ready[i]._continuation;
-                ready[i]._continuation = null;
+                Yield y = ready[i];
+                Action c = y._continuation;
+                y._continuation = null;
+                if (c == null || !ScriptEngine.IsLive(y._owner)) continue; // the script was destroyed meanwhile
+                ScriptSlot previous = ScriptEngine.Enter(y._owner);
                 try
                 {
-                    c?.Invoke();
+                    c.Invoke();
                 }
                 catch (Exception e)
                 {
                     Native.Log(Native.LogError, "Task resumed with an exception: " + e);
+                }
+                finally
+                {
+                    ScriptEngine.Current = previous;
                 }
             }
         }

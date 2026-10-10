@@ -51,6 +51,18 @@ struct Press {
     i64 hold = 1;
 };
 
+// A non-negative frame number (no exceptions: a bad value is reported, not thrown).
+bool parse_frame(const std::string& text, i64& out) {
+    if (text.empty() || text.size() > 18) return false;
+    i64 v = 0;
+    for (char c : text) {
+        if (c < '0' || c > '9') return false;
+        v = v * 10 + (c - '0');
+    }
+    out = v;
+    return true;
+}
+
 // Parses "E:30:5,Space:60". Returns false with a message on bad syntax or an unknown key name.
 bool parse_presses(const std::string& text, std::vector<Press>& out, std::string* err) {
     std::size_t start = 0;
@@ -72,8 +84,12 @@ bool parse_presses(const std::string& text, std::vector<Press>& out, std::string
             return false;
         }
         const std::size_t c2 = item.find(':', c1 + 1);
-        p.frame = std::stoll(item.substr(c1 + 1, c2 == std::string::npos ? std::string::npos : c2 - c1 - 1));
-        if (c2 != std::string::npos) p.hold = std::stoll(item.substr(c2 + 1));
+        const std::string frame_text = item.substr(c1 + 1, c2 == std::string::npos ? std::string::npos : c2 - c1 - 1);
+        if (!parse_frame(frame_text, p.frame) ||
+            (c2 != std::string::npos && !parse_frame(item.substr(c2 + 1), p.hold))) {
+            *err = "bad frame in --press entry '" + item + "' (use KEY:FRAME[:HOLD])";
+            return false;
+        }
         out.push_back(p);
     }
     return true;

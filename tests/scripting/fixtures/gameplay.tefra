@@ -1,0 +1,289 @@
+{
+ "format": "tefra-place",
+ "version": 1,
+ "services": [
+  {
+   "class": "Workspace",
+   "props": {
+    "FallenPartsDestroyHeight": -200
+   },
+   "children": [
+    {
+     "class": "Part",
+     "props": {
+      "Name": "Floor",
+      "Position": [
+       0,
+       -0.5,
+       0
+      ],
+      "Size": [
+       80,
+       1,
+       80
+      ],
+      "Anchored": true,
+      "CanCollide": true
+     }
+    },
+    {
+     "class": "SpawnLocation",
+     "props": {
+      "Name": "Checkpoint",
+      "Position": [
+       0,
+       0.5,
+       0
+      ],
+      "Size": [
+       6,
+       1,
+       6
+      ],
+      "Anchored": true,
+      "CanCollide": true
+     },
+     "children": [
+      {
+       "class": "Script",
+       "props": {
+        "Name": "CheckpointScript",
+        "Source": "public class Checkpoint : TefraScript { public override void Start() { var part = (SpawnLocation)Parent; part.Touched += other => { var player = Players.GetPlayerFromCharacter(other.Parent); if (player != null && player.RespawnLocation != part) { player.RespawnLocation = part; part.Color = new Color3(0.2f, 0.9f, 0.3f); var s = part.FindFirstChildOfClass(\"Sound\") as Sound; s?.Play(); Debug.Log(\"checkpoint set\"); } }; } }"
+       }
+      },
+      {
+       "class": "Sound",
+       "props": {
+        "Name": "Ding"
+       }
+      }
+     ]
+    },
+    {
+     "class": "Part",
+     "props": {
+      "Name": "KillA",
+      "Position": [
+       0,
+       0.5,
+       -20
+      ],
+      "Size": [
+       8,
+       1,
+       8
+      ],
+      "Anchored": true,
+      "CanCollide": true
+     },
+     "children": [
+      {
+       "class": "Script",
+       "props": {
+        "Name": "KillA",
+        "Source": "public class KillBrick : TefraScript { public override void Start() { var part = (BasePart)Parent; part.Touched += other => { var hum = other.Parent?.FindFirstChildOfClass(\"Humanoid\") as Humanoid; if (hum != null) hum.Health = 0; }; } }"
+       }
+      }
+     ]
+    },
+    {
+     "class": "Part",
+     "props": {
+      "Name": "KillB",
+      "Position": [
+       20,
+       0.5,
+       -20
+      ],
+      "Size": [
+       8,
+       1,
+       8
+      ],
+      "Anchored": true,
+      "CanCollide": false
+     },
+     "children": [
+      {
+       "class": "Script",
+       "props": {
+        "Name": "KillB",
+        "Source": "public class KillBrick : TefraScript { public override void Start() { var part = (BasePart)Parent; part.Touched += other => { var hum = other.Parent?.FindFirstChildOfClass(\"Humanoid\") as Humanoid; if (hum != null) hum.Health = 0; }; } }"
+       }
+      }
+     ]
+    },
+    {
+     "class": "Part",
+     "props": {
+      "Name": "Mover",
+      "Position": [
+       -12,
+       1,
+       0
+      ],
+      "Size": [
+       6,
+       1,
+       6
+      ],
+      "Anchored": true,
+      "CanCollide": true
+     },
+     "children": [
+      {
+       "class": "Script",
+       "props": {
+        "Name": "MoverS",
+        "Source": "public class Mover : TefraScript { Vector3 start; float t; public override void Start() { start = ((BasePart)Parent).Position; } public override void Update(float dt) { t += dt; ((BasePart)Parent).Position = start + new Vector3(MathF.Sin(t) * 6f, 0, 0); } }"
+       }
+      }
+     ]
+    },
+    {
+     "class": "Part",
+     "props": {
+      "Name": "Spinner",
+      "Position": [
+       -20,
+       2,
+       0
+      ],
+      "Size": [
+       4,
+       4,
+       4
+      ],
+      "Anchored": true,
+      "CanCollide": true
+     },
+     "children": [
+      {
+       "class": "Script",
+       "props": {
+        "Name": "SpinS",
+        "Source": "public class Spinner : TefraScript { public override void Update(float dt) { var p = (BasePart)Parent; p.Orientation += new Vector3(0, 90 * dt, 0); } }"
+       }
+      }
+     ]
+    },
+    {
+     "class": "Script",
+     "props": {
+      "Name": "RayScript",
+      "Source": "public class RayTest : TefraScript { public override void Start() { var hit = Workspace.Raycast(new Vector3(0, 10, 0), new Vector3(0, -1, 0)); Debug.Log(hit == null ? \"ray miss\" : \"ray hit \" + hit.Instance.Name); } }"
+     }
+    },
+    {
+     "class": "Script",
+     "props": {
+      "Name": "DeathWatchS",
+      "Source": "public class DeathWatch : TefraScript { public override void Start() { Players.LocalPlayer.CharacterAdded += c => Hook(c); if (Players.LocalPlayer.Character != null) Hook(Players.LocalPlayer.Character); } void Hook(Instance c) { var h = c.FindFirstChildOfClass(\"Humanoid\") as Humanoid; if (h == null) return; h.Died += () => Debug.Log(\"died event\"); h.HealthChanged += (float hp) => Debug.Log(\"health \" + hp); } }"
+     }
+    },
+    {
+     "class": "Script",
+     "props": {
+      "Name": "HeartS",
+      "Source": "public class Heart : TefraScript { bool once; public override void Start() { RunService.Heartbeat += dt => { if (!once) { once = true; Debug.Log(\"heartbeat ok\"); } }; } }"
+     }
+    },
+    {
+     "class": "Script",
+     "props": {
+      "Name": "Counter1",
+      "Source": "public class Counter : TefraScript { public override void Start() { Util.Hits++; Debug.Log(\"hits \" + Util.Hits); } }"
+     }
+    },
+    {
+     "class": "Script",
+     "props": {
+      "Name": "Counter2",
+      "Source": "public class Counter : TefraScript { public override void Start() { Util.Hits++; Debug.Log(\"hits \" + Util.Hits); } }"
+     }
+    },
+    {
+     "class": "Script",
+     "props": {
+      "Name": "Dropper",
+      "Source": "public class Dropper : TefraScript {\n  public override async void Start() {\n    await Task.Wait(0.5f);\n    var hum = Players.LocalPlayer.Character.FindFirstChildOfClass(\"Humanoid\") as Humanoid;\n    hum.TakeDamage(10);\n    Debug.Log(\"damaged, hp=\" + hum.Health);\n    await Task.Wait(0.5f);\n    var root = (BasePart)Players.LocalPlayer.Character.FindFirstChild(\"HumanoidRootPart\");\n    root.Position = new Vector3(0, 6, -20);\n    await Task.Wait(3.0f);\n    var c = Players.LocalPlayer.Character;\n    Debug.Log(\"after kill, alive=\" + (c != null));\n    var sp = Game.Workspace.FindFirstChild(\"Spinner\");\n    var cl = sp.Clone(Game.Workspace);\n    cl.Name = \"SpinnerCopy\";\n    cl.Destroy();\n    Debug.Log(\"clone destroy ok\");\n    var snd = Game.Workspace.FindFirstChild(\"Checkpoint\").FindFirstChildOfClass(\"Sound\") as Sound;\n    snd.Play(); Debug.Log(\"playing=\" + snd.IsPlaying); snd.Stop();\n    await Task.Wait(2.0f);\n    var c2 = Players.LocalPlayer.Character;\n    var sroot = (BasePart)c2.FindFirstChild(\"HumanoidRootPart\");\n    sroot.Position = new Vector3(20, 3, -20);\n    await Task.Wait(1.0f);\n    Debug.Log(\"sensor step done\");\n    await Task.Wait(4.0f);\n    var c3 = Players.LocalPlayer.Character;\n    var mroot = (BasePart)c3.FindFirstChild(\"HumanoidRootPart\");\n    var mover = (BasePart)Game.Workspace.FindFirstChild(\"Mover\");\n    mroot.Position = new Vector3(-12, 3, 0);\n    for (int i = 0; i < 8; i++) {\n      await Task.Wait(0.5f);\n      Debug.Log(\"carry s\" + i + \" char=\" + mroot.Position.X.ToString(\"0.00\") + \" y=\" + mroot.Position.Y.ToString(\"0.00\") + \" mover=\" + mover.Position.X.ToString(\"0.00\"));\n    }\n  }\n}"
+     }
+    }
+   ]
+  },
+  {
+   "class": "ReplicatedStorage",
+   "props": {},
+   "children": [
+    {
+     "class": "ModuleScript",
+     "props": {
+      "Name": "Util",
+      "Source": "public static class Util { public static int Hits; }"
+     }
+    }
+   ]
+  },
+  {
+   "class": "StarterGui",
+   "props": {},
+   "children": [
+    {
+     "class": "ScreenGui",
+     "props": {
+      "Name": "HudGui"
+     },
+     "children": [
+      {
+       "class": "TextLabel",
+       "props": {
+        "Name": "Timer",
+        "Text": "0"
+       }
+      },
+      {
+       "class": "TextButton",
+       "props": {
+        "Name": "Reset",
+        "Text": "reset"
+       }
+      },
+      {
+       "class": "LocalScript",
+       "props": {
+        "Name": "Hud",
+        "Source": "public class Hud : TefraScript { TextLabel timer; float t; public override void Start() { timer = Script.Parent.FindFirstChild(\"Timer\") as TextLabel; var btn = Script.Parent.FindFirstChild(\"Reset\") as TextButton; btn.Activated += () => { var h = Players.LocalPlayer.Character?.FindFirstChildOfClass(\"Humanoid\") as Humanoid; if (h != null) h.Health = 0; }; Players.LocalPlayer.CharacterAdded += c => Debug.Log(\"spawned \" + c.Name); } public override void Update(float dt) { t += dt; timer.Text = $\"{t:0.0}s\"; } }"
+       }
+      },
+      {
+       "class": "LocalScript",
+       "props": {
+        "Name": "InputWatch",
+        "Source": "public class InputWatch : TefraScript { bool held; public override void Start() { UserInputService.InputBegan += (InputObject io) => { if (io.KeyCode == KeyCode.E) Debug.Log(\"E began\"); }; UserInputService.InputEnded += io => { if (io.KeyCode == KeyCode.E) Debug.Log(\"E ended\"); }; } public override void Update(float dt) { bool d = UserInputService.IsKeyDown(KeyCode.E); if (d && !held) { held = true; Debug.Log(\"E held\"); } if (!d) held = false; } }"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "class": "StarterPlayer",
+   "props": {},
+   "children": [
+    {
+     "class": "StarterCharacterScripts",
+     "props": {},
+     "children": [
+      {
+       "class": "LocalScript",
+       "props": {
+        "Name": "CharLog",
+        "Source": "public class CharLog : TefraScript { public override void Start() { Debug.Log(\"char local script started\"); } }"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -99,6 +99,8 @@ bool GameRuntime::start() {
     }
     if (cfg_.spawn_character) spawn_character();
     camera_.yaw = orbit_yaw_;
+    // Bodies of the parts that exist now: a script's Start may raycast before the first step.
+    physics_->sync();
     if (cfg_.scripts && cfg_.scripts->available()) {
         // Scripts read the input snapshot (UserInputService) and cast rays against the physics world.
         cfg_.scripts->set_input(&input_);
@@ -297,8 +299,12 @@ void GameRuntime::stop() {
     if (!running_) return;
     for (auto it = systems_.rbegin(); it != systems_.rend(); ++it) (*it)->stop(*this);
     if (cfg_.scripts && cfg_.scripts->running()) cfg_.scripts->stop();
-    // The raycaster captures this runtime: the host must not call it after the physics world is gone.
-    if (cfg_.scripts) cfg_.scripts->set_raycaster(nullptr);
+    // The raycaster captures this runtime and the input snapshot is a member of it: the host must not reach either
+    // after the physics world or this runtime is gone.
+    if (cfg_.scripts) {
+        cfg_.scripts->set_raycaster(nullptr);
+        cfg_.scripts->set_input(nullptr);
+    }
     controller_.reset();
     animator_.reset();
     if (physics_ && touched_listener_ != ~usize(0)) physics_->remove_touched_listener(touched_listener_);

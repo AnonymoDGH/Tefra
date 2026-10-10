@@ -90,6 +90,7 @@ class ScriptHost {
     bool running() const { return running_; }
 
   private:
+    void flush_structural();
     void flush_events();
 
     LogCallback log_;

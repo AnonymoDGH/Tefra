@@ -123,6 +123,8 @@ public class Hud : TefraScript   // LocalScript dentro de un ScreenGui de Starte
 - `Workspace.Raycast(origen, dirección, distancia)` devuelve el primer sólido o `null`.
 - Para matar o curar: `humanoid.Health = 0` o `humanoid.TakeDamage(10)`. Una caída fuera del mundo también mata.
 - Para plataformas que se mueven: cambia `Position` cada paso desde un script; la pieza se vuelve cinemática y lleva a quien esté encima.
+- Un script destruido (o deshabilitado, o con error) deja de correr: sus manejadores de eventos y sus `Task.Wait` pendientes tampoco se ejecutan.
+- Limitación: un script con `namespace X;` (con ámbito de archivo) no compila; usa `namespace X { ... }`.
 
 ## IA (MCP)
 Studio sirve MCP en `http://127.0.0.1:44755/mcp`. Con Claude Code:

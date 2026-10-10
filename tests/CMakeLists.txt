@@ -24,10 +24,18 @@ add_test(NAME scripting_game COMMAND tefra_run
     --place ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/game.tefra --frames 600 --press E:120:3 --require-scripts
     --expect-file ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/game.expect)
 set_tests_properties(scripting_game PROPERTIES LABELS "scripting" SKIP_RETURN_CODE 77)
+
+# Gameplay regressions (M3b): Workspace.Raycast from a TefraScript (also in Start), a respawned HUD that receives
+# CharacterAdded, a kill brick and a sensor that kill the character, a destroyed script's handlers no longer running
+# (the "E began" from the HUD is printed once per press), and StarterCharacterScripts. Output lines must appear.
+add_test(NAME scripting_gameplay COMMAND tefra_run
+    --place ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/gameplay.tefra --frames 1800 --press E:300:3 --require-scripts
+    --expect-file ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/gameplay.expect)
+set_tests_properties(scripting_gameplay PROPERTIES LABELS "scripting" SKIP_RETURN_CODE 77)
 if(TEFRA_ASAN)
     # The .NET runtime keeps its heap for the life of the process; suppress only its modules (see lsan.supp).
     set(_tefra_lsan "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
-    set_tests_properties(unit scripting_run scripting_game PROPERTIES ENVIRONMENT "${_tefra_lsan}")
+    set_tests_properties(unit scripting_run scripting_game scripting_gameplay PROPERTIES ENVIRONMENT "${_tefra_lsan}")
 endif()
 
 # MCP end-to-end (ADR-015): starts tefra_mcp_demo, speaks Streamable HTTP to it, then drives the stdio bridge.

@@ -104,8 +104,24 @@ bool ScriptHost::start(world::DataModel& model) {
 
 void ScriptHost::step(f32 dt) {
     if (!running_) return;
+    // Structure first: a respawn clones the GUI and the character outside a step, and the scripts they bring must be
+    // synced before the signals queued with them (CharacterAdded) are dispatched, or they miss those signals.
+    flush_structural();
     g_managed.step(dt);
     flush_events();
+}
+
+void ScriptHost::flush_structural() {
+    std::vector<TefraEvent> structural;
+    std::vector<TefraEvent> rest;
+    for (const TefraEvent& e : events_) {
+        const bool is_structure =
+            e.kind == TEFRA_EVENT_ADDED || e.kind == TEFRA_EVENT_REPARENTED || e.kind == TEFRA_EVENT_REMOVING;
+        (is_structure ? structural : rest).push_back(e);
+    }
+    if (structural.empty()) return;
+    events_.swap(rest); // signals and changes stay queued, in order, for flush_events()
+    g_managed.dispatch(structural.data(), static_cast<u32>(structural.size()));
 }
 
 void ScriptHost::stop() {
