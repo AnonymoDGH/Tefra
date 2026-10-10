@@ -68,6 +68,11 @@ struct RenderSettings {
     bool auto_exposure = false;
     // Lens and film: cos^4 vignette, lateral chromatic aberration (<= 1 px at the corners), luminance-dependent grain.
     bool film_effects = true;
+    // Scene-referred grading before AgX (neutral defaults): white balance gains, saturation around the luma and a
+    // contrast slope in log2 around middle grey.
+    vec3 grade_white_balance{1.0f, 1.0f, 1.0f};
+    f32 grade_saturation = 1.0f;
+    f32 grade_contrast = 1.0f;
     // Sky visibility under the vegetation canopy (canopy.h): ambient light is cut where canopy lies above.
     bool canopy_occlusion = false;
     f32 canopy_strength = 0.85f; // fraction of the ambient light removed under a full canopy

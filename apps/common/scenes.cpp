@@ -223,6 +223,9 @@ void build_valley_scene(render::Scene& scene, render::Environment& env, const re
     setup.settings.shadow_distance = 200.0f;
     setup.settings.ev100 = 11.3f; // calibration vs CC0 forest photos: +1.2 EV (docs/research/calibration)
     setup.settings.canopy_occlusion = true;
+    setup.settings.grade_white_balance = {1.03f, 1.0f, 0.97f}; // calibration (docs/research/calibration)
+    setup.settings.grade_saturation = 1.3f;
+    setup.settings.grade_contrast = 1.15f;
     build_atmosphere_environment(atmo, env, setup.settings.sun_direction);
 
     // ---- Materials --------------------------------------------------------------------------------

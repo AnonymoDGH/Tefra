@@ -13,6 +13,8 @@ layout(push_constant) uniform Push {
     ExposureBuffer exposure;
     uint flags; // kFlagBloom | kFlagAutoExposure | kFlagFilm
     float bloom_mix;
+    vec4 grade0; // rgb white balance, a saturation
+    vec4 grade1; // x contrast
 } pc;
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
@@ -56,6 +58,15 @@ void main() {
         const vec2 t = vec2((2.0 * v_uv.x - 1.0) / pc.frame.f.proj[0][0], (2.0 * v_uv.y - 1.0) / pc.frame.f.proj[1][1]);
         const float cos2 = 1.0 / (1.0 + dot(t, t));
         c *= mix(1.0, cos2 * cos2, kVignette);
+    }
+    // Grading (scene-referred): white balance, saturation around the luma, contrast around middle grey (log2).
+    c *= pc.grade0.rgb;
+    {
+        const float y = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-6);
+        c = max(mix(vec3(y), c, pc.grade0.a), vec3(0.0));
+        const float grey = 0.18;
+        const float y2 = grey * pow(y / grey, pc.grade1.x);
+        c *= y2 / y;
     }
     c = agx(c); // input is pre-exposed by the lighting pass
     if (film) {

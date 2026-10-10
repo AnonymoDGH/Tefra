@@ -54,8 +54,11 @@ struct PostPush {
     VkDeviceAddress exposure;
     u32 flags;
     f32 bloom_mix;
+    vec4 grade0; // rgb white balance gains, a saturation
+    vec4 grade1; // x contrast (log2 slope around 0.18), yzw unused
 };
-static_assert(sizeof(PostPush) == 32 && offsetof(PostPush, exposure) == 16 && offsetof(PostPush, flags) == 24);
+static_assert(sizeof(PostPush) == 64 && offsetof(PostPush, exposure) == 16 && offsetof(PostPush, flags) == 24 &&
+              offsetof(PostPush, grade0) == 32);
 // Auto exposure state, one per frame slot (tonemap.frag reads ev; exposure_adapt.comp writes it).
 struct ExposureState {
     f32 ev; // EV compensation, clamped to +-kExposureLimitEv
@@ -1248,7 +1251,10 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
             vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_tonemap_);
             const PostPush p{frame_addr, ctx.sampled(resolved), bloom.valid() ? ctx.sampled(bloom) : 0u, exposure_addr,
-                             post_flags, s.bloom_intensity};
+                             post_flags, s.bloom_intensity,
+                             vec4{s.grade_white_balance.x, s.grade_white_balance.y, s.grade_white_balance.z,
+                                  s.grade_saturation},
+                             vec4{s.grade_contrast, 0.0f, 0.0f, 0.0f}};
             vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
             vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
         });
