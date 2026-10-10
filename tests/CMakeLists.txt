@@ -1,8 +1,8 @@
 # Unit tests (no GPU).
 tefra_add_executable(tefra_unit_tests
     SOURCES unit/main.cpp unit/test_math.cpp unit/test_memory.cpp unit/test_jobs.cpp unit/test_json.cpp
-            unit/test_stats.cpp unit/test_image.cpp unit/test_environment.cpp unit/test_foliage.cpp unit/test_palm.cpp
-    DEPS tefra_renderer tefra_doctest)
+            unit/test_stats.cpp unit/test_image.cpp unit/test_environment.cpp unit/test_foliage.cpp unit/test_palm.cpp unit/test_world.cpp
+    DEPS tefra_renderer tefra_world tefra_doctest)
 add_test(NAME unit COMMAND tefra_unit_tests)
 set_tests_properties(unit PROPERTIES LABELS "unit")
 
