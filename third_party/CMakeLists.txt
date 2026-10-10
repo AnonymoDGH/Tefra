@@ -21,6 +21,10 @@ target_include_directories(tefra_vma SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR
 add_library(tefra_stb STATIC stb/stb_impl.c)
 target_include_directories(tefra_stb SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/stb)
 
+# --- cgltf (glTF 2.0 loader) ----------------------------------------------------------------------
+add_library(tefra_cgltf STATIC cgltf/cgltf_impl.c)
+target_include_directories(tefra_cgltf SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/cgltf)
+
 # --- doctest ---------------------------------------------------------------------------------------
 add_library(tefra_doctest INTERFACE)
 target_include_directories(tefra_doctest SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/doctest)

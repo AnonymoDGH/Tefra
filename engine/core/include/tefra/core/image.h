@@ -12,8 +12,19 @@ struct ImageRGBA8 {
     std::vector<u8> pixels; // width * height * 4, row-major, top row first
 };
 
+struct ImageRGBA32F {
+    u32 width = 0;
+    u32 height = 0;
+    std::vector<f32> pixels; // width * height * 4, linear
+};
+
 bool image_write_png(const char* path, const ImageRGBA8& img);
+// PNG or JPEG from file / memory, expanded to RGBA8.
 bool image_read_png(const char* path, ImageRGBA8& out);
+bool image_read(const char* path, ImageRGBA8& out);
+bool image_read_memory(const u8* data, usize size, ImageRGBA8& out);
+// Radiance .hdr, expanded to RGBA32F.
+bool image_read_hdr(const char* path, ImageRGBA32F& out);
 
 struct ImageDiff {
     bool size_match = false;

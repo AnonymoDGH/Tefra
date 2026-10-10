@@ -1,6 +1,59 @@
 #include "tefra/core/math.h"
 
+#include <cstring>
+
 namespace tefra {
+
+u16 f32_to_f16(f32 value) {
+    u32 x;
+    std::memcpy(&x, &value, 4);
+    const u32 sign = (x >> 16) & 0x8000u;
+    const u32 mant = x & 0x007FFFFFu;
+    const i32 exp = static_cast<i32>((x >> 23) & 0xFFu);
+    if (exp == 0xFF) return static_cast<u16>(sign | 0x7C00u | (mant ? 0x200u : 0u)); // inf / nan
+    i32 e = exp - 127 + 15;
+    if (e >= 0x1F) return static_cast<u16>(sign | 0x7C00u); // overflow -> inf
+    if (e <= 0) {
+        if (e < -10) return static_cast<u16>(sign); // underflow -> signed zero
+        const u32 m = mant | 0x00800000u;
+        const u32 shift = static_cast<u32>(14 - e);
+        u32 h = m >> shift;
+        const u32 rem = m & ((1u << shift) - 1u), half = 1u << (shift - 1u);
+        if (rem > half || (rem == half && (h & 1u))) ++h;
+        return static_cast<u16>(sign | h);
+    }
+    u32 h = (static_cast<u32>(e) << 10) | (mant >> 13);
+    const u32 rem = mant & 0x1FFFu;
+    if (rem > 0x1000u || (rem == 0x1000u && (h & 1u))) ++h; // may carry into the exponent: still correct
+    return static_cast<u16>(sign | h);
+}
+
+f32 f16_to_f32(u16 h) {
+    const u32 sign = (static_cast<u32>(h) & 0x8000u) << 16;
+    u32 exp = (h >> 10) & 0x1Fu;
+    u32 mant = h & 0x3FFu;
+    u32 x;
+    if (exp == 0) {
+        if (mant == 0) {
+            x = sign;
+        } else {
+            exp = 127 - 15 + 1;
+            while (!(mant & 0x400u)) {
+                mant <<= 1;
+                --exp;
+            }
+            mant &= 0x3FFu;
+            x = sign | (exp << 23) | (mant << 13);
+        }
+    } else if (exp == 0x1F) {
+        x = sign | 0x7F800000u | (mant << 13);
+    } else {
+        x = sign | ((exp - 15 + 127) << 23) | (mant << 13);
+    }
+    f32 out;
+    std::memcpy(&out, &x, 4);
+    return out;
+}
 
 mat4 transpose(const mat4& m) {
     mat4 r;

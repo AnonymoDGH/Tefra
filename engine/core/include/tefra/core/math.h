@@ -22,6 +22,10 @@ template <typename T> constexpr T clamp(T v, T lo, T hi) { return v < lo ? lo : 
 inline f32 lerp(f32 a, f32 b, f32 t) { return a + (b - a) * t; }
 inline f32 saturate(f32 v) { return clamp(v, 0.0f, 1.0f); }
 
+// IEEE 754 binary16 conversion (round to nearest even), for half-float texture uploads.
+u16 f32_to_f16(f32 v);
+f32 f16_to_f32(u16 h);
+
 struct vec2 {
     f32 x = 0, y = 0;
     constexpr vec2() = default;

@@ -25,6 +25,30 @@ bool image_read_png(const char* path, ImageRGBA8& out) {
     return true;
 }
 
+bool image_read(const char* path, ImageRGBA8& out) { return image_read_png(path, out); }
+
+bool image_read_memory(const u8* data, usize size, ImageRGBA8& out) {
+    int w = 0, h = 0, comp = 0;
+    unsigned char* pixels = stbi_load_from_memory(data, static_cast<int>(size), &w, &h, &comp, 4);
+    if (!pixels) return false;
+    out.width = static_cast<u32>(w);
+    out.height = static_cast<u32>(h);
+    out.pixels.assign(pixels, pixels + usize(w) * usize(h) * 4);
+    stbi_image_free(pixels);
+    return true;
+}
+
+bool image_read_hdr(const char* path, ImageRGBA32F& out) {
+    int w = 0, h = 0, comp = 0;
+    float* data = stbi_loadf(path, &w, &h, &comp, 4);
+    if (!data) return false;
+    out.width = static_cast<u32>(w);
+    out.height = static_cast<u32>(h);
+    out.pixels.assign(data, data + usize(w) * usize(h) * 4);
+    stbi_image_free(data);
+    return true;
+}
+
 ImageDiff image_compare(const ImageRGBA8& a, const ImageRGBA8& b, u32 threshold) {
     ImageDiff d;
     d.size_match = a.width == b.width && a.height == b.height && a.pixels.size() == b.pixels.size();
