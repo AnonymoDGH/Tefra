@@ -22,7 +22,7 @@ layout(push_constant) uniform Push {
     vec4 params;           // 48: x = still level (world y), y = surf height (m), z = camera world x, w = camera world z
 } pc;
 
-const uint OCEAN_GEOMETRY_WAVES = 10u;
+const uint OCEAN_GEOMETRY_WAVES = 16u; // Ocean::kGeometryWaves
 const uint OCEAN_DETAIL_WAVES = 14u;
 const float OCEAN_SHORE_RANGE = 2048.0; // Terrain::kShoreRange
 
@@ -107,13 +107,15 @@ OceanSample ocean_eval(vec2 xz, float t, Shore sh, bool want_foam, float footpri
     for (uint i = 0u; i < OCEAN_GEOMETRY_WAVES; ++i) {
         OceanWave w = pc.waves.w[i];
         vec2 D = w.dir_k.xy;
-        float k = w.dir_k.z, A = w.amp.x * deep, Q = w.amp.y;
+        float k = w.dir_k.z, Q = w.amp.y;
+        float keep = ocean_keep(k, footprint);
+        float A = w.amp.x * deep;
+        o.lost_var += 0.5 * (k * A) * (k * A) * (1.0 - keep);
+        A *= keep; // filtered by the grid cell (vertex) or the pixel (fragment)
         float th = k * dot(D, xz) - w.dir_k.w * t + w.amp.z;
         float c = cos(th), s = sin(th);
         o.disp += vec3(Q * A * D.x * c, A * s, Q * A * D.y * c);
-        float keep = ocean_keep(k, footprint);
-        o.slope += k * A * c * D * keep;
-        o.lost_var += 0.5 * (k * A) * (k * A) * (1.0 - keep);
+        o.slope += k * A * c * D;
         float qs = Q * k * A * s;
         jxx -= qs * D.x * D.x;
         jzz -= qs * D.y * D.y;

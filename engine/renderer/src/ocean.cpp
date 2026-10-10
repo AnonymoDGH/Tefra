@@ -81,7 +81,7 @@ void Ocean::build_waves() {
         const f32 k = kTwoPi / lambda;
         const f32 spread = (0.15f + 1.05f * t) * (i % 2 ? 1.0f : -1.0f) * (0.5f + 0.5f * rnd(i, 2));
         const f32 a = wind_a + spread;
-        const f32 amp = 0.07f / k;
+        const f32 amp = 0.07f / k * (0.6f + 0.8f * rnd(i, 4)); // jittered: no clean spectral comb
         w[i].dir_k = {std::cos(a), std::sin(a), k, std::sqrt(kGravity * k)};
         w[i].amp = {amp, 0.0f, rnd(i, 3) * kTwoPi, 0.0f};
         var += amp * amp * 0.5f;
@@ -101,7 +101,7 @@ void Ocean::build_waves() {
         const f32 a = wind_a + (rnd(i, 12) * 2.0f - 1.0f) * 1.8f;
         const f32 omega = std::sqrt(kGravity * k + 0.074f / 1000.0f * k * k * k); // + surface tension
         w[kGeometryWaves + i].dir_k = {std::cos(a), std::sin(a), k, omega};
-        w[kGeometryWaves + i].amp = {(0.075f - 0.035f * t) / k, 0.0f, rnd(i, 13) * kTwoPi, 0.0f};
+        w[kGeometryWaves + i].amp = {(0.042f - 0.018f * t) / k, 0.0f, rnd(i, 13) * kTwoPi, 0.0f};
     }
     waves_ = rhi::upload_buffer(dev_, w.data(), w.size() * sizeof(OceanWaveGPU), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                 "ocean_waves");

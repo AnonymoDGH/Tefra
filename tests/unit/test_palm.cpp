@@ -41,7 +41,7 @@ TEST_CASE("palm LOD budgets: LOD0 < 3000 triangles, LOD1 < 600") {
     }
 }
 
-TEST_CASE("palm trunk leans with a 5-15 deg top tangent and no NaNs") {
+TEST_CASE("palm trunk leans with an 8-34 deg top tangent and no NaNs") {
     const f32 h = 12.0f;
     for (u32 seed : {3u, 17u, 42u}) {
         const render::PalmMeshes pm = render::make_palm(seed, h);
@@ -57,9 +57,9 @@ TEST_CASE("palm trunk leans with a 5-15 deg top tangent and no NaNs") {
         REQUIRE(n > 0u);
         const f32 ox = static_cast<f32>(sx / n), oz = static_cast<f32>(sz / n);
         const f32 off = std::sqrt(ox * ox + oz * oz) / h;
-        // Offset ratio = tan(tilt) / 2 at the top: tilt 5-15 deg gives 0.044-0.134.
-        CHECK(off > 0.035f);
-        CHECK(off < 0.15f);
+        // Offset ratio = tan(tilt) / 2 at the top: tilt 8-34 deg gives 0.070-0.337.
+        CHECK(off > 0.06f);
+        CHECK(off < 0.36f);
         for (const render::Vertex& v : pm.crown_lod0.vertices) {
             CHECK(std::isfinite(v.pos[0]));
             CHECK(std::isfinite(v.pos[1]));

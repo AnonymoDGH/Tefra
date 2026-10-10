@@ -30,7 +30,8 @@ f32 smooth01(f32 e0, f32 e1, f32 x) {
 
 // ---- Trunk ------------------------------------------------------------------------------------------
 
-// Trunk centre line: a quadratic bend towards the lean direction (dx, dz). The top tangent has `tilt` = 5-15 deg.
+// Trunk centre line: a quadratic bend towards the lean direction (dx, dz). The top tangent has `tilt` = 8-34 deg
+// (beach palms lean out towards the light over the sand).
 struct Axis {
     f32 h = 1.0f;
     f32 dx = 1.0f, dz = 0.0f; // unit horizontal lean direction
@@ -260,7 +261,7 @@ PalmMeshes make_palm(u32 seed, f32 h) {
     out.height = h;
 
     const f32 r0 = rng.range(0.15f, 0.20f);
-    const f32 tilt = radians(rng.range(5.0f, 15.0f)), azim = radians(rng.range(-10.0f, 10.0f));
+    const f32 tilt = radians(rng.range(8.0f, 34.0f)), azim = radians(rng.range(-10.0f, 10.0f));
     Axis ax;
     ax.h = h;
     ax.dx = std::cos(azim);

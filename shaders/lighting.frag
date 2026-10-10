@@ -50,7 +50,16 @@ vec3 apply_fog_volumetric(Frame f, vec3 color, vec3 dir, float dist, vec4 vol) {
 
 // Caustics on the sea floor: the refracted sun is focused by the curvature of the surface. For a small-slope height
 // field h, the intensity at depth d is ~ 1 / (1 + d (1 - 1/n) lap(h)), n = 1.33. A few short wind waves give lap(h).
+float c_hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float c_noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(c_hash(i), c_hash(i + vec2(1, 0)), u.x), mix(c_hash(i + vec2(0, 1)), c_hash(i + vec2(1, 1)), u.x), u.y);
+}
 float caustics(vec2 x, float depth, float t) {
+    // Domain warp: real wave fields have no long-range order, so neither may the caustic net.
+    x += 1.6 * vec2(c_noise(x / 5.0 + t * 0.03), c_noise(x / 5.0 + 9.7 - t * 0.03)) +
+         0.6 * vec2(c_noise(x / 1.7 + 3.3), c_noise(x / 1.7 + 5.1));
     // Nine short waves on golden-angle directions (no visible lattice), wavelengths 0.45..2.4 m.
     float lap = 0.0;
     for (int i = 0; i < 9; ++i) {
@@ -180,7 +189,7 @@ void main() {
         if (uw > 0.0) {
             vec3 sig = f.water_absorption.xyz + f.water_scattering.xyz;
             float c = caustics(wp.xz + L.xz / max(L.y, 0.2) * uw, uw, f.camera_pos.w);
-            float amount = smoothstep(0.03, 0.5, uw) * exp(-uw * 0.12);
+            float amount = smoothstep(0.03, 0.5, uw) * exp(-uw * 0.2);
             sun_tint = exp(-sig * uw / max(L.y, 0.15)) * mix(1.0, c, amount);
             amb_tint = exp(-sig * uw * 1.3);
             spec_keep = 1.0 - smoothstep(0.0, 0.08, uw);

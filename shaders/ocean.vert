@@ -10,7 +10,9 @@ void main() {
     vec2 xz = pc.params.zw + g.xy;
     Shore sh = ocean_shore(xz);
     // Far rings: waves shorter than ~4 cells alias; their height fades with the ring radius.
-    OceanSample o = ocean_eval(xz, pc.time, sh, false, 0.0);
+    // Grid cell size (m): ring radius times the angular step of the 192 radial lines.
+    float cell = max(g.z * 6.2831853 / 192.0, 0.05);
+    OceanSample o = ocean_eval(xz, pc.time, sh, false, cell * 1.2);
     float fade = 1.0 - smoothstep(600.0, 3000.0, g.z);
     vec3 world = vec3(xz.x, pc.params.x, xz.y) + o.disp * fade;
     v_pos = world - f.camera_pos.xyz;

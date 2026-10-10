@@ -44,8 +44,9 @@ void main() {
     }
     // Capillary micro detail: three octaves of drifting noise slopes (no periodic interference pattern).
     {
-        const vec3 oct[3] = vec3[](vec3(0.55, 0.035, 0.9), vec3(0.22, 0.03, 1.4), vec3(0.09, 0.025, 2.1));
-        for (int i = 0; i < 3; ++i) {
+        const vec3 oct[5] = vec3[](vec3(7.0, 0.035, 0.35), vec3(2.6, 0.035, 0.55), vec3(0.55, 0.035, 0.9),
+                                   vec3(0.22, 0.03, 1.4), vec3(0.09, 0.025, 2.1));
+        for (int i = 0; i < 5; ++i) {
             float scale = oct[i].x; // m per noise cell
             float keep = 1.0 - smoothstep(0.3, 0.8, footprint / scale);
             vec2 drift = vec2(0.31, 0.95) * t * oct[i].z * 0.12;
@@ -124,7 +125,7 @@ void main() {
     // Foam: breaking crests, the swash line, wind whitecaps. Lit as a rough white diffuser.
     // Breaking foam is never a solid band: patches of it drift with the crest.
     float patches = ocean_vnoise(v_xz / 6.0 + vec2(t * 0.05, 0.0)) * 0.6 + ocean_vnoise(v_xz / 2.2 - t * 0.08) * 0.4;
-    float cov = o.break_foam * mix(0.35, 0.95, patches);
+    float cov = o.break_foam * mix(0.15, 0.8, patches * patches);
     // Swash: a thin lace line at the leading edge of the water sheet, broken up along the shore.
     cov = max(cov, (1.0 - smoothstep(0.015, 0.09, local_depth)) * o.surf * mix(0.25, 0.85, patches));
     cov = max(cov, smoothstep(0.22, 0.02, o.jacobian) * 0.6 * smoothstep(3.0, 10.0, sh.depth));

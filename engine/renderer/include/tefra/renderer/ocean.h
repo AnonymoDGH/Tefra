@@ -35,7 +35,7 @@ struct OceanDesc {
 class Ocean {
   public:
     static constexpr u32 kSectors = 24; // angular sectors of the grid, culled against the view on the CPU
-    static constexpr u32 kGeometryWaves = 10;
+    static constexpr u32 kGeometryWaves = 16;
     static constexpr u32 kDetailWaves = 14;
 
     Ocean(const rhi::Device& dev, const OceanDesc& desc);
