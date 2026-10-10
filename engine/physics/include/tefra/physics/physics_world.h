@@ -31,9 +31,11 @@ struct RaycastResult {
     f32 distance = 0.0f;                 // from the origin (m)
 };
 
-// Touched(partA, partB): fired once per new contact pair (order is not guaranteed). Called from step() on the calling
-// thread, never from Jolt's worker threads. Listeners may change the model.
-using TouchedFn = std::function<void(world::Instance& a, world::Instance& b)>;
+// Touched(a, b, false) once per new contact (or per new overlap of a character with a part that has CanTouch); then
+// Touched(a, b, true) = TouchEnded when the contact ends. Parts that are sensors (CanCollide = false) touch too. A
+// character's touches are reported with its HumanoidRootPart as `a`. Order within a pair is not guaranteed. Called
+// from step() on the calling thread, never from Jolt's worker threads. Listeners may change the model.
+using TouchedFn = std::function<void(world::Instance& a, world::Instance& b, bool ended)>;
 
 class PhysicsWorld {
   public:

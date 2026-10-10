@@ -1,12 +1,13 @@
 #pragma once
 
-// Native <-> managed interop table for the C# scripting layer (spec M3, ADR-013).
+// Native <-> managed interop table for the C# scripting layer (spec M3, ADR-013; signals and input in M3b).
 //
 // The C# side mirrors these structs in managed/Tefra.Engine/src/Native.cs. Keep both in sync and bump
 // TEFRA_SCRIPT_ABI_VERSION on any change. Only plain C types cross the boundary: no exceptions, no C++ objects.
 //
 // Ownership: strings returned by native functions point into the DataModel and stay valid until the next call
-// that mutates the model. The managed side copies them immediately.
+// that mutates the model. The managed side copies them immediately. Strings inside TefraEvent point into the
+// host's queue and stay valid for the duration of the dispatch call only.
 
 #include <stdint.h>
 
@@ -14,7 +15,7 @@
 extern "C" {
 #endif
 
-#define TEFRA_SCRIPT_ABI_VERSION 1u
+#define TEFRA_SCRIPT_ABI_VERSION 2u
 
 // Log levels: same numbering as tefra::LogLevel.
 enum TefraLogLevel {
@@ -25,8 +26,14 @@ enum TefraLogLevel {
     TEFRA_LOG_ERROR = 4
 };
 
-// Change notifications queued by the native side while a script run is active.
-enum TefraEventKind { TEFRA_EVENT_CHANGED = 1, TEFRA_EVENT_REMOVING = 2 };
+// Notifications queued by the native side while a script run is active, delivered once per step.
+enum TefraEventKind {
+    TEFRA_EVENT_CHANGED = 1,    // id, prop
+    TEFRA_EVENT_REMOVING = 2,   // id
+    TEFRA_EVENT_ADDED = 3,      // id (every instance of an added subtree)
+    TEFRA_EVENT_REPARENTED = 4, // id, other = old parent (0 if none)
+    TEFRA_EVENT_SIGNAL = 5      // gameplay signal: id = source, other, number, name ("Touched"...), text
+};
 
 // A property value in flat form. `type` is a tefra::world::PropType. Bool/Int/Float/Enum use n[0]; Vector3 and
 // Color3 use n[0..2]; String uses str/str_len (UTF-8, not NUL-terminated semantics); Ref uses ref (0 = nil).
@@ -38,10 +45,15 @@ typedef struct TefraValue {
     uint64_t ref;
 } TefraValue;
 
+// 48 bytes on LP64 and LLP64: the 8-byte fields keep the layout free of padding.
 typedef struct TefraEvent {
-    uint32_t kind; // TefraEventKind
-    uint32_t prop; // property index (Changed only)
-    uint64_t id;   // instance id
+    uint32_t kind;    // TefraEventKind
+    uint32_t prop;    // property index (Changed only)
+    uint64_t id;      // instance id (the source for signals)
+    uint64_t other;   // second instance (Touched: the other part; Reparented: old parent); 0 = none
+    double number;    // signals: e.g. the new health for HealthChanged
+    const char* name; // signals: event name, NUL-terminated
+    const char* text; // signals: text payload (key name), NUL-terminated, "" when unused
 } TefraEvent;
 
 // Functions implemented by the host and handed to the managed side in Bridge.Init. Instance ids are u64; 0 is nil.
@@ -66,14 +78,23 @@ typedef struct TefraNativeApi {
     uint64_t (*clone)(uint64_t id, uint64_t parent);
     uint64_t (*find_path)(const char* path);
     void (*log)(int32_t level, const char* message);
+    // Workspace:Raycast. origin[3], direction[3] (need not be unit), out[7] = position[3], normal[3], distance.
+    // Returns the hit instance id, 0 on a miss or when no game is running.
+    uint64_t (*raycast)(const double* origin, const double* direction, double max_distance, double* out);
+    int32_t (*input_key_down)(int32_t key_code);     // tefra::Key index; 1 = held this frame
+    int32_t (*input_mouse_down)(int32_t button);     // 0 = left, 1 = right, 2 = middle
+    int32_t (*input_mouse_location)(double* xy_out); // game-view pixels (top-left origin); 1 = ok
+    uint64_t (*root)(void);                          // the DataModel root (source of InputBegan / InputEnded)
 } TefraNativeApi;
 
 // Functions exported by the managed side. The host fills nothing here; the managed side fills it in Init.
-// compile: compiles every enabled Script without running it. Returns the number that compiled, -1 on fatal error.
-// start:   compiles if needed, then calls Start() on every compiled script. Returns the number started, -1 on error.
-// step:    advances Heartbeat, tasks and Update(dt). Returns 0.
-// dispatch: delivers the change events queued since the last step.
-// stop:    drops every script and unloads its assembly context.
+// compile:  prepares the session: collects the scripts that should run and compiles them (and the ModuleScripts)
+//           without running them. Returns the number that compiled, -1 on fatal error.
+// start:    compiles if needed, then calls Start() on every compiled script. Returns the number started, -1 on error.
+// step:     applies pending structural changes (scripts that appeared, moved or were destroyed), advances Heartbeat,
+//           tasks and Update(dt). Returns 0.
+// dispatch: delivers the events queued since the last step (changes, structure, signals).
+// stop:     drops every script and unloads its assembly context.
 typedef struct TefraManagedApi {
     uint32_t abi_version;
     int32_t (*compile)(void);

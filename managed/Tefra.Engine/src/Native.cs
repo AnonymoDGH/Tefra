@@ -1,4 +1,4 @@
-// Mirror of engine/scripting/include/tefra/scripting/abi.h. Keep the layouts identical; ABI version 1.
+// Mirror of engine/scripting/include/tefra/scripting/abi.h. Keep the layouts identical; ABI version 2.
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -18,10 +18,20 @@ namespace Tefra
     [StructLayout(LayoutKind.Sequential)]
     internal unsafe struct TefraEvent
     {
-        public uint kind; // 1 Changed, 2 Removing
+        public uint kind; // EventKind: 1 Changed, 2 Removing, 3 Added, 4 Reparented, 5 Signal
         public uint prop;
         public ulong id;
+        public ulong other;
+        public double number;
+        public byte* name; // signals only, NUL-terminated UTF-8
+        public byte* text;
     }
+
+    internal static class EventKind
+    {
+        public const uint Changed = 1, Removing = 2, Added = 3, Reparented = 4, Signal = 5;
+    }
+
 
     internal static class PropTypes
     {
@@ -51,6 +61,11 @@ namespace Tefra
         public delegate* unmanaged<ulong, ulong, ulong> clone;
         public delegate* unmanaged<byte*, ulong> find_path;
         public delegate* unmanaged<int, byte*, void> log;
+        public delegate* unmanaged<double*, double*, double, double*, ulong> raycast;
+        public delegate* unmanaged<int, int> input_key_down;
+        public delegate* unmanaged<int, int> input_mouse_down;
+        public delegate* unmanaged<double*, int> input_mouse_location;
+        public delegate* unmanaged<ulong> root;
     }
 
     // Managed function table (C: TefraManagedApi), filled by Bridge.Init.
@@ -69,7 +84,7 @@ namespace Tefra
     // copied out on the way back, so no pointer outlives the call that produced it.
     internal static unsafe class Native
     {
-        public const uint AbiVersion = 1;
+        public const uint AbiVersion = 2;
         public static NativeApi* Api;
 
         public static bool IsReady => Api != null;
@@ -178,6 +193,32 @@ namespace Tefra
         public static ulong FindPath(string path)
         {
             fixed (byte* p = Z(path)) return Api->find_path(p);
+        }
+
+        public static ulong Root() => Api->root();
+
+        // Returns the hit instance id (0 = miss) and fills position, normal and distance.
+        public static ulong Raycast(double ox, double oy, double oz, double dx, double dy, double dz, double maxDistance,
+            out double[] hit)
+        {
+            hit = new double[7];
+            double* o = stackalloc double[3];
+            double* d = stackalloc double[3];
+            o[0] = ox; o[1] = oy; o[2] = oz;
+            d[0] = dx; d[1] = dy; d[2] = dz;
+            fixed (double* h = hit) return Api->raycast(o, d, maxDistance, h);
+        }
+
+        public static bool KeyDown(int keyCode) => Api->input_key_down(keyCode) != 0;
+
+        public static bool MouseDown(int button) => Api->input_mouse_down(button) != 0;
+
+        public static void MouseLocation(out double x, out double y)
+        {
+            double* xy = stackalloc double[2];
+            if (Api->input_mouse_location(xy) == 0) { x = 0; y = 0; return; }
+            x = xy[0];
+            y = xy[1];
         }
 
         // Typed helpers over TefraValue. Each returns the default value when the instance or property is missing.

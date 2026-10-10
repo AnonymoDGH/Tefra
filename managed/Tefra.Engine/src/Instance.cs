@@ -227,23 +227,114 @@ namespace Tefra
             Cache.Remove(inst.Id);
         }
 
-        // Called by the engine loop: change and removal notifications queued by the DataModel since the last step.
+        // Called by the engine loop: notifications queued by the DataModel since the last step (changes, structure,
+        // gameplay signals). Structure changes only mark the script set dirty; the next step re-scans it.
         internal static unsafe void DispatchEvents(TefraEvent* events, uint count)
         {
             for (uint i = 0; i < count; i++)
             {
                 TefraEvent e = events[i];
+                if (e.kind == EventKind.Added || e.kind == EventKind.Reparented)
+                {
+                    ScriptEngine.MarkDirty();
+                    continue;
+                }
+                if (e.kind == EventKind.Signal)
+                {
+                    DispatchSignal(e);
+                    continue;
+                }
                 Instance inst;
                 if (!Cache.TryGetValue(e.id, out inst)) continue;
-                if (e.kind == 1)
+                if (e.kind == EventKind.Changed)
                 {
                     string name = Native.PropName(e.id, e.prop);
-                    if (name != null) inst.RaiseChanged(name);
+                    if (name == null) continue;
+                    if (inst is BaseScript && (name == "Source" || name == "Enabled")) ScriptEngine.MarkDirty();
+                    inst.RaiseChanged(name);
                 }
-                else if (e.kind == 2)
+                else if (e.kind == EventKind.Removing)
                 {
+                    ScriptEngine.MarkDirty();
                     Forget(inst);
                     inst.RaiseDestroying();
+                }
+            }
+        }
+
+        // Routes a gameplay signal. Input signals come from the DataModel root and go to UserInputService; everything
+        // else goes to the wrapper of its source, when a script has one (instances nobody listens to have none).
+        private static unsafe void DispatchSignal(TefraEvent e)
+        {
+            string name = e.name == null ? "" : Native.FromUtf8((byte*)e.name) ?? "";
+            if (name == "InputBegan" || name == "InputEnded")
+            {
+                string key = e.text == null ? "" : Native.FromUtf8((byte*)e.text) ?? "";
+                UserInputService.Dispatch(name == "InputBegan", key);
+                return;
+            }
+            Instance source;
+            if (!Cache.TryGetValue(e.id, out source)) return;
+            Instance other = e.other == 0 ? null : FromId(e.other);
+            string text = e.text == null ? "" : Native.FromUtf8((byte*)e.text) ?? "";
+            source.RaiseSignal(name, other, e.number, text);
+        }
+
+        // ---- Gameplay signals (Touched, Activated, Died, ...) -----------------------------------------------------
+
+        private Dictionary<string, Delegate> _signals;
+
+        // Subscribes a handler to a signal. The wrapper keeps its handlers until Stop, so the handlers stay alive.
+        internal void AddSignal(string name, Delegate handler)
+        {
+            if (handler == null) return;
+            if (_signals == null) _signals = new Dictionary<string, Delegate>();
+            Delegate current;
+            _signals[name] = _signals.TryGetValue(name, out current) ? Delegate.Combine(current, handler) : handler;
+        }
+
+        internal void RemoveSignal(string name, Delegate handler)
+        {
+            Delegate current;
+            if (_signals == null || handler == null || !_signals.TryGetValue(name, out current)) return;
+            Delegate rest = Delegate.Remove(current, handler);
+            if (rest == null) _signals.Remove(name);
+            else _signals[name] = rest;
+        }
+
+        // Calls the handlers of a signal with the argument its signature takes (see the event declarations).
+        internal void RaiseSignal(string name, Instance other, double number, string text)
+        {
+            if (_signals == null) return;
+            Delegate handlers;
+            if (!_signals.TryGetValue(name, out handlers)) return;
+            foreach (Delegate d in handlers.GetInvocationList())
+            {
+                try
+                {
+                    switch (name)
+                    {
+                        case "HealthChanged":
+                            ((Action<float>)d)((float)number);
+                            break;
+                        case "Touched":
+                        case "TouchEnded":
+                        case "CharacterAdded":
+                        case "CharacterRemoving":
+                            ((Action<Instance>)d)(other);
+                            break;
+                        case "InputBegan":
+                        case "InputEnded":
+                            ((Action<InputObject>)d)(new InputObject(text));
+                            break;
+                        default:
+                            ((Action)d)();
+                            break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Native.Log(Native.LogError, FullName + "." + name + " handler failed: " + ex);
                 }
             }
         }
@@ -255,6 +346,7 @@ namespace Tefra
             {
                 inst.Changed = null;
                 inst.Destroying = null;
+                inst._signals = null;
             }
             Cache.Clear();
         }

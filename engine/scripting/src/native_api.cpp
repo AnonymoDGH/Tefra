@@ -12,6 +12,8 @@ namespace {
 
 world::DataModel* g_model = nullptr;
 const LogCallback* g_log = nullptr;
+const InputState* g_input = nullptr;
+const RaycastFn* g_raycaster = nullptr;
 
 world::Instance* find(std::uint64_t id) { return g_model && id != 0 ? g_model->find(id) : nullptr; }
 
@@ -47,6 +49,10 @@ void set_session(world::DataModel* model, const LogCallback* log) {
     g_model = model;
     g_log = log;
 }
+
+void set_input(const InputState* input) { g_input = input; }
+
+void set_raycaster(const RaycastFn* fn) { g_raycaster = fn; }
 
 void session_log(LogLevel level, std::string_view message) {
     if (g_log && *g_log) {
@@ -182,15 +188,69 @@ void tefra_script_log(std::int32_t level, const char* message) {
     session_log(static_cast<tefra::LogLevel>(clamped), message ? message : "");
 }
 
+std::uint64_t tefra_script_raycast(const double* origin, const double* direction, double max_distance, double* out) {
+    if (!current_model() || !g_raycaster || !*g_raycaster || !origin || !direction || !out) return 0;
+    RayHit hit;
+    const vec3 o{static_cast<f32>(origin[0]), static_cast<f32>(origin[1]), static_cast<f32>(origin[2])};
+    const vec3 d{static_cast<f32>(direction[0]), static_cast<f32>(direction[1]), static_cast<f32>(direction[2])};
+    if (!(*g_raycaster)(o, d, static_cast<f32>(max_distance), hit) || !hit.instance) return 0;
+    out[0] = hit.position.x;
+    out[1] = hit.position.y;
+    out[2] = hit.position.z;
+    out[3] = hit.normal.x;
+    out[4] = hit.normal.y;
+    out[5] = hit.normal.z;
+    out[6] = hit.distance;
+    return hit.instance->id();
+}
+
+std::int32_t tefra_script_input_key_down(std::int32_t key_code) {
+    if (!g_input || key_code <= 0 || key_code >= static_cast<std::int32_t>(Key::Count)) return 0;
+    return g_input->key(static_cast<Key>(key_code)) ? 1 : 0;
+}
+
+std::int32_t tefra_script_input_mouse_down(std::int32_t button) {
+    if (!g_input || button < 0 || button > 2) return 0;
+    return g_input->mouse_down[button] ? 1 : 0;
+}
+
+std::int32_t tefra_script_input_mouse_location(double* xy_out) {
+    if (!xy_out) return 0;
+    xy_out[0] = g_input ? static_cast<double>(g_input->mouse_pos.x) : 0.0;
+    xy_out[1] = g_input ? static_cast<double>(g_input->mouse_pos.y) : 0.0;
+    return 1;
+}
+
+std::uint64_t tefra_script_root() { return current_model() ? current_model()->root().id() : 0; }
+
 } // extern "C"
 
 const TefraNativeApi* native_table() {
     static const TefraNativeApi table = {
-        TEFRA_SCRIPT_ABI_VERSION, tefra_script_get_prop,  tefra_script_set_prop,   tefra_script_prop_index,
-        tefra_script_prop_type,   tefra_script_prop_name, tefra_script_class_name, tefra_script_is_a,
-        tefra_script_create,      tefra_script_destroy,   tefra_script_set_parent, tefra_script_parent,
-        tefra_script_child_count, tefra_script_child_at,  tefra_script_find_child, tefra_script_service,
-        tefra_script_clone,       tefra_script_find_path, tefra_script_log,
+        TEFRA_SCRIPT_ABI_VERSION,
+        tefra_script_get_prop,
+        tefra_script_set_prop,
+        tefra_script_prop_index,
+        tefra_script_prop_type,
+        tefra_script_prop_name,
+        tefra_script_class_name,
+        tefra_script_is_a,
+        tefra_script_create,
+        tefra_script_destroy,
+        tefra_script_set_parent,
+        tefra_script_parent,
+        tefra_script_child_count,
+        tefra_script_child_at,
+        tefra_script_find_child,
+        tefra_script_service,
+        tefra_script_clone,
+        tefra_script_find_path,
+        tefra_script_log,
+        tefra_script_raycast,
+        tefra_script_input_key_down,
+        tefra_script_input_mouse_down,
+        tefra_script_input_mouse_location,
+        tefra_script_root,
     };
     return &table;
 }

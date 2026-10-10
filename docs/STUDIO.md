@@ -85,6 +85,45 @@ public class Spinner : TefraScript
 ```
 API completa: `docs/research/m3-csharp/REPORT.md`. Incluye `Instance.New`, `FindFirstChild`, `Game.Workspace`, `RunService.Heartbeat`, `await Task.Wait(s)`, `Debug.Log`…
 
+### Dónde corre cada script
+- **Script**: dentro de `Workspace` o `ServerScriptService`. Un script creado durante Play (con `Instance.New`) arranca en el paso siguiente.
+- **LocalScript**: dentro de un `Player` (`PlayerGui`, `PlayerScripts`) o dentro del personaje de un jugador. Las copias de `StarterGui`, `StarterPlayer` y `StarterCharacterScripts` se crean al aparecer el personaje; las plantillas no corren.
+- **ModuleScript**: código compartido. Sus `public` y `static` están disponibles en todos los scripts de la partida (`ObbyConfig.Stages`). Se compila al empezar Play; un módulo nuevo se ve en el siguiente Play.
+
+### Eventos y entrada
+```csharp
+public class Checkpoint : TefraScript
+{
+    public override void Start()
+    {
+        var part = (SpawnLocation)Parent;
+        part.Touched += other =>
+        {
+            var player = Players.GetPlayerFromCharacter(other.Parent);
+            if (player != null) player.RespawnLocation = part;
+        };
+    }
+}
+
+public class Hud : TefraScript   // LocalScript dentro de un ScreenGui de StarterGui
+{
+    public override void Start()
+    {
+        var reset = Script.Parent.FindFirstChild("Reset") as TextButton;
+        reset.Activated += () =>
+        {
+            var h = Players.LocalPlayer.Character?.FindFirstChildOfClass("Humanoid") as Humanoid;
+            if (h != null) h.Health = 0;
+        };
+        UserInputService.InputBegan += io => { if (io.KeyCode == KeyCode.E) Debug.Log("E"); };
+    }
+}
+```
+- Señales: `Touched`/`TouchEnded` (piezas y personajes; un sensor con `CanCollide = false` también las recibe), `Activated`/`MouseButton1Click` (botones), `Died`/`HealthChanged` (Humanoid), `CharacterAdded`/`CharacterRemoving` (Player), `Ended` (Sound).
+- `Workspace.Raycast(origen, dirección, distancia)` devuelve el primer sólido o `null`.
+- Para matar o curar: `humanoid.Health = 0` o `humanoid.TakeDamage(10)`. Una caída fuera del mundo también mata.
+- Para plataformas que se mueven: cambia `Position` cada paso desde un script; la pieza se vuelve cinemática y lleva a quien esté encima.
+
 ## IA (MCP)
 Studio sirve MCP en `http://127.0.0.1:44755/mcp`. Con Claude Code:
 ```sh
