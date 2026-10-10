@@ -34,7 +34,7 @@ struct MeshPush {
 };
 struct LightingPush {
     VkDeviceAddress frame;
-    u32 depth, rt0, rt1, rt2;
+    u32 depth, rt0, rt1, rt2, ao;
 };
 struct TonemapPush {
     VkDeviceAddress frame;
@@ -130,14 +130,15 @@ Renderer::~Renderer() {
         rhi::destroy_image(dev_, history_[i]);
     }
     for (VkPipeline p : {p_gbuffer_, p_gbuffer_2s_, p_shadow_, p_lighting_, p_tonemap_, p_skyview_, p_terrain_,
-                         p_terrain_shadow_, p_veg_, p_veg_2s_, p_veg_shadow_, p_veg_cull_, p_water_, p_taa_})
+                         p_terrain_shadow_, p_veg_, p_veg_2s_, p_veg_shadow_, p_veg_cull_, p_water_, p_taa_, p_gtao_})
         if (p) vkDestroyPipeline(dev_.device(), p, nullptr);
     vkDestroyPipelineLayout(dev_.device(), layout_, nullptr);
 }
 
 void Renderer::create_pipelines(VkFormat output_format) {
-    for (VkPipeline* p : {&p_gbuffer_, &p_gbuffer_2s_, &p_shadow_, &p_lighting_, &p_tonemap_, &p_skyview_, &p_terrain_,
-                          &p_terrain_shadow_, &p_veg_, &p_veg_2s_, &p_veg_shadow_, &p_veg_cull_, &p_water_, &p_taa_}) {
+    for (VkPipeline* p :
+         {&p_gbuffer_, &p_gbuffer_2s_, &p_shadow_, &p_lighting_, &p_tonemap_, &p_skyview_, &p_terrain_,
+          &p_terrain_shadow_, &p_veg_, &p_veg_2s_, &p_veg_shadow_, &p_veg_cull_, &p_water_, &p_taa_, &p_gtao_}) {
         if (*p) vkDestroyPipeline(dev_.device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -159,6 +160,7 @@ void Renderer::create_pipelines(VkFormat output_format) {
     VkShaderModule water_vs = rhi::load_shader(dev_, "water.vert");
     VkShaderModule water_fs = rhi::load_shader(dev_, "water.frag");
     VkShaderModule taa_fs = rhi::load_shader(dev_, "taa.frag");
+    VkShaderModule gtao_fs = rhi::load_shader(dev_, "gtao.frag");
     p_veg_cull_ = rhi::create_compute_pipeline(dev_, veg_cull_cs, layout_, "veg_cull");
 
     auto rp_g = compat_pass(dev_, {kRt0, kRt1, kRt2, kRt3}, kDepth);
@@ -242,6 +244,11 @@ void Renderer::create_pipelines(VkFormat output_format) {
     ta.render_pass = rp_a.pass;
     ta.name = "taa";
     p_taa_ = rhi::create_graphics_pipeline(dev_, ta);
+    auto rp_o = compat_pass(dev_, {VK_FORMAT_R8_UNORM}, VK_FORMAT_UNDEFINED);
+    ta.fs = gtao_fs;
+    ta.render_pass = rp_o.pass;
+    ta.name = "gtao";
+    p_gtao_ = rhi::create_graphics_pipeline(dev_, ta);
 
     auto rp_t = compat_pass(dev_, {output_format}, VK_FORMAT_UNDEFINED);
     l.fs = tone_fs;
@@ -255,10 +262,10 @@ void Renderer::create_pipelines(VkFormat output_format) {
     l.name = "skyview";
     p_skyview_ = rhi::create_graphics_pipeline(dev_, l);
 
-    for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k, &rp_w, &rp_a}) rhi::destroy_render_pass(dev_, *rp);
+    for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k, &rp_w, &rp_a, &rp_o}) rhi::destroy_render_pass(dev_, *rp);
     for (VkShaderModule m :
          {mesh_vs, gbuf_fs, shadow_vs, fs_vs, light_fs, tone_fs, sky_fs, terrain_vs, terrain_fs, terrain_shadow_vs,
-          veg_vs, veg_shadow_vs, shadow_alpha_fs, veg_cull_cs, water_vs, water_fs, taa_fs})
+          veg_vs, veg_shadow_vs, shadow_alpha_fs, veg_cull_cs, water_vs, water_fs, taa_fs, gtao_fs})
         vkDestroyShaderModule(dev_.device(), m, nullptr);
 }
 
@@ -691,12 +698,42 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             });
     }
 
+    rg::TextureHandle ao;
+    if (s.gtao) {
+        const VkExtent2D ao_ext{max(1u, ext.width / 2), max(1u, ext.height / 2)};
+        graph_.add_pass(
+            "gtao", rg::PassType::Raster,
+            [&](rg::PassBuilder& b) {
+                ao = b.create({VK_FORMAT_R8_UNORM, ao_ext.width, ao_ext.height, "gtao"});
+                b.read(depth, rg::Access::Sampled);
+                b.read(rt1, rg::Access::Sampled);
+                b.color(ao, rg::Load::DontCare);
+            },
+            [=, this](const rg::PassContext& ctx) {
+                struct GtaoPush {
+                    VkDeviceAddress frame;
+                    u32 depth, normals;
+                    f32 radius;
+                    u32 pad[3]; // GLSL std430 aligns the vec4 to 16 bytes
+                    vec4 sizes;
+                } gp{frame_addr,       ctx.sampled(depth),
+                     ctx.sampled(rt1), s.gtao_radius,
+                     {0, 0, 0},        {f32(ext.width), f32(ext.height), f32(ao_ext.width), f32(ao_ext.height)}};
+                static_assert(offsetof(GtaoPush, sizes) == 32);
+                vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_gtao_);
+                vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(gp), &gp);
+                vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
+            });
+    }
+
     graph_.add_pass(
         "lighting", rg::PassType::Raster,
         [&](rg::PassBuilder& b) {
             hdr = b.create({hdr_format_, ext.width, ext.height, "hdr"});
             for (auto h : {depth, rt0, rt1, rt2, shadow}) b.read(h, rg::Access::Sampled);
             if (skyview.valid()) b.read(skyview, rg::Access::Sampled);
+            if (ao.valid()) b.read(ao, rg::Access::Sampled);
             b.color(hdr, rg::Load::DontCare);
         },
         [=, this, &fc](const rg::PassContext& ctx) {
@@ -707,7 +744,8 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             vmaFlushAllocation(dev_.allocator(), frames_[slot].constants.allocation, 0, VK_WHOLE_SIZE);
             vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
             vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_lighting_);
-            LightingPush p{frame_addr, ctx.sampled(depth), ctx.sampled(rt0), ctx.sampled(rt1), ctx.sampled(rt2)};
+            LightingPush p{frame_addr,       ctx.sampled(depth), ctx.sampled(rt0),
+                           ctx.sampled(rt1), ctx.sampled(rt2),   ao.valid() ? ctx.sampled(ao) : 0xFFFFFFFFu};
             vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
             vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
         });

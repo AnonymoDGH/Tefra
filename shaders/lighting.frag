@@ -6,7 +6,7 @@
 #include "common/cube.glsl"
 #include "common/atmosphere.glsl"
 #include "common/fog.glsl"
-layout(push_constant) uniform Push { FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; } pc;
+layout(push_constant) uniform Push { FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; uint ao; } pc;
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
 
@@ -85,6 +85,11 @@ void main() {
     vec4 g2 = texelFetch(TEX2D(pc.rt2, SMP_NEAREST_CLAMP), px, 0);
     vec3 albedo = g0.rgb;
     float ao = g0.a;
+    if (pc.ao != 0xFFFFFFFFu) {
+        // Screen-space AO (half resolution, bilinear) multiplies the material AO; it only affects indirect light.
+        float ssao = textureLod(TEX2D(pc.ao, SMP_LINEAR_CLAMP), v_uv, 0.0).r;
+        ao *= ssao;
+    }
     vec3 N = oct_decode01(g1.xy);
     float rough = max(g1.z, 0.03);
     float metal = g2.r;

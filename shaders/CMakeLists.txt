@@ -21,4 +21,5 @@ tefra_compile_shaders(
         ${CMAKE_CURRENT_SOURCE_DIR}/shadow_alpha.frag
         ${CMAKE_CURRENT_SOURCE_DIR}/water.vert
         ${CMAKE_CURRENT_SOURCE_DIR}/water.frag
-        ${CMAKE_CURRENT_SOURCE_DIR}/taa.frag)
+        ${CMAKE_CURRENT_SOURCE_DIR}/taa.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/gtao.frag)
