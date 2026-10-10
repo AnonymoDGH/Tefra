@@ -23,6 +23,9 @@ struct SceneSetup {
 void build_valley_scene(render::Scene& scene, render::Environment& env, const render::Atmosphere& atmo,
                         const render::Terrain& terrain, render::Vegetation& vegetation, SceneSetup& setup);
 
+// "palms": a grove of procedural coconut palms on sand under the physical atmosphere.
+void build_palms_scene(render::Scene& scene, render::Environment& env, const render::Atmosphere& atmo,
+                       render::Vegetation& vegetation, SceneSetup& setup);
 // Builds the IBL environment from the atmosphere for the current sun direction.
 void build_atmosphere_environment(const render::Atmosphere& atmo, render::Environment& env, vec3 sun_dir);
 // "materials_sky": the materials scene under the physical atmosphere with morning valley fog.

@@ -179,6 +179,10 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             build_valley_scene(*scene, *env, *atmosphere, *terrain, *vegetation, setup);
             water = std::make_unique<render::Water>(*device, *terrain);
             built = true;
+        } else if (cfg.scene == "palms") {
+            vegetation = std::make_unique<render::Vegetation>(*device, *scene);
+            build_palms_scene(*scene, *env, *atmosphere, *vegetation, setup);
+            built = true;
         } else if (cfg.scene == "gltf") {
             built = build_gltf_scene(*scene, *env, setup, cfg.gltf_path, cfg.hdr_path);
         }

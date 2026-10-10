@@ -1,6 +1,7 @@
 #include "scenes.h"
 
 #include "tefra/renderer/gltf.h"
+#include "tefra/renderer/palm.h"
 #include "tefra/rhi/upload.h"
 
 #include "tefra/core/fs.h"
@@ -9,6 +10,7 @@
 
 #include <bit>
 #include <cmath>
+#include <iterator>
 
 namespace tefra::app {
 namespace {
@@ -391,6 +393,122 @@ void build_valley_scene(render::Scene& scene, render::Environment& env, const re
     setup.camera.pitch = radians(3.0f);
     setup.camera.fovy = radians(60.0f);
     TEFRA_LOG_INFO("Valley camera: --camera %.1f,%.1f,%.1f,185,3", x, setup.camera.position.y, z);
+}
+
+// "palms": a small grove of procedural coconut palms on sand, morning-to-noon sun ~40 deg up.
+void build_palms_scene(render::Scene& scene, render::Environment& env, const render::Atmosphere& atmo,
+                       render::Vegetation& veg, SceneSetup& setup) {
+    setup.use_atmosphere = true;
+    setup.use_terrain = false;
+    setup.settings.sun_direction = normalize(vec3{0.42f, 0.64f, -0.64f}); // ~40 deg elevation
+    setup.settings.ev100 = 14.0f;
+    setup.settings.fog_density = 0.0015f;
+    setup.settings.fog_falloff = 0.05f;
+    setup.settings.cascades = 3;
+    setup.settings.shadow_distance = 120.0f;
+    setup.settings.grade_saturation = 1.1f;
+    build_atmosphere_environment(atmo, env, setup.settings.sun_direction);
+
+    // Sand ground (linear albedo of dry beach sand) and the palm materials.
+    const u32 sand_plane = scene.add_mesh(render::make_plane(400.0f, 400.0f, 1.0f));
+    const u32 sand_mat = scene.add_material(plain(scene, {0.42f, 0.36f, 0.26f}, 0.9f, 0.0f));
+    render::Instance ground;
+    ground.mesh = sand_plane;
+    ground.material = sand_mat;
+    scene.add_instance(ground);
+
+    const std::string tex = "assets/cache/textures/";
+    render::MaterialGPU bark = plain(scene, {1, 1, 1}, 0.9f, 0.0f);
+    bark.base_color = {0.9f, 0.85f, 0.8f, 1.0f};
+    bark.base_color_tex =
+        load_texture_file(scene, tex + "palm_tree_bark/palm_tree_bark_diff.jpg", true, scene.white_texture());
+    bark.normal_tex =
+        load_texture_file(scene, tex + "palm_tree_bark/palm_tree_bark_nor_gl.jpg", false, scene.flat_normal_texture());
+    bark.orm_tex =
+        load_texture_file(scene, tex + "palm_tree_bark/palm_tree_bark_arm.jpg", false, scene.white_texture());
+    bark.occlusion_strength = 1.0f;
+    bark.normal_scale = 1.2f;
+    const u32 bark_mat = scene.add_material(bark);
+
+    std::vector<u8> frond_albedo, frond_normal;
+    render::make_frond_textures(5, 1024, 512, frond_albedo, frond_normal);
+    rhi::TextureUpload up;
+    up.pixels = frond_albedo.data();
+    up.width = 1024;
+    up.height = 512;
+    up.format = VK_FORMAT_R8G8B8A8_SRGB;
+    up.alpha_coverage_cutoff = 0.35f;
+    up.name = "fronds";
+    rhi::TextureUpload nup;
+    nup.pixels = frond_normal.data();
+    nup.width = 1024;
+    nup.height = 512;
+    nup.format = VK_FORMAT_R8G8B8A8_UNORM;
+    nup.name = "fronds_normal";
+    render::MaterialGPU fronds = plain(scene, {1, 1, 1}, 0.55f, 0.0f);
+    fronds.base_color_tex = scene.add_texture(rhi::upload_texture(scene.device(), up));
+    fronds.normal_tex = scene.add_texture(rhi::upload_texture(scene.device(), nup));
+    fronds.emissive_cutoff.w = 0.35f;
+    fronds.flags = 1u | 2u | 8u; // foliage, two-sided, normal alpha = baked AO
+    fronds.translucency = 0.5f;
+    const u32 frond_mat = scene.add_material(fronds);
+
+    // Three palms with different heights and seeds.
+    struct Variant {
+        u32 seed;
+        f32 h;
+    };
+    const Variant variants[3] = {{5, 10.0f}, {9, 12.5f}, {21, 14.5f}};
+    u32 palm_protos[3];
+    for (int v = 0; v < 3; ++v) {
+        const render::PalmMeshes pm = render::make_palm(variants[v].seed, variants[v].h);
+        TEFRA_LOG_INFO("Palm %d: LOD0 %u triangles, LOD1 %u triangles", v,
+                       u32((pm.trunk_lod0.indices.size() + pm.crown_lod0.indices.size()) / 3),
+                       u32((pm.trunk_lod1.indices.size() + pm.crown_lod1.indices.size()) / 3));
+        render::VegetationPrototype p;
+        p.lods[0].mesh[0] = scene.add_mesh(pm.trunk_lod0);
+        p.lods[0].material[0] = bark_mat;
+        p.lods[0].mesh[1] = scene.add_mesh(pm.crown_lod0);
+        p.lods[0].material[1] = frond_mat;
+        p.lods[0].max_distance = 120.0f;
+        p.lods[1].mesh[0] = scene.add_mesh(pm.trunk_lod1);
+        p.lods[1].material[0] = bark_mat;
+        p.lods[1].mesh[1] = scene.add_mesh(pm.crown_lod1);
+        p.lods[1].material[1] = frond_mat;
+        p.lods[1].max_distance = 2000.0f;
+        p.lod_count = 2;
+        p.center_y = pm.height * 0.5f;
+        const f32 half_h = pm.height * 0.5f;
+        p.radius = std::sqrt(half_h * half_h + pm.crown_radius * pm.crown_radius) + 1.0f;
+        p.wind = 0.25f;
+        p.shadow_distance = 120.0f;
+        p.canopy_radius = pm.canopy_radius;
+        p.canopy_top = pm.height;
+        p.canopy_density = 0.9f;
+        palm_protos[v] = veg.add_prototype(p);
+    }
+    scene.upload();
+
+    // A loose grove: positions, variant, yaw (the lean points along +X before yaw) and scale.
+    struct Placement {
+        f32 x, z, yaw, scale;
+        u32 variant;
+    };
+    const Placement grove[] = {{0.0f, -18.0f, 0.0f, 1.0f, 0},    {7.0f, -24.0f, 1.2f, 1.05f, 1},
+                               {-6.0f, -28.0f, -0.6f, 0.95f, 2}, {14.0f, -15.0f, 2.5f, 1.0f, 0},
+                               {-14.0f, -12.0f, 0.3f, 1.1f, 1},  {3.0f, -40.0f, 1.8f, 0.9f, 2}};
+    for (u32 i = 0; i < std::size(grove); ++i) {
+        const Placement& g = grove[i];
+        veg.add_instance(palm_protos[g.variant], {g.x, 0.0f, g.z}, g.yaw, g.scale, hash01(i, 7u, 9u));
+    }
+    veg.upload();
+    TEFRA_LOG_INFO("Palms: %zu palms on sand", std::size(grove));
+
+    // Stand on the sand, a few metres from the grove, looking at it.
+    setup.camera.position = {0.0, 1.7, -4.0};
+    setup.camera.yaw = 0.0f;
+    setup.camera.pitch = radians(18.0f);
+    setup.camera.fovy = radians(60.0f);
 }
 
 } // namespace tefra::app
