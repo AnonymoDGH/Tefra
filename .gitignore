@@ -1,0 +1,9 @@
+/build/
+/out/
+/.cache/
+*.swp
+.vscode/
+.idea/
+compile_commands.json
+/captures/
+/bench-*.json
