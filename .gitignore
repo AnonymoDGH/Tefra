@@ -10,3 +10,5 @@ compile_commands.json
 /assets/cache/
 /.claude/worktrees/
 __pycache__/
+/docs/research/calibration/refs/*.jpg
+/docs/research/calibration/views/
