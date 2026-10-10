@@ -15,6 +15,7 @@
 #include "tefra/core/log.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 
 namespace tefra::render {
@@ -333,7 +334,11 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         s.sun_color = lum > 0.0f ? e / lum : vec3{1.0f};
     }
     FrameBuffers& fb = frames_[slot];
-    const VkExtent2D ext = target.extent;
+    const VkExtent2D out_ext = target.extent;
+    const f32 scale = s.taa ? clamp(s.render_scale, 0.5f, 1.0f) : 1.0f;
+    // Internal (render) resolution; the TAA pass reconstructs the output resolution.
+    const VkExtent2D ext{max(1u, static_cast<u32>(std::lround(f32(out_ext.width) * scale))),
+                         max(1u, static_cast<u32>(std::lround(f32(out_ext.height) * scale)))};
     const f32 aspect = f32(ext.width) / f32(ext.height);
 
     // ---- Per-frame constants ---------------------------------------------------------------------
@@ -732,22 +737,22 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     // ---- TAA ---------------------------------------------------------------------------------------
     rg::TextureHandle resolved = hdr;
     if (s.taa) {
-        if (history_extent_.width != ext.width || history_extent_.height != ext.height) {
+        if (history_extent_.width != out_ext.width || history_extent_.height != out_ext.height) {
             dev_.wait_idle();
             for (u32 i = 0; i < 2; ++i) {
                 if (history_bindless_[i] != ~0u) heap_.remove_texture(history_bindless_[i]);
                 rhi::destroy_image(dev_, history_[i]);
                 rhi::ImageDesc hd;
                 hd.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-                hd.width = ext.width;
-                hd.height = ext.height;
+                hd.width = out_ext.width;
+                hd.height = out_ext.height;
                 hd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
                 hd.name = i == 0 ? "taa_history_0" : "taa_history_1";
                 history_[i] = rhi::create_image(dev_, hd);
                 history_bindless_[i] = heap_.add_texture(history_[i].view);
                 history_layout_[i] = VK_IMAGE_LAYOUT_UNDEFINED;
             }
-            history_extent_ = ext;
+            history_extent_ = out_ext;
             history_valid_ = false;
         }
         if (camera_cut) history_valid_ = false;
@@ -758,7 +763,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             d.image = history_[i].image;
             d.view = history_[i].view;
             d.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-            d.extent = ext;
+            d.extent = out_ext;
             d.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             d.initial_layout = history_layout_[i];
             d.initial_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
@@ -781,7 +786,16 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                 struct TaaPush {
                     VkDeviceAddress frame;
                     u32 current, history, depth, valid;
-                } tp{frame_addr, ctx.sampled(hdr), valid ? ctx.sampled(hist_prev) : 0u, ctx.sampled(depth), valid};
+                    u32 pad[2]; // GLSL std430 aligns the vec4 to 16 bytes
+                    vec4 sizes;
+                } tp{frame_addr,
+                     ctx.sampled(hdr),
+                     valid ? ctx.sampled(hist_prev) : 0u,
+                     ctx.sampled(depth),
+                     valid,
+                     {0, 0},
+                     {f32(ext.width), f32(ext.height), f32(out_ext.width), f32(out_ext.height)}};
+                static_assert(offsetof(TaaPush, sizes) == 32);
                 vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
                 vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_taa_);
                 vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(tp), &tp);
@@ -797,7 +811,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     out.image = target.image;
     out.view = target.view;
     out.format = target.format;
-    out.extent = ext;
+    out.extent = out_ext;
     out.usage = target.usage;
     out.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     out.initial_stage = target.initial_stage;

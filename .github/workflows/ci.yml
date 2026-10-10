@@ -76,6 +76,8 @@ jobs:
           cp build/windows-mingw-release/bin/*.exe tefra-windows/
           cp -r build/windows-mingw-release/bin/shaders tefra-windows/
           cp scripts/bench-windows.bat tefra-windows/
+          mkdir -p tefra-windows/scripts
+          cp scripts/fetch_assets.py tefra-windows/scripts/
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:

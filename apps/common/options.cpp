@@ -34,6 +34,7 @@ bool parse_common_options(const CommandLine& cl, RunConfig& cfg) {
     if (const char* h = cl.get("hdr")) cfg.hdr_path = h;
     cfg.ev100 = static_cast<f32>(cl.get_float("ev", static_cast<f64>(cfg.ev100)));
     cfg.animate = cl.has("animate");
+    cfg.no_taa = cl.has("no-taa");
     if (cfg.width == 0 || cfg.height == 0 || cfg.width > 8192 || cfg.height > 8192) {
         TEFRA_LOG_ERROR("invalid resolution %ux%u", cfg.width, cfg.height);
         return false;
@@ -52,7 +53,9 @@ void print_common_usage() {
                 "  --animate               move the camera/time between frames\n"
                 "  --scene NAME            testpattern | materials | gltf\n"
                 "  --gltf FILE --hdr FILE  glTF model and Radiance HDR environment\n"
-                "  --ev EV100              camera exposure\n");
+                "  --ev EV100              camera exposure\n"
+                "  --tier T                native | low | medium | high (low = 0.75 render scale + TAAU)\n"
+                "  --no-taa                disable temporal anti-aliasing\n");
 }
 
 } // namespace tefra::app

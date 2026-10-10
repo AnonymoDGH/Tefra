@@ -193,6 +193,22 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             return;
         }
         if (cfg.ev100 >= 0.0f) setup.settings.ev100 = cfg.ev100;
+        // Quality tier (spec 0 §5): renderer knobs. Vegetation density moves to the streaming system (M3).
+        if (cfg.tier == "low") {
+            setup.settings.render_scale = 0.75f; // 960x540 -> 1280x720 via TAAU
+            setup.settings.cascades = min(setup.settings.cascades, 2u);
+            setup.settings.shadow_resolution = 1024;
+            setup.settings.shadow_distance = min(setup.settings.shadow_distance, 120.0f);
+        } else if (cfg.tier == "medium") {
+            setup.settings.render_scale = 1.0f;
+            setup.settings.shadow_resolution = 2048;
+        } else if (cfg.tier == "high") {
+            setup.settings.render_scale = 1.0f;
+            setup.settings.cascades = 4;
+            setup.settings.shadow_resolution = 2048;
+            setup.settings.shadow_distance = max(setup.settings.shadow_distance, 300.0f);
+        }
+        if (cfg.no_taa) setup.settings.taa = false;
         renderer = std::make_unique<render::Renderer>(*device, *heap, kFramesInFlight);
         params.camera = setup.camera;
     }

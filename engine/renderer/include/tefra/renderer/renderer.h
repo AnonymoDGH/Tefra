@@ -50,6 +50,7 @@ struct RenderSettings {
     f32 fog_height = 0.0f;   // m (world y)
     f32 fog_anisotropy = 0.6f;
     bool taa = true;
+    f32 render_scale = 1.0f; // internal resolution / output resolution (TAAU when < 1; requires taa)
 };
 
 struct OutputTarget {

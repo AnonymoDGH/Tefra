@@ -38,8 +38,9 @@ struct RunConfig {
     std::string scene = "testpattern"; // testpattern | materials | gltf
     std::string gltf_path;
     std::string hdr_path;
-    f32 ev100 = -1.0f; // < 0: scene default
-    std::string tier = "low";
+    f32 ev100 = -1.0f;           // < 0: scene default
+    std::string tier = "native"; // native | low | medium | high
+    bool no_taa = false;
     render::TestPatternParams params = default_scene_params();
 };
 

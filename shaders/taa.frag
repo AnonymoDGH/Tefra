@@ -4,7 +4,8 @@
 #include "common/bindless.glsl"
 // Temporal anti-aliasing: depth reprojection (static world), Catmull-Rom history, variance clipping in YCoCg,
 // luminance-weighted blend (Karis 2014, Salvi 2016).
-layout(push_constant) uniform Push { FrameBuffer frame; uint current; uint history; uint depth; uint valid; } pc;
+layout(push_constant) uniform Push { FrameBuffer frame; uint current; uint history; uint depth; uint valid; vec4 sizes; } pc;
+// sizes: xy = input (render) size, zw = output size. Input may be smaller than output (TAAU).
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
 
@@ -12,7 +13,7 @@ vec3 to_ycocg(vec3 c) { return vec3(0.25 * c.r + 0.5 * c.g + 0.25 * c.b, 0.5 * c
 vec3 from_ycocg(vec3 c) { return vec3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z); }
 
 vec3 fetch(ivec2 p) {
-    ivec2 size = textureSize(TEX2D(pc.current, SMP_NEAREST_CLAMP), 0);
+    ivec2 size = ivec2(pc.sizes.xy);
     return texelFetch(TEX2D(pc.current, SMP_NEAREST_CLAMP), clamp(p, ivec2(0), size - 1), 0).rgb;
 }
 
@@ -36,8 +37,10 @@ float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 
 void main() {
     Frame f = pc.frame.f;
-    ivec2 px = ivec2(gl_FragCoord.xy);
-    vec3 cur = fetch(px);
+    // Output pixel -> input texel (identity without upscaling).
+    vec2 in_pos = v_uv * pc.sizes.xy;
+    ivec2 px = ivec2(in_pos);
+    vec3 cur = pc.sizes.x < pc.sizes.z ? textureLod(TEX2D(pc.current, SMP_LINEAR_CLAMP), v_uv, 0.0).rgb : fetch(px);
     if (pc.valid == 0u) { o_color = vec4(cur, 1.0); return; }
 
     // Closest depth in a 3x3 neighbourhood: reprojects edges with the foreground's motion.
@@ -46,7 +49,7 @@ void main() {
     for (int y = -1; y <= 1; ++y)
         for (int x = -1; x <= 1; ++x) {
             ivec2 q = px + ivec2(x, y);
-            best = max(best, texelFetch(TEX2D(pc.depth, SMP_NEAREST_CLAMP), q, 0).r); // reverse-Z: larger = closer
+            best = max(best, texelFetch(TEX2D(pc.depth, SMP_NEAREST_CLAMP), clamp(q, ivec2(0), ivec2(pc.sizes.xy) - 1), 0).r); // reverse-Z
             vec3 c = to_ycocg(fetch(q));
             m1 += c;
             m2 += c * c;
@@ -59,7 +62,7 @@ void main() {
     if (best <= 0.0) p = normalize(p) * 1e6; // sky: rotation-only reprojection
     vec4 prev = f.prev_view_proj * vec4(p, 1.0);
     vec2 prev_uv = (prev.xy / prev.w) * 0.5 + 0.5;
-    vec2 size = f.viewport.xy;
+    vec2 size = pc.sizes.zw;
     if (any(lessThan(prev_uv, vec2(0.0))) || any(greaterThan(prev_uv, vec2(1.0)))) { o_color = vec4(cur, 1.0); return; }
 
     vec3 hist = to_ycocg(history_catmull(prev_uv, size));
@@ -71,7 +74,7 @@ void main() {
     float k = max(a.x, max(a.y, a.z));
     if (k > 1.0) hist = mean + d / k;
     vec3 h = from_ycocg(hist);
-    float alpha = 0.1;
+    float alpha = pc.sizes.x < pc.sizes.z ? 0.08 : 0.1;
     float wc = alpha / (1.0 + luma(cur)), wh = (1.0 - alpha) / (1.0 + luma(h));
     o_color = vec4(max((cur * wc + h * wh) / (wc + wh), vec3(0.0)), 1.0);
 }
