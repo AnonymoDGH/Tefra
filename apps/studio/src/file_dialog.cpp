@@ -4,12 +4,15 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cwchar>
 
 #if defined(_WIN32)
+// clang-format off
+#include <windows.h> // first: the other Win32 headers need its macros
 #include <commdlg.h>
 #include <shellapi.h>
 #include <shlobj.h>
-#include <windows.h>
+// clang-format on
 #else
 #include <spawn.h>
 #include <sys/wait.h>

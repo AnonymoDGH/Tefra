@@ -8,8 +8,10 @@
 #include <system_error>
 
 #if defined(_WIN32)
-#include <shlobj.h>
+// clang-format off
 #include <windows.h>
+#include <shlobj.h>
+// clang-format on
 #elif defined(__linux__)
 #include <unistd.h>
 #endif
