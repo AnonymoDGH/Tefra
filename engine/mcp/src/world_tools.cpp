@@ -622,9 +622,14 @@ using Handler = ToolResult (*)(DataModel&, const JsonValue&);
 } // namespace
 
 int register_world_tools(Server& server, DataModel& dm) {
+    return register_world_tools(server, [&dm]() -> DataModel& { return dm; });
+}
+
+int register_world_tools(Server& server, std::function<DataModel&()> model) {
     int added = 0;
     auto add = [&](const char* name, const char* description, const std::string& input_schema, Handler fn) {
-        if (server.add_tool(name, description, input_schema, [&dm, fn](const JsonValue& args) { return fn(dm, args); }))
+        if (server.add_tool(name, description, input_schema,
+                            [model, fn](const JsonValue& args) { return fn(model(), args); }))
             ++added;
     };
 
