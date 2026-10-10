@@ -3,6 +3,7 @@
 #include "tefra/renderer/atmosphere.h"
 #include "tefra/renderer/canopy.h"
 #include "tefra/renderer/environment.h"
+#include "tefra/renderer/ocean.h"
 #include "tefra/renderer/scene.h"
 #include "tefra/renderer/terrain.h"
 #include "tefra/renderer/vegetation.h"
@@ -211,10 +212,10 @@ Renderer::~Renderer() {
         rhi::destroy_image(dev_, history_[i]);
     }
     for (VkPipeline p :
-         {p_gbuffer_,        p_gbuffer_2s_, p_shadow_,   p_lighting_,   p_tonemap_,     p_skyview_,    p_terrain_,
-          p_terrain_shadow_, p_veg_,        p_veg_2s_,   p_veg_shadow_, p_veg_cull_,    p_water_,      p_taa_,
-          p_gtao_,           p_bloom_down_, p_bloom_up_, p_expo_first_, p_expo_reduce_, p_expo_adapt_, p_volumetric_,
-          p_grass_,          p_grass_count_})
+         {p_gbuffer_,        p_gbuffer_2s_,  p_shadow_,   p_lighting_,   p_tonemap_,     p_skyview_,    p_terrain_,
+          p_terrain_shadow_, p_veg_,         p_veg_2s_,   p_veg_shadow_, p_veg_cull_,    p_water_,      p_taa_,
+          p_gtao_,           p_bloom_down_,  p_bloom_up_, p_expo_first_, p_expo_reduce_, p_expo_adapt_, p_volumetric_,
+          p_grass_,          p_grass_count_, p_ocean_,    p_ocean_copy_})
         if (p) vkDestroyPipeline(dev_.device(), p, nullptr);
     vkDestroyPipelineLayout(dev_.device(), layout_, nullptr);
 }
@@ -224,7 +225,7 @@ void Renderer::create_pipelines(VkFormat output_format) {
                           &p_skyview_,    &p_terrain_,    &p_terrain_shadow_, &p_veg_,         &p_veg_2s_,
                           &p_veg_shadow_, &p_veg_cull_,   &p_water_,          &p_taa_,         &p_gtao_,
                           &p_bloom_down_, &p_bloom_up_,   &p_expo_first_,     &p_expo_reduce_, &p_expo_adapt_,
-                          &p_volumetric_, &p_grass_,      &p_grass_count_}) {
+                          &p_volumetric_, &p_grass_,      &p_grass_count_,    &p_ocean_,       &p_ocean_copy_}) {
         if (*p) vkDestroyPipeline(dev_.device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -394,6 +395,26 @@ void Renderer::create_pipelines(VkFormat output_format) {
     l.name = "skyview";
     p_skyview_ = rhi::create_graphics_pipeline(dev_, l);
 
+    // Ocean pass: copy of the lit image, then the displaced surface (depth-tested against the scene, opaque).
+    VkShaderModule ocean_vs = rhi::load_shader(dev_, "ocean.vert");
+    VkShaderModule ocean_fs = rhi::load_shader(dev_, "ocean.frag");
+    VkShaderModule ocean_copy_fs = rhi::load_shader(dev_, "ocean_copy.frag");
+    rhi::GraphicsPipelineDesc oc;
+    oc.vs = fs_vs;
+    oc.fs = ocean_copy_fs;
+    oc.layout = layout_;
+    oc.render_pass = rp_w.pass;
+    oc.name = "ocean_copy";
+    p_ocean_copy_ = rhi::create_graphics_pipeline(dev_, oc);
+    oc.vs = ocean_vs;
+    oc.fs = ocean_fs;
+    oc.depth_test = true;
+    oc.depth_write = false;
+    oc.depth_compare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+    oc.name = "ocean";
+    p_ocean_ = rhi::create_graphics_pipeline(dev_, oc);
+    for (VkShaderModule m : {ocean_vs, ocean_fs, ocean_copy_fs}) vkDestroyShaderModule(dev_.device(), m, nullptr);
+
     for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k, &rp_w, &rp_a, &rp_o, &rp_b, &rp_e, &rp_v})
         rhi::destroy_render_pass(dev_, *rp);
     for (VkShaderModule m : {mesh_vs,       gbuf_fs,        shadow_vs,       fs_vs,         light_fs,
@@ -541,6 +562,13 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     fc.brdf_lut = env.brdf_lut();
     fc.env_background = env.background();
     fc.fog = {s.fog_density, s.fog_falloff, s.fog_height, s.fog_anisotropy};
+    fc.clouds = {s.cloud_coverage, s.cloud_altitude, s.cloud_size, s.cloud_wind * time};
+    if (world.ocean) {
+        const OceanDesc& od = world.ocean->desc();
+        fc.ocean = {od.level, 1.0f, 0.0f, 0.0f};
+        fc.water_absorption = vec4(od.absorption, 0.0f);
+        fc.water_scattering = vec4(od.scattering, 0.0f);
+    }
     // Canopy occlusion map: built on the CPU from vegetation footprints, uploaded for this frame slot if stale.
     if (s.canopy_occlusion && veg && canopy_ && canopy_->supported()) {
         canopy_->update(*veg, camera.position);
@@ -1022,6 +1050,57 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
             vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
         });
+
+    if (world.ocean) {
+        const Ocean* ocean = world.ocean;
+        // Sectors of the polar grid facing the camera (all of them when looking steeply down or up).
+        const mat4& vr = fc.view;
+        const vec3 fwd{-vr.c[0].z, -vr.c[1].z, -vr.c[2].z};
+        const f32 half_h = std::atan(std::tan(camera.fovy * 0.5f) * aspect);
+        std::vector<u32> sectors;
+        const bool all = std::fabs(fwd.y) > 0.75f;
+        const f32 fa = std::atan2(fwd.z, fwd.x);
+        for (u32 i = 0; i < Ocean::kSectors; ++i) {
+            f32 d = std::fabs(ocean->sector_angle(i) - fa);
+            d = std::fmod(d, kTwoPi);
+            d = min(d, kTwoPi - d);
+            if (all || d < half_h + kTwoPi / f32(Ocean::kSectors) + 0.35f) sectors.push_back(i);
+        }
+        const VkDeviceAddress ocean_terrain = terrain ? fb.terrain.address : 0;
+        const vec4 ocean_params{ocean->desc().level, ocean->desc().surf_height, f32(camera.position.x),
+                                f32(camera.position.z)};
+        rg::TextureHandle sea;
+        graph_.add_pass(
+            "ocean", rg::PassType::Raster,
+            [&](rg::PassBuilder& b) {
+                sea = b.create({hdr_format_, ext.width, ext.height, "hdr_ocean"});
+                b.read(hdr, rg::Access::Sampled);
+                b.read(depth, rg::Access::Sampled);
+                b.read(shadow, rg::Access::Sampled);
+                b.color(sea, rg::Load::DontCare);
+                b.depth(depth, rg::Load::Load, 0.0f, false);
+            },
+            [=, this](const rg::PassContext& ctx) {
+                struct OceanPush {
+                    VkDeviceAddress frame, verts, waves, terrain;
+                    u32 hdr, depth, has_terrain;
+                    f32 time;
+                    vec4 params;
+                } op{frame_addr,       ocean->vertices().address, ocean->waves().address,  ocean_terrain,
+                     ctx.sampled(hdr), ctx.sampled(depth),        ocean_terrain ? 1u : 0u, time,
+                     ocean_params};
+                static_assert(offsetof(OceanPush, params) == 48 && sizeof(OceanPush) == 64);
+                vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
+                vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(op), &op);
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_ocean_copy_);
+                vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_ocean_);
+                vkCmdBindIndexBuffer(ctx.cmd, ocean->indices().buffer, 0, VK_INDEX_TYPE_UINT32);
+                for (u32 sct : sectors)
+                    vkCmdDrawIndexed(ctx.cmd, ocean->sector_count(), 1, ocean->sector_first(sct), 0, 0);
+            });
+        hdr = sea;
+    }
 
     if (world.water) {
         const Water* water = world.water;

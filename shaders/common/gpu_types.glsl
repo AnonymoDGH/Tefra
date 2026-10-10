@@ -28,6 +28,10 @@ struct Frame {
     vec4 fog; // x density (1/m) at reference height, y height falloff (1/m), z reference height (m), w anisotropy
     vec4 canopy; // canopy occlusion: xy world xz of the map's min corner (m), z size (m), w strength
     vec4 shadow_soft; // x penumbra scale, y contact shadow length (m)
+    vec4 ocean;            // x still sea level (world y), y 1 = ocean present (underwater light + caustics)
+    vec4 water_absorption; // xyz 1/m
+    vec4 water_scattering; // xyz 1/m
+    vec4 clouds;           // x coverage (0 = none), y base altitude (m), z feature size (m), w drift (m)
     Atmosphere atmo;
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VertexBuffer { Vertex v[]; };

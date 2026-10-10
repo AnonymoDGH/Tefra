@@ -128,6 +128,8 @@ f32 Terrain::coast_shore_z(f32 x) const {
     return -70.0f * u * u - 260.0f * smoothstep(320.0f, 560.0f, ax) + 10.0f * fbm(x / 140.0f, 0.5f, desc_.seed + 5, 3);
 }
 
+f32 Terrain::coast_shore_z_dist(f32 x, f32 z) const { return z - coast_shore_z(x); }
+
 f32 Terrain::coast_height(f32 x, f32 z) const {
     const u32 seed = desc_.seed;
     const f32 sea = desc_.sea_level;
@@ -142,10 +144,11 @@ f32 Terrain::coast_height(f32 x, f32 z) const {
         // Beach face (~2.6 deg) up to the berm, a flat backshore, dunes, then the rising hinterland.
         const f32 face = min(s, 35.0f) * 0.045f;
         const f32 back = smoothstep(35.0f, 75.0f, s) * 0.8f;
-        const f32 dunes = smoothstep(60.0f, 120.0f, s) * (2.5f + 4.0f * (0.5f + 0.5f * fbm(wx / 55.0f, wz / 40.0f, seed + 3, 4)));
+        const f32 dunes =
+            smoothstep(60.0f, 120.0f, s) * (2.5f + 4.0f * (0.5f + 0.5f * fbm(wx / 55.0f, wz / 40.0f, seed + 3, 4)));
         const f32 inland = max(s - 150.0f, 0.0f);
-        const f32 hills = std::pow(inland / 600.0f, 1.3f) * 90.0f + fbm(wx / 240.0f, wz / 240.0f, seed + 11, 5) * 22.0f *
-                                                                      smoothstep(150.0f, 400.0f, s);
+        const f32 hills = std::pow(inland / 600.0f, 1.3f) * 90.0f +
+                          fbm(wx / 240.0f, wz / 240.0f, seed + 11, 5) * 22.0f * smoothstep(150.0f, 400.0f, s);
         h = face + back + dunes + hills;
     } else {
         const f32 d = -s;
@@ -162,7 +165,8 @@ f32 Terrain::coast_height(f32 x, f32 z) const {
         h += headland * (s > 0.0f ? cliff : reef + cliff);
     }
     // Small undulations: wind ripples are in the textures, this is the metre scale.
-    h += fbm(x / 9.0f, z / 9.0f, seed + 13, 3) * 0.08f + fbm(x / 40.0f, z / 40.0f, seed + 19, 3) * 0.25f * smoothstep(-5.0f, 5.0f, s);
+    h += fbm(x / 9.0f, z / 9.0f, seed + 13, 3) * 0.08f +
+         fbm(x / 40.0f, z / 40.0f, seed + 19, 3) * 0.25f * smoothstep(-5.0f, 5.0f, s);
     return sea + h;
 }
 
@@ -213,7 +217,14 @@ void Terrain::generate() {
             u8* p = &mask_[(usize(y) * m + x) * 4];
             p[0] = static_cast<u8>(saturate(wet) * 255.0f);
             p[1] = static_cast<u8>(saturate(patch) * 255.0f);
-            p[2] = 0;
+            // b: vegetation cover (coast: scrub and grass behind the dunes).
+            f32 cover = 0.0f;
+            if (coast) {
+                const f32 land = coast_shore_z_dist(wx, wz);
+                cover = smoothstep(90.0f, 170.0f, land + 40.0f * fbm(wx / 80.0f, wz / 80.0f, seed + 23, 3));
+                cover = max(cover, smoothstep(9.0f, 16.0f, h - desc_.sea_level)); // headland tops and hills
+            }
+            p[2] = static_cast<u8>(saturate(cover) * 255.0f);
             p[3] = 255;
         }
     if (coast) build_shore_distance();
@@ -283,8 +294,7 @@ void Terrain::build_shore_distance() {
         }
     const std::vector<f32> to_land = edt_2d(land, m), to_sea = edt_2d(sea, m);
     shore_.resize(usize(m) * m);
-    for (usize i = 0; i < shore_.size(); ++i)
-        shore_[i] = (land[i] ? -(to_sea[i] - 0.5f) : (to_land[i] - 0.5f)) * texel;
+    for (usize i = 0; i < shore_.size(); ++i) shore_[i] = (land[i] ? -(to_sea[i] - 0.5f) : (to_land[i] - 0.5f)) * texel;
     // Two box passes: the medial-axis kinks of the distance field would show up as kinks in the surf.
     std::vector<f32> tmp(shore_.size());
     for (int pass = 0; pass < 2; ++pass) {
@@ -380,11 +390,11 @@ void Terrain::upload_textures() {
     // Layer order (terrain.frag): 0 = default ground, 1 = patches, 2 = rock (triplanar), 3 = wet ground.
     const bool coast = desc_.kind == TerrainKind::Coast;
     const char* valley_layers[4] = {"forest_leaves_02", "brown_mud_leaves_01", "aerial_rocks_02", "brown_mud_02"};
-    const char* coast_layers[4] = {"coast_sand_01", "coast_sand_rocks_02", "coast_land_rocks_01", "damp_beach_sand"};
+    const char* coast_layers[4] = {"coast_sand_01", "aerial_grass_rock", "coast_land_rocks_01", "damp_beach_sand"};
     const char* const* layers = coast ? coast_layers : valley_layers;
     const u8 valley_col[4][3] = {{78, 58, 38}, {70, 60, 45}, {95, 98, 88}, {60, 48, 38}};
     const u8 coast_col[4][3] = {{196, 180, 150}, {170, 158, 135}, {110, 104, 96}, {140, 125, 100}};
-    const u8 (*fallback_col)[3] = coast ? coast_col : valley_col;
+    const u8(*fallback_col)[3] = coast ? coast_col : valley_col;
     gpu_.flags = coast ? 2u : 0u;
     for (int l = 0; l < 4; ++l) {
         const std::string base = path_join(path_join(desc_.texture_dir, layers[l]), layers[l]);

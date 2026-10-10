@@ -177,8 +177,10 @@ void main() {
     vec3 nx = vec3(0.0, rx.n.y, rx.n.x) * sign(Ng.x), ny = vec3(ry.n.x, 0.0, -ry.n.y), nz = vec3(rz.n.x, rz.n.y, 0.0) * sign(Ng.z);
     vec3 rock_n = normalize(Ng + (nx * bw.x + ny * bw.y + nz * bw.z));
 
+    const bool coast = (t.flags & 2u) != 0u;
     float w_mud = wet * (1.0 - w_rock);
-    float w_mudl = smoothstep(0.42, 0.68, patchy) * (1.0 - wet) * (1.0 - w_rock);
+    float w_mudl = coast ? smoothstep(0.15, 0.85, mask.b + (patchy - 0.5) * 0.4) * (1.0 - wet) * (1.0 - w_rock)
+                         : smoothstep(0.42, 0.68, patchy) * (1.0 - wet) * (1.0 - w_rock);
     float w_leaves = max(1.0 - w_rock - w_mud - w_mudl, 0.0);
     vec4 w = vec4(w_leaves, w_mudl, w_rock, w_mud);
     // Height-aware sharpening: the detail path uses the real layer heights (albedo alpha), the M2 path the
@@ -197,7 +199,16 @@ void main() {
     vec3 tn = normalize(leaves.n * w.x + mudl.n * w.y + mud.n * w.w + vec3(0, 0, 1) * w.z);
     vec3 N = normalize(T * tn.x + B * tn.y + Ng * tn.z);
     N = normalize(mix(N, rock_n, w.z));
-    if (detail) {
+    if (detail && coast) {
+        // Sand: bleached patches and darker heavy-mineral streaks at distance.
+        float macro = 0.6 * vnoise(v_world / 30.0 + 3.1) + 0.4 * vnoise(v_world / 9.0 + 7.7);
+        albedo *= mix(vec3(0.92, 0.9, 0.88), vec3(1.08, 1.06, 1.02), macro) * (1.0 - 0.15 * w.y * vnoise(v_world / 25.0));
+        // Tropical hinterland: greener than the dry-grass scan.
+        albedo *= mix(vec3(1.0), vec3(0.72, 1.0, 0.62), w.y);
+        // The CC0 sand scans are warmer than bright quartz beach sand: pull the chroma back a little.
+        float lum = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
+        albedo = mix(vec3(lum), albedo, mix(0.78, 1.0, w.y + w.z)) * mix(1.12, 1.0, w.y + w.z);
+    } else if (detail) {
         // Low-frequency macro variation at distance: moss-green patches on the ground, rust-red dry-needle patches.
         float macro = 0.65 * vnoise(v_world / 45.0 + 3.1) + 0.35 * vnoise(v_world / 13.0 + 7.7);
         float moss = smoothstep(0.55, 0.75, macro) * (1.0 - w.z);
@@ -208,8 +219,14 @@ void main() {
     // Macro variation and wet darkening.
     albedo *= 0.82 + 0.36 * patchy;
     float rough = arm.g;
-    albedo = mix(albedo, albedo * albedo * 0.9, wet * 0.6); // wet surfaces darken (porous)
-    rough = mix(rough, 0.25, wet * 0.5);
+    if (coast) {
+        // Wet sand: darker (water fills the pores) and glossy near the waterline.
+        albedo *= mix(1.0, 0.6, wet);
+        rough = mix(rough, 0.18, wet * 0.85);
+    } else {
+        albedo = mix(albedo, albedo * albedo * 0.9, wet * 0.6); // wet surfaces darken (porous)
+        rough = mix(rough, 0.25, wet * 0.5);
+    }
 
     o_albedo = vec4(albedo, arm.r);
     o_normal = vec4(oct_encode01(N), clamp(rough, 0.05, 1.0), 2.0 / 3.0);

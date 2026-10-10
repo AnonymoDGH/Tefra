@@ -157,6 +157,7 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
     std::unique_ptr<render::Terrain> terrain;
     std::unique_ptr<render::Vegetation> vegetation;
     std::unique_ptr<render::Water> water;
+    std::unique_ptr<render::Ocean> ocean;
     std::unique_ptr<render::Renderer> renderer;
     SceneSetup setup;
     if (scene3d) {
@@ -178,6 +179,19 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             vegetation = std::make_unique<render::Vegetation>(*device, *scene);
             build_valley_scene(*scene, *env, *atmosphere, *terrain, *vegetation, setup);
             water = std::make_unique<render::Water>(*device, *terrain);
+            built = true;
+        } else if (cfg.scene == "coast") {
+            render::TerrainDesc td;
+            td.texture_dir = file_exists("assets/cache/textures") ? "assets/cache/textures" : "";
+            td.kind = render::TerrainKind::Coast;
+            td.sea_level = 0.0f;
+            terrain = std::make_unique<render::Terrain>(*device, *heap, td);
+            vegetation = std::make_unique<render::Vegetation>(*device, *scene);
+            build_coast_scene(*scene, *env, *atmosphere, *terrain, *vegetation, setup);
+            render::OceanDesc od;
+            od.level = td.sea_level;
+            od.wind_dir = {0.18f, 1.0f};
+            ocean = std::make_unique<render::Ocean>(*device, od);
             built = true;
         } else if (cfg.scene == "palms") {
             vegetation = std::make_unique<render::Vegetation>(*device, *scene);
@@ -322,6 +336,7 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             world.terrain = setup.use_terrain ? terrain.get() : nullptr;
             world.vegetation = vegetation.get();
             world.water = water.get();
+            world.ocean = ocean.get();
             renderer->render(cmd, fc.slot, frame_index, &timer, world, params.camera, params.time, setup.settings, out);
             result.draw_calls = renderer->draw_calls();
             result.grass_blades = renderer->grass_blades();
@@ -420,6 +435,7 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
 
     renderer.reset();
     water.reset();
+    ocean.reset();
     vegetation.reset();
     env.reset();
     atmosphere.reset();

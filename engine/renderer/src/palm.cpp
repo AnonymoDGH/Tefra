@@ -126,10 +126,10 @@ Frond make_frond(Rng& rng, vec3 apex, f32 az, f32 age, bool dead, f32 len) {
     Frond f{};
     f.tile = dead ? 3u : rng.next() % 3u;
     // Young fronds leave the crown at ~55 deg and arch; old ones leave near horizontal and hang.
-    const f32 e0 = dead ? radians(rng.range(-22.0f, -8.0f)) : radians(lerp(55.0f, 8.0f, age) + rng.range(-6.0f, 6.0f));
-    const f32 bend = dead ? rng.range(0.9f, 1.1f) : lerp(0.35f, 1.15f, age) * rng.range(0.9f, 1.1f);
+    const f32 e0 = dead ? radians(rng.range(-30.0f, -12.0f)) : radians(lerp(48.0f, 0.0f, age) + rng.range(-6.0f, 6.0f));
+    const f32 bend = dead ? rng.range(1.1f, 1.4f) : lerp(0.7f, 1.6f, age) * rng.range(0.9f, 1.1f);
     const f32 phi = dead ? 0.35f : lerp(-0.45f, 0.55f, age);
-    const f32 wmax = dead ? 0.6f : rng.range(0.8f, 0.9f);
+    const f32 wmax = dead ? 0.7f : rng.range(1.05f, 1.25f);
     const vec3 lat{-std::sin(az), 0.0f, std::cos(az)}; // horizontal, perpendicular to the frond's heading
     const f32 ds = len / f32(kStations - 1);
     auto elev = [&](f32 s) { return e0 - bend * s * s; };
@@ -209,10 +209,10 @@ f32 leaf_halfw(const Leaf& L, f32 tau) { return max(0.45f, L.w0 * std::pow(1.0f 
 // Leaflets leave the midrib at x0 and fan out to `side` (+1/-1) towards the tip, at 24-48 deg. The tips arch back.
 Leaf make_leaf(Rng& rng, f32 x0, f32 side, bool dead) {
     Leaf L{};
-    const f32 beta = radians(rng.range(24.0f, 48.0f));
+    const f32 beta = radians(rng.range(30.0f, 55.0f));
     const f32 len =
         (dead ? rng.range(45.0f, 85.0f) : rng.range(90.0f, 135.0f)) * (1.0f - (dead ? 0.6f : 0.5f) * x0 / f32(kTileW));
-    L.w0 = dead ? 2.6f : 4.4f;
+    L.w0 = dead ? 2.8f : 5.6f;
     for (u32 i = 0; i <= kLeafSeg; ++i) {
         const f32 t = f32(i) / f32(kLeafSeg);
         L.px[i] = x0 + len * std::cos(beta) * t;
@@ -285,7 +285,7 @@ PalmMeshes make_palm(u32 seed, f32 h) {
     add_trunk(out.trunk_lod1, ax, sh, r0, ys1, 4);
 
     // Fronds: 14-22 in a rosette, youngest upright, oldest hanging, the last 2-4 dead (brown).
-    const u32 n = 14 + rng.next() % 9u, dead_n = 2 + rng.next() % 3u;
+    const u32 n = 20 + rng.next() % 7u, dead_n = 2 + rng.next() % 3u;
     const f32 base_az = rng.range(0.0f, kTwoPi);
     std::vector<Frond> fronds;
     fronds.reserve(n);
@@ -293,7 +293,7 @@ PalmMeshes make_palm(u32 seed, f32 h) {
         const bool dead = k >= n - dead_n;
         const f32 age = dead ? 1.0f : (f32(k) + rng.range(0.0f, 0.7f)) / f32(n);
         const f32 az = base_az + f32(k) * 2.39996323f + rng.range(-0.2f, 0.2f);
-        const f32 len = rng.range(3.6f, 5.4f) * (dead ? 0.9f : 1.0f);
+        const f32 len = rng.range(4.2f, 5.8f) * (dead ? 0.9f : 1.0f);
         fronds.push_back(make_frond(rng, apex, az, age, dead, len));
     }
     f32 reach = 0.0f;
@@ -361,7 +361,7 @@ void make_frond_textures(u32 seed, u32 w, u32 h, std::vector<u8>& albedo, std::v
                 }
         };
 
-        const u32 n_leaf = dead ? 24 : 50;
+        const u32 n_leaf = dead ? 30 : 68;
         for (f32 side : {1.0f, -1.0f})
             for (u32 i = 0; i < n_leaf; ++i) {
                 if (dead && rng.f() < 0.35f) continue; // torn or missing leaflets

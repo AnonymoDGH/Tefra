@@ -16,8 +16,8 @@ MODELS += ["coast_rocks_05", "sand_rocks_small_01", "coast_land_rocks_02", "coas
 HDRIS = ["dark_autumn_forest", "forest_slope"]
 # Terrain layers: leaf litter, mud with moss, mossy rock, dirt.
 TERRAIN_LAYERS = ["forest_leaves_02", "brown_mud_leaves_01", "aerial_rocks_02", "brown_mud_02"]
-# Coast terrain layers: dry sand, pebbly sand, shore rock, wet sand.
-COAST_LAYERS = ["coast_sand_01", "damp_beach_sand", "coast_land_rocks_01", "coast_sand_rocks_02"]
+# Coast terrain layers: dry sand, grassy hinterland, shore rock, wet sand.
+COAST_LAYERS = ["coast_sand_01", "aerial_grass_rock", "coast_land_rocks_01", "damp_beach_sand"]
 TERRAIN_LAYERS += COAST_LAYERS
 # Bark: brown conifer bark (valley trunks) and palm trunk bark (palm scene).
 TEXTURES = TERRAIN_LAYERS + ["bark_brown_01", "palm_tree_bark"]

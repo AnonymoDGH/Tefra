@@ -87,6 +87,7 @@ class Terrain {
     f32 valley_height(f32 x, f32 z) const;
     f32 coast_height(f32 x, f32 z) const;
     f32 coast_shore_z(f32 x) const;
+    f32 coast_shore_z_dist(f32 x, f32 z) const; // > 0 inland (unwarped, approximate)
     void build_shore_distance();
     void upload_textures();
     void build_grid();

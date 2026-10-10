@@ -25,6 +25,7 @@ class Atmosphere;
 class Terrain;
 class Vegetation;
 class Water;
+class Ocean;
 class CanopyMap;
 
 // Everything the renderer draws in a frame (optional parts may be null).
@@ -35,6 +36,7 @@ struct RenderWorld {
     const Terrain* terrain = nullptr;
     const Vegetation* vegetation = nullptr;
     const Water* water = nullptr;
+    const Ocean* ocean = nullptr;
 };
 
 struct RenderSettings {
@@ -56,6 +58,11 @@ struct RenderSettings {
     f32 fog_falloff = 0.02f; // 1/m
     f32 fog_height = 0.0f;   // m (world y)
     f32 fog_anisotropy = 0.6f;
+    // Cumulus layer (clouds.glsl) in the sky and the ocean reflections. coverage 0 = clear sky.
+    f32 cloud_coverage = 0.0f;
+    f32 cloud_altitude = 1600.0f; // m
+    f32 cloud_size = 2200.0f;     // m: size of the cloud features
+    f32 cloud_wind = 6.0f;        // m/s drift
     // Volumetric fog and sun shafts (half resolution, 16 steps to 150 m). Needs fog_density > 0 to have an effect.
     bool volumetric_fog = false;
     bool taa = true;
@@ -161,6 +168,7 @@ class Renderer {
     VkPipeline p_bloom_down_ = VK_NULL_HANDLE, p_bloom_up_ = VK_NULL_HANDLE;
     VkPipeline p_expo_first_ = VK_NULL_HANDLE, p_expo_reduce_ = VK_NULL_HANDLE, p_expo_adapt_ = VK_NULL_HANDLE;
     VkPipeline p_volumetric_ = VK_NULL_HANDLE;
+    VkPipeline p_ocean_ = VK_NULL_HANDLE, p_ocean_copy_ = VK_NULL_HANDLE;
     rg::TextureHandle taa_handles_[2];
     const Vegetation* veg_template_owner_ = nullptr;
     VkFormat output_format_ = VK_FORMAT_UNDEFINED;

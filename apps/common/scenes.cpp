@@ -206,6 +206,10 @@ u32 hash_u32(u32 x) {
     x ^= x >> 16;
     return x;
 }
+f32 smoothstep(f32 a, f32 b, f32 x) {
+    const f32 t = saturate((x - a) / (b - a));
+    return t * t * (3.0f - 2.0f * t);
+}
 f32 hash01(u32 a, u32 b, u32 c) {
     return static_cast<f32>(hash_u32(a * 73856093u ^ b * 19349663u ^ c * 83492791u) >> 8) / 16777216.0f;
 }
@@ -396,30 +400,13 @@ void build_valley_scene(render::Scene& scene, render::Environment& env, const re
 }
 
 // "palms": a small grove of procedural coconut palms on sand, morning-to-noon sun ~40 deg up.
-void build_palms_scene(render::Scene& scene, render::Environment& env, const render::Atmosphere& atmo,
-                       render::Vegetation& veg, SceneSetup& setup) {
-    setup.use_atmosphere = true;
-    setup.use_terrain = false;
-    setup.settings.sun_direction = normalize(vec3{0.42f, 0.64f, -0.64f}); // ~40 deg elevation
-    setup.settings.ev100 = 14.0f;
-    setup.settings.fog_density = 0.0015f;
-    setup.settings.fog_falloff = 0.05f;
-    setup.settings.cascades = 3;
-    setup.settings.shadow_distance = 120.0f;
-    setup.settings.grade_saturation = 1.1f;
-    build_atmosphere_environment(atmo, env, setup.settings.sun_direction);
+namespace {
 
-    // Sand ground (linear albedo of dry beach sand) and the palm materials.
-    const u32 sand_plane = scene.add_mesh(render::make_plane(400.0f, 400.0f, 1.0f));
-    const u32 sand_mat = scene.add_material(plain(scene, {0.42f, 0.36f, 0.26f}, 0.9f, 0.0f));
-    render::Instance ground;
-    ground.mesh = sand_plane;
-    ground.material = sand_mat;
-    scene.add_instance(ground);
-
+// Palm materials (CC0 palm bark, baked frond atlas) and three procedural palm prototypes.
+void make_palm_prototypes(render::Scene& scene, render::Vegetation& veg, u32 palm_protos[3]) {
     const std::string tex = "assets/cache/textures/";
     render::MaterialGPU bark = plain(scene, {1, 1, 1}, 0.9f, 0.0f);
-    bark.base_color = {0.9f, 0.85f, 0.8f, 1.0f};
+    bark.base_color = {0.62f, 0.58f, 0.54f, 1.0f};
     bark.base_color_tex =
         load_texture_file(scene, tex + "palm_tree_bark/palm_tree_bark_diff.jpg", true, scene.white_texture());
     bark.normal_tex =
@@ -459,7 +446,6 @@ void build_palms_scene(render::Scene& scene, render::Environment& env, const ren
         f32 h;
     };
     const Variant variants[3] = {{5, 10.0f}, {9, 12.5f}, {21, 14.5f}};
-    u32 palm_protos[3];
     for (int v = 0; v < 3; ++v) {
         const render::PalmMeshes pm = render::make_palm(variants[v].seed, variants[v].h);
         TEFRA_LOG_INFO("Palm %d: LOD0 %u triangles, LOD1 %u triangles", v,
@@ -487,6 +473,33 @@ void build_palms_scene(render::Scene& scene, render::Environment& env, const ren
         p.canopy_density = 0.9f;
         palm_protos[v] = veg.add_prototype(p);
     }
+}
+
+} // namespace
+
+void build_palms_scene(render::Scene& scene, render::Environment& env, const render::Atmosphere& atmo,
+                       render::Vegetation& veg, SceneSetup& setup) {
+    setup.use_atmosphere = true;
+    setup.use_terrain = false;
+    setup.settings.sun_direction = normalize(vec3{0.42f, 0.64f, -0.64f}); // ~40 deg elevation
+    setup.settings.ev100 = 14.0f;
+    setup.settings.fog_density = 0.0015f;
+    setup.settings.fog_falloff = 0.05f;
+    setup.settings.cascades = 3;
+    setup.settings.shadow_distance = 120.0f;
+    setup.settings.grade_saturation = 1.1f;
+    build_atmosphere_environment(atmo, env, setup.settings.sun_direction);
+
+    // Sand ground (linear albedo of dry beach sand) and the palm materials.
+    const u32 sand_plane = scene.add_mesh(render::make_plane(400.0f, 400.0f, 1.0f));
+    const u32 sand_mat = scene.add_material(plain(scene, {0.42f, 0.36f, 0.26f}, 0.9f, 0.0f));
+    render::Instance ground;
+    ground.mesh = sand_plane;
+    ground.material = sand_mat;
+    scene.add_instance(ground);
+
+    u32 palm_protos[3];
+    make_palm_prototypes(scene, veg, palm_protos);
     scene.upload();
 
     // A loose grove: positions, variant, yaw (the lean points along +X before yaw) and scale.
@@ -509,6 +522,122 @@ void build_palms_scene(render::Scene& scene, render::Environment& env, const ren
     setup.camera.yaw = 0.0f;
     setup.camera.pitch = radians(18.0f);
     setup.camera.fovy = radians(60.0f);
+}
+
+void build_coast_scene(render::Scene& scene, render::Environment& env, const render::Atmosphere& atmo,
+                       const render::Terrain& terrain, render::Vegetation& veg, SceneSetup& setup) {
+    setup.use_atmosphere = true;
+    setup.use_terrain = true;
+    setup.settings.sun_direction = normalize(vec3{0.62f, 0.62f, 0.10f}); // ~38 deg from the right: water shows colour
+    setup.settings.ev100 = 14.7f;
+    setup.settings.fog_density = 0.000012f; // light sea haze (the atmosphere does the aerial perspective)
+    setup.settings.fog_falloff = 0.03f;
+    setup.settings.fog_height = terrain.sea_level();
+    setup.settings.fog_anisotropy = 0.7f;
+    setup.settings.cascades = 3;
+    setup.settings.shadow_distance = 150.0f;
+    setup.settings.grass = false;
+    setup.settings.canopy_occlusion = false;
+    setup.settings.grade_saturation = 1.08f;
+    setup.settings.grade_contrast = 1.05f;
+    setup.settings.cloud_coverage = 0.38f;
+    build_atmosphere_environment(atmo, env, setup.settings.sun_direction);
+
+    u32 palms[3];
+    make_palm_prototypes(scene, veg, palms);
+    // Shore rocks (Poly Haven CC0): reef rocks at the waterline, pebble clusters on the sand, big boulders at the
+    // foot of the headlands.
+    struct Rock {
+        const char* name;
+        f32 dist;
+        u32 proto = ~0u;
+    };
+    Rock rocks[3] = {{"coast_rocks_05", 450.0f}, {"sand_rocks_small_01", 140.0f}, {"coast_land_rocks_02", 900.0f}};
+    for (Rock& r : rocks) {
+        const std::string path = std::string("assets/cache/models/") + r.name + "/" + r.name + ".gltf";
+        if (!file_exists(path.c_str())) continue;
+        const LoadedModel lm = load_model(scene, path);
+        if (lm.mesh[0] == ~0u) continue;
+        render::VegetationPrototype p;
+        p.lods[0].mesh[0] = lm.mesh[0];
+        p.lods[0].material[0] = lm.material[0];
+        p.lods[0].mesh[1] = lm.mesh[1];
+        p.lods[0].material[1] = lm.material[1];
+        p.lods[0].max_distance = r.dist;
+        p.radius = lm.radius;
+        p.center_y = lm.center_y;
+        p.wind = 0.0f;
+        p.shadow_distance = 150.0f;
+        r.proto = veg.add_prototype(p);
+    }
+    scene.upload();
+
+    const f32 half = terrain.world_size() * 0.5f - 10.0f;
+    auto seaward = [&](f32 x, f32 z) {
+        const f32 gx = terrain.shore_distance(x + 2.0f, z) - terrain.shore_distance(x - 2.0f, z);
+        const f32 gz = terrain.shore_distance(x, z + 2.0f) - terrain.shore_distance(x, z - 2.0f);
+        return std::atan2(gz, gx); // yaw that points the palm's lean (+X) towards the sea
+    };
+    // Palms: groves along the back of the beach and the dunes, leaning out over the sand.
+    u32 n_palms = 0, n_rocks = 0;
+    const f32 sp = 6.0f;
+    for (f32 z = -700.0f; z < 500.0f; z += sp)
+        for (f32 x = -half; x < half; x += sp) {
+            const u32 ix = static_cast<u32>(i32((x + half) / sp)), iz = static_cast<u32>(i32((z + 700.0f) / sp));
+            const f32 px = x + (hash01(ix, iz, 1) - 0.5f) * sp, pz = z + (hash01(ix, iz, 2) - 0.5f) * sp;
+            const f32 land = -terrain.shore_distance(px, pz);
+            if (land < 36.0f || land > 160.0f || terrain.normal_at(px, pz).y < 0.93f ||
+                terrain.height_at(px, pz) > terrain.sea_level() + 9.0f)
+                continue;
+            const f32 grove = 0.5f + 0.5f * std::sin(px * 0.021f + std::sin(pz * 0.017f) * 2.0f);
+            const f32 p = 0.3f * (0.15f + 0.85f * grove * grove) * (1.0f - smoothstep(70.0f, 160.0f, land));
+            if (hash01(ix, iz, 3) > p) continue;
+            const f32 yaw = seaward(px, pz) + (hash01(ix, iz, 4) - 0.5f) * 1.2f;
+            veg.add_instance(palms[hash_u32(ix * 7u + iz * 13u) % 3u], {px, terrain.height_at(px, pz) - 0.1f, pz}, yaw,
+                             0.7f + 0.65f * hash01(ix, iz, 5), hash01(ix, iz, 6));
+            ++n_palms;
+        }
+    // Rocks.
+    const f32 rsp[3] = {7.0f, 9.0f, 22.0f};
+    for (u32 k = 0; k < 3; ++k) {
+        if (rocks[k].proto == ~0u) continue;
+        for (f32 z = -800.0f; z < 300.0f; z += rsp[k])
+            for (f32 x = -half; x < half; x += rsp[k]) {
+                const u32 ix = static_cast<u32>(i32((x + half) / rsp[k])),
+                          iz = static_cast<u32>(i32((z + 800.0f) / rsp[k]));
+                const f32 px = x + (hash01(ix, iz, 11 + k) - 0.5f) * rsp[k];
+                const f32 pz = z + (hash01(ix, iz, 21 + k) - 0.5f) * rsp[k];
+                const f32 sd = terrain.shore_distance(px, pz);
+                const f32 headland = smoothstep(240.0f, 380.0f, std::fabs(px));
+                f32 prob = 0.0f;
+                const bool low = terrain.height_at(px, pz) < terrain.sea_level() + 3.0f;
+                if (k == 0 && low && sd > -6.0f && sd < 30.0f) prob = 0.04f + 0.5f * headland;
+                if (k == 1 && low && sd > -45.0f && sd < -4.0f) prob = 0.05f + 0.3f * headland;
+                if (k == 2 && sd > -14.0f && sd < 18.0f && terrain.height_at(px, pz) < terrain.sea_level() + 4.0f)
+                    prob = 0.6f * headland;
+                if (hash01(ix, iz, 31 + k) > prob) continue;
+                const f32 scale = (k == 2 ? 0.8f : 0.6f) + (k == 2 ? 0.7f : 1.0f) * hash01(ix, iz, 41 + k);
+                veg.add_instance(rocks[k].proto, {px, terrain.height_at(px, pz) - 0.25f * scale, pz},
+                                 hash01(ix, iz, 51 + k) * kTwoPi, scale, hash01(ix, iz, 61 + k));
+                ++n_rocks;
+            }
+    }
+    veg.upload();
+    TEFRA_LOG_INFO("Coast: %u palms, %u rocks", n_palms, n_rocks);
+
+    // Stand on the beach, ~20 m from the water, looking out to sea (-Z).
+    const f32 cx = 0.0f;
+    f32 cz = 0.0f;
+    for (f32 z = 400.0f; z > -400.0f; z -= 0.5f)
+        if (terrain.shore_distance(cx, z) > -20.0f) {
+            cz = z;
+            break;
+        }
+    setup.camera.position = {f64(cx), f64(terrain.height_at(cx, cz) + 1.7f), f64(cz)};
+    setup.camera.yaw = 0.0f;
+    setup.camera.pitch = radians(-3.0f);
+    setup.camera.fovy = radians(55.0f);
+    TEFRA_LOG_INFO("Coast camera: --camera %.1f,%.1f,%.1f,0,-3", f64(cx), setup.camera.position.y, f64(cz));
 }
 
 } // namespace tefra::app

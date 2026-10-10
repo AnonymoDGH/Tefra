@@ -7,6 +7,7 @@
 #include "common/atmosphere.glsl"
 #include "common/fog.glsl"
 #include "common/shadow.glsl"
+#include "common/clouds.glsl"
 layout(push_constant) uniform Push { FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; uint ao; uint vol; } pc;
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
@@ -45,6 +46,22 @@ vec3 apply_fog_volumetric(Frame f, vec3 color, vec3 dir, float dist, vec4 vol) {
     const float T = fog_transmittance(f, dir, dist);
     const vec3 L = fog_radiance(f, dir) * f.exposure.x;
     return color * f.exposure.x * T + vol.rgb + L * max(vol.a - T, 0.0);
+}
+
+// Caustics on the sea floor: the refracted sun is focused by the curvature of the surface. For a small-slope height
+// field h, the intensity at depth d is ~ 1 / (1 + d (1 - 1/n) lap(h)), n = 1.33. A few short wind waves give lap(h).
+float caustics(vec2 x, float depth, float t) {
+    // Nine short waves on golden-angle directions (no visible lattice), wavelengths 0.45..2.4 m.
+    float lap = 0.0;
+    for (int i = 0; i < 9; ++i) {
+        float fi = float(i);
+        float ang = fi * 2.3999632 + 0.4;
+        vec2 D = vec2(cos(ang), sin(ang));
+        float lambda = 2.4 * pow(0.45 / 2.4, fi / 8.0);
+        float k = 6.2831853 / lambda, A = 0.006 * lambda;
+        lap -= A * k * k * sin(k * dot(D, x) - sqrt(9.81 * k) * t + fi * 1.7);
+    }
+    return clamp(1.0 / max(1.0 + depth * 0.25 * lap, 0.12), 0.0, 6.0);
 }
 
 // Canopy occlusion (canopy.h). G channel encodes the canopy top height: h = base + g * range (must match C++).
@@ -105,7 +122,8 @@ vec3 sky_color(Frame f, vec3 dir) {
         float limb = 1.0 - 0.6 * (1.0 - sqrt(1.0 - x * x));
         L += T * a.ground.w / (ATMO_PI * a.sun.w * a.sun.w) * limb;
     }
-    return L;
+    vec4 cl = clouds_eval(f, dir, L);
+    return mix(L, cl.rgb, cl.a);
 }
 
 void main() {
@@ -152,6 +170,22 @@ void main() {
     vec3 L = f.sun_dir.xyz;
     float ndl = dot(N, L);
     vec3 color = vec3(0.0);
+    // Under the sea (ocean.h): sun and sky reach the floor through the water column, focused into caustics. The
+    // floor has no specular of its own there (the water surface reflects instead).
+    vec3 sun_tint = vec3(1.0), amb_tint = vec3(1.0);
+    float spec_keep = 1.0;
+    if (f.ocean.y > 0.5) {
+        vec3 wp = p + f.camera_pos.xyz;
+        float uw = f.ocean.x - wp.y;
+        if (uw > 0.0) {
+            vec3 sig = f.water_absorption.xyz + f.water_scattering.xyz;
+            float c = caustics(wp.xz + L.xz / max(L.y, 0.2) * uw, uw, f.camera_pos.w);
+            float amount = smoothstep(0.03, 0.5, uw) * exp(-uw * 0.12);
+            sun_tint = exp(-sig * uw / max(L.y, 0.15)) * mix(1.0, c, amount);
+            amb_tint = exp(-sig * uw * 1.3);
+            spec_keep = 1.0 - smoothstep(0.0, 0.08, uw);
+        }
+    }
     float noise = frame_noise(gl_FragCoord.xy, f.exposure.w);
     if ((f.shadow_flags & 4u) != 0u) { // diagnostic: sun visibility for every pixel (not only N.L > 0)
         float vd = -(f.view * vec4(p, 1.0)).z;
@@ -164,9 +198,9 @@ void main() {
         vec3 H = normalize(V + L);
         float ndh = max(dot(N, H), 0.0), vdh = max(dot(V, H), 0.0);
         vec3 F = F_Schlick(f0, vdh);
-        vec3 spec = D_GGX(ndh, a) * V_SmithGGX(ndv, ndl, a) * F;
+        vec3 spec = D_GGX(ndh, a) * V_SmithGGX(ndv, ndl, a) * F * spec_keep;
         vec3 diff = diff_col / BRDF_PI * (1.0 - F);
-        color += (diff + spec) * (f.sun_color.rgb * f.sun_dir.w) * ndl * sh;
+        color += (diff + spec) * (f.sun_color.rgb * f.sun_dir.w) * ndl * sh * sun_tint;
     }
     if (foliage && translucency > 0.0) {
         // Thin-leaf transmission: light through the needles towards the viewer (strongest against the sun).
@@ -190,7 +224,8 @@ void main() {
     vec3 kd = diff_col * (1.0 - fss - fms * ems);
     float spec_occ = clamp(pow(ndv + ao, exp2(-16.0 * a - 1.0)) - 1.0 + ao, 0.0, 1.0);
     float canopy = canopy_visibility(f, p);
-    color += (prefiltered * fss * spec_occ + (fms * ems + kd) * irradiance / BRDF_PI * ao) * f.exposure.y * canopy;
+    color += (prefiltered * fss * spec_occ * spec_keep + (fms * ems + kd) * irradiance / BRDF_PI * ao) * f.exposure.y *
+             canopy * amb_tint;
     if (use_vol) {
         const vec4 vol = volumetric_upsample(f, depth, v_uv);
         o_color = vec4(min(apply_fog_volumetric(f, color, -V, length(p), vol), vec3(60000.0)), 1.0);
