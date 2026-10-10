@@ -122,6 +122,12 @@ class Renderer {
     u32 grass_blades() const { return grass_blades_; }
     const rg::Graph& graph() const { return graph_; }
 
+    // Landscape parts (terrain, vegetation, water, ocean) drawn when the RenderWorld given to render() leaves them
+    // null: lets a module own the landscape without the host's frame code knowing about it (Tefra Studio's
+    // world::EnvironmentSync). Set it again after the parts are rebuilt; reset it ({}) before destroying them.
+    void set_landscape(const RenderWorld& parts) { landscape_ = parts; }
+    const RenderWorld& landscape() const { return landscape_; }
+
   private:
     struct FrameBuffers {
         rhi::Buffer constants;
@@ -170,11 +176,12 @@ class Renderer {
     VkPipeline p_volumetric_ = VK_NULL_HANDLE;
     VkPipeline p_ocean_ = VK_NULL_HANDLE, p_ocean_copy_ = VK_NULL_HANDLE;
     rg::TextureHandle taa_handles_[2];
-    const Vegetation* veg_template_owner_ = nullptr;
+    u64 veg_template_uid_ = 0; // Vegetation::uid() the draw template was built for
     VkFormat output_format_ = VK_FORMAT_UNDEFINED;
     VkFormat hdr_format_ = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
     VkFormat shadow_format_ = VK_FORMAT_D32_SFLOAT;
     u32 draw_calls_ = 0;
+    RenderWorld landscape_; // set_landscape(): only terrain, vegetation, water and ocean are used
 };
 
 } // namespace tefra::render

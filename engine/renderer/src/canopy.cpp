@@ -88,7 +88,7 @@ CanopyMap::~CanopyMap() {
 
 void CanopyMap::update(const Vegetation& veg, dvec3 cam) {
     if (!supported_) return;
-    const bool moved = !built_ || &veg != veg_ || std::fabs(cam.x - center_x_) > kRebuildDistance ||
+    const bool moved = !built_ || veg.uid() != veg_uid_ || std::fabs(cam.x - center_x_) > kRebuildDistance ||
                        std::fabs(cam.z - center_z_) > kRebuildDistance;
     if (!moved) return;
     const f32 texel = kCanopyTexelSize;
@@ -98,7 +98,7 @@ void CanopyMap::update(const Vegetation& veg, dvec3 cam) {
     origin_ = {f32(ox), f32(oz)};
     center_x_ = cam.x;
     center_z_ = cam.z;
-    veg_ = &veg;
+    veg_uid_ = veg.uid();
     built_ = true;
 
     std::vector<Vegetation::CanopyInstance> trees;
