@@ -1252,11 +1252,15 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         [=, this](const rg::PassContext& ctx) {
             vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
             vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_tonemap_);
-            const PostPush p{frame_addr, ctx.sampled(resolved), bloom.valid() ? ctx.sampled(bloom) : 0u, exposure_addr,
-                             post_flags, s.bloom_intensity,
-                             vec4{s.grade_white_balance.x, s.grade_white_balance.y, s.grade_white_balance.z,
-                                  s.grade_saturation},
-                             vec4{s.grade_contrast, 0.0f, 0.0f, 0.0f}};
+            const PostPush p{
+                frame_addr,
+                ctx.sampled(resolved),
+                bloom.valid() ? ctx.sampled(bloom) : 0u,
+                exposure_addr,
+                post_flags,
+                s.bloom_intensity,
+                vec4{s.grade_white_balance.x, s.grade_white_balance.y, s.grade_white_balance.z, s.grade_saturation},
+                vec4{s.grade_contrast, 0.0f, 0.0f, 0.0f}};
             vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
             vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
         });
