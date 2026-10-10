@@ -35,6 +35,11 @@ bool parse_common_options(const CommandLine& cl, RunConfig& cfg) {
     cfg.ev100 = static_cast<f32>(cl.get_float("ev", static_cast<f64>(cfg.ev100)));
     cfg.animate = cl.has("animate");
     cfg.no_taa = cl.has("no-taa");
+    cfg.terrain_detail = !cl.has("no-terrain-detail");
+    if (cl.get("pitch")) {
+        cfg.pitch_deg = static_cast<f32>(cl.get_float("pitch", 0.0));
+        cfg.has_pitch = true;
+    }
     if (cfg.width == 0 || cfg.height == 0 || cfg.width > 8192 || cfg.height > 8192) {
         TEFRA_LOG_ERROR("invalid resolution %ux%u", cfg.width, cfg.height);
         return false;
@@ -55,7 +60,9 @@ void print_common_usage() {
                 "  --gltf FILE --hdr FILE  glTF model and Radiance HDR environment\n"
                 "  --ev EV100              camera exposure\n"
                 "  --tier T                native | low | medium | high (low = 0.75 render scale + TAAU)\n"
-                "  --no-taa                disable temporal anti-aliasing\n");
+                "  --no-taa                disable temporal anti-aliasing\n"
+                "  --no-terrain-detail     terrain: disable POM, stochastic tiling and macro variation\n"
+                "  --pitch DEG             camera pitch (degrees, negative looks down) for scenes\n");
 }
 
 } // namespace tefra::app

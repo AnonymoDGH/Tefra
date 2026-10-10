@@ -51,7 +51,10 @@ struct RenderSettings {
     f32 fog_anisotropy = 0.6f;
     bool taa = true;
     bool gtao = true;
-    f32 gtao_radius = 1.2f;  // m
+    f32 gtao_radius = 1.2f; // m
+    // Terrain close-up detail (terrain.frag): height-blended layers, parallax occlusion within 16 m, stochastic
+    // tiling and low-frequency macro variation. Off = the M2 look (luminance-height blend, two-scale tiling).
+    bool terrain_detail = true;
     f32 render_scale = 1.0f; // internal resolution / output resolution (TAAU when < 1; requires taa)
 };
 
