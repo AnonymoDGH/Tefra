@@ -12,6 +12,8 @@ Todas permisivas y compatibles con Apache-2.0. Cada una conserva su licencia en 
 | Dear ImGui (docking) | commit 778992f | MIT | `third_party/imgui` | Interfaz de Tefra Studio (backends GLFW + Vulkan vía volk) |
 | ImGuizmo | commit 105e4fd | MIT | `third_party/imguizmo` | Gizmos de mover/rotar/escalar en Studio |
 | stb_image / stb_image_write | commit 2c980bb (2026-08-01) | MIT o dominio público | `third_party/stb` | PNG (captura, golden images) |
+| miniaudio | 0.11.25 | MIT-0 o dominio público (a elegir) | `third_party/miniaudio` (`miniaudio.h`, `LICENSE`, `miniaudio_impl.c`) | Audio de juego: salida por WASAPI/DirectSound/ALSA/PulseAudio (carga en tiempo de ejecución), decodificación WAV, FLAC y MP3, mezcla y espacialización 3D (`engine/audio`) |
+| stb_vorbis | v1.22 | Dominio público / MIT (a elegir) | `third_party/stb_vorbis` (`stb_vorbis.c`, `LICENSE`) | Decodificador Ogg Vorbis que usa miniaudio (`STB_VORBIS_INCLUDE_STB_VORBIS_H`) |
 | Jolt Physics | 5.6.0 (tag v5.6.0, 2026-07-11) | MIT | `third_party/jolt` (solo `Jolt/` y `LICENSE`) | Física de cuerpos, personaje (`CharacterVirtual`) y raycasts en `engine/physics` (ADR-014). Integración en `third_party/CMakeLists.txt` con `Jolt/Jolt.cmake`: sin Vulkan/DX12/Metal, sin profiler ni debug renderer, SIMD hasta SSE4.2 (x86-64-v2), sin `-Werror` y con includes de sistema. |
 | Microsoft.CodeAnalysis.CSharp (Roslyn) | 4.8.0 (NuGet) | MIT | No vendored: `dotnet build` la restaura de NuGet para `managed/Tefra.Engine` y la copia a `bin/managed` | Compilación en memoria de los scripts C# (M3, ADR-013) |
 | .NET 8 runtime (hostfxr, CoreCLR) | 8.0 | MIT | No redistribuido: lo carga el host en tiempo de ejecución desde la instalación del sistema (`engine/scripting`) | Scripting C# |
@@ -27,3 +29,4 @@ Política (spec §4): solo CC0, CC-BY, OFL (fuentes) o propios, con la procedenc
 | Inter (Regular, SemiBold, Bold) | 4.0 (rsms/inter) | SIL OFL 1.1 | `apps/studio/resources/fonts/Inter-*.ttf` | Fuente de la interfaz de Studio y del player |
 | JetBrains Mono (Regular) | 2.304 | SIL OFL 1.1 | `apps/studio/resources/fonts/JetBrainsMono-Regular.ttf` | Editor de scripts y salida |
 | Miniaturas de plantillas | propias | CC0 | `apps/studio/resources/templates/*.png` | Renderizadas por Tefra Studio (`--render-template-thumbnails`) |
+| Efectos de sonido integrados | propios (generados) | CC0 | `resources/sfx/*.wav` (`scripts/gen_sfx.py`) | Sonidos `builtin:<nombre>` del motor de audio y de los personajes; ver `resources/sfx/README.md` |
