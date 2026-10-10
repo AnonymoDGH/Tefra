@@ -209,6 +209,8 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             setup.settings.shadow_distance = max(setup.settings.shadow_distance, 300.0f);
         }
         if (cfg.no_taa) setup.settings.taa = false;
+        if (cfg.no_grass) setup.settings.grass = false;
+        setup.settings.grass_stats = cfg.grass_stats;
         renderer = std::make_unique<render::Renderer>(*device, *heap, kFramesInFlight);
         params.camera = setup.camera;
     }
@@ -300,6 +302,7 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             world.water = water.get();
             renderer->render(cmd, fc.slot, frame_index, &timer, world, params.camera, params.time, setup.settings, out);
             result.draw_calls = renderer->draw_calls();
+            result.grass_blades = renderer->grass_blades();
         } else {
             rhi::ImageBarrier to_color;
             to_color.image = target_image;
@@ -489,6 +492,7 @@ bool write_bench_json(const char* path, const RunConfig& cfg, const RunResult& r
         .kv("gpu_budget_mb", r.gpu_mem_budget_mb)
         .end_object();
     j.kv("draw_calls", r.draw_calls);
+    j.kv("grass_blades", r.grass_blades);
     j.begin_object("validation")
         .kv("enabled", r.validation_enabled)
         .kv("errors", r.validation_errors)

@@ -22,6 +22,7 @@ int main(int argc, char** argv) {
     cfg.warmup = 60;
     cfg.window = cl.has("window");
     cfg.present = cfg.window ? rhi::PresentMode::Immediate : rhi::PresentMode::Fifo;
+    cfg.grass_stats = true; // the report always states how many grass blades were drawn
     if (!app::parse_common_options(cl, cfg)) return 2;
     if (cfg.frames == 0) cfg.frames = 1;
 

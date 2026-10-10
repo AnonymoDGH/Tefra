@@ -1,0 +1,16 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common/grass.glsl"
+// Statistics only: counts the blades the draw passes rasterize (same cell list and blade functions as grass.vert).
+layout(local_size_x = 64) in;
+void main() {
+    const uint per = uint(pc.grid.w);
+    const uint i = gl_GlobalInvocationID.x;
+    const uint cell_slot = i / per;
+    if (cell_slot >= pc.cell_count) return;
+    const uint b = i - cell_slot * per;
+    const ivec2 cell = grass_cell(pc.cells.c[cell_slot]);
+    Blade g;
+    if (!grass_blade(cell, b, grass_cell_dist(cell), g)) return;
+    atomicAdd(pc.counter.v, 1u);
+}

@@ -44,6 +44,27 @@ struct TonemapPush {
 constexpr u32 kPushBytes = 128;
 static_assert(sizeof(MeshPush) <= kPushBytes && sizeof(LightingPush) <= kPushBytes);
 
+// Grass (grass.vert / grass_count.comp, shaders/common/grass.glsl). The grid is kGrassSide^2 world cells centred on the
+// camera; the CPU keeps the cells inside the disc and the frustum.
+constexpr f32 kGrassRadius = 30.0f;   // m
+constexpr f32 kGrassLodStart = 12.0f; // m: beyond this, 5-vertex blades and thinner density
+constexpr f32 kGrassWind = 0.12f;     // m: tip displacement at full gust
+constexpr f32 kGrassMargin = 1.3f;    // m: cell bounding radius for the frustum test (blade height and slope)
+constexpr i32 kGrassHalf = 31;        // cells from the camera cell to each grid edge (disc radius + margin)
+constexpr u32 kGrassSide = 2 * kGrassHalf + 1;
+constexpr u32 kGrassMaxCells = kGrassSide * kGrassSide;
+constexpr u32 kGrassBladesPerCell = 256; // candidate blades per 1 m^2 at density 1
+struct GrassPush {
+    VkDeviceAddress frame, terrain, cells, counter; // 0, 8, 16, 24
+    vec4 p0;                                        // 32: disc radius, LOD start, tip wind, blade segments
+    i32 grid[4];                                    // 48: grid origin x, side, origin z, blades per cell
+    u32 cell_count;                                 // 64: entries in the cell list (count pass)
+    u32 pad[3];
+};
+static_assert(offsetof(GrassPush, p0) == 32 && offsetof(GrassPush, grid) == 48 &&
+              offsetof(GrassPush, cell_count) == 64);
+static_assert(sizeof(GrassPush) <= kPushBytes);
+
 bool format_supports(const rhi::Device& dev, VkFormat f, VkFormatFeatureFlags need) {
     VkFormatProperties p{};
     vkGetPhysicalDeviceFormatProperties(dev.physical(), f, &p);
@@ -101,9 +122,19 @@ void frustum_planes(const mat4& m, vec4 out[6]) {
 Renderer::Renderer(const rhi::Device& dev, rhi::BindlessHeap& heap, u32 frames_in_flight)
     : dev_(dev), heap_(heap), graph_(dev, heap) {
     frames_.resize(frames_in_flight);
-    for (auto& f : frames_)
+    for (auto& f : frames_) {
         f.constants = rhi::create_buffer(dev_, sizeof(FrameConstants), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                          rhi::MemoryUsage::Upload, "frame_constants");
+        f.grass_cells = rhi::create_buffer(dev_, kGrassMaxCells * sizeof(u32), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                           rhi::MemoryUsage::Upload, "grass_cells");
+        f.grass_counter = rhi::create_buffer(dev_, sizeof(u32),
+                                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                             rhi::MemoryUsage::GpuOnly, "grass_counter");
+        f.grass_readback = rhi::create_buffer(dev_, sizeof(u32), VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                              rhi::MemoryUsage::Readback, "grass_readback");
+        if (f.grass_readback.mapped) *static_cast<u32*>(f.grass_readback.mapped) = 0;
+    }
     if (!format_supports(dev_, hdr_format_,
                          VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))
         hdr_format_ = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -123,22 +154,24 @@ Renderer::~Renderer() {
         rhi::destroy_buffer(dev_, f.terrain);
         for (rhi::Buffer* b : {&f.veg_visible, &f.veg_shadow_visible, &f.veg_cmds, &f.veg_shadow_cmds})
             rhi::destroy_buffer(dev_, *b);
+        for (rhi::Buffer* b : {&f.grass_cells, &f.grass_counter, &f.grass_readback}) rhi::destroy_buffer(dev_, *b);
     }
     rhi::destroy_buffer(dev_, veg_cmd_template_);
     for (u32 i = 0; i < 2; ++i) {
         if (history_bindless_[i] != ~0u) heap_.remove_texture(history_bindless_[i]);
         rhi::destroy_image(dev_, history_[i]);
     }
-    for (VkPipeline p : {p_gbuffer_, p_gbuffer_2s_, p_shadow_, p_lighting_, p_tonemap_, p_skyview_, p_terrain_,
-                         p_terrain_shadow_, p_veg_, p_veg_2s_, p_veg_shadow_, p_veg_cull_, p_water_, p_taa_, p_gtao_})
+    for (VkPipeline p :
+         {p_gbuffer_, p_gbuffer_2s_, p_shadow_, p_lighting_, p_tonemap_, p_skyview_, p_terrain_, p_terrain_shadow_,
+          p_veg_, p_veg_2s_, p_veg_shadow_, p_veg_cull_, p_grass_, p_grass_count_, p_water_, p_taa_, p_gtao_})
         if (p) vkDestroyPipeline(dev_.device(), p, nullptr);
     vkDestroyPipelineLayout(dev_.device(), layout_, nullptr);
 }
 
 void Renderer::create_pipelines(VkFormat output_format) {
-    for (VkPipeline* p :
-         {&p_gbuffer_, &p_gbuffer_2s_, &p_shadow_, &p_lighting_, &p_tonemap_, &p_skyview_, &p_terrain_,
-          &p_terrain_shadow_, &p_veg_, &p_veg_2s_, &p_veg_shadow_, &p_veg_cull_, &p_water_, &p_taa_, &p_gtao_}) {
+    for (VkPipeline* p : {&p_gbuffer_, &p_gbuffer_2s_, &p_shadow_, &p_lighting_, &p_tonemap_, &p_skyview_, &p_terrain_,
+                          &p_terrain_shadow_, &p_veg_, &p_veg_2s_, &p_veg_shadow_, &p_veg_cull_, &p_grass_,
+                          &p_grass_count_, &p_water_, &p_taa_, &p_gtao_}) {
         if (*p) vkDestroyPipeline(dev_.device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -157,11 +190,15 @@ void Renderer::create_pipelines(VkFormat output_format) {
     VkShaderModule veg_shadow_vs = rhi::load_shader(dev_, "veg_shadow.vert");
     VkShaderModule shadow_alpha_fs = rhi::load_shader(dev_, "shadow_alpha.frag");
     VkShaderModule veg_cull_cs = rhi::load_shader(dev_, "veg_cull.comp");
+    VkShaderModule grass_vs = rhi::load_shader(dev_, "grass.vert");
+    VkShaderModule grass_fs = rhi::load_shader(dev_, "grass.frag");
+    VkShaderModule grass_count_cs = rhi::load_shader(dev_, "grass_count.comp");
     VkShaderModule water_vs = rhi::load_shader(dev_, "water.vert");
     VkShaderModule water_fs = rhi::load_shader(dev_, "water.frag");
     VkShaderModule taa_fs = rhi::load_shader(dev_, "taa.frag");
     VkShaderModule gtao_fs = rhi::load_shader(dev_, "gtao.frag");
     p_veg_cull_ = rhi::create_compute_pipeline(dev_, veg_cull_cs, layout_, "veg_cull");
+    p_grass_count_ = rhi::create_compute_pipeline(dev_, grass_count_cs, layout_, "grass_count");
 
     auto rp_g = compat_pass(dev_, {kRt0, kRt1, kRt2, kRt3}, kDepth);
     rhi::GraphicsPipelineDesc g;
@@ -192,6 +229,11 @@ void Renderer::create_pipelines(VkFormat output_format) {
     g.cull = VK_CULL_MODE_NONE;
     g.name = "vegetation_two_sided";
     p_veg_2s_ = rhi::create_graphics_pipeline(dev_, g);
+    // Grass: no vertex input, two-sided ribbons (front = CCW side, see grass.vert).
+    g.vs = grass_vs;
+    g.fs = grass_fs;
+    g.name = "grass";
+    p_grass_ = rhi::create_graphics_pipeline(dev_, g);
 
     auto rp_s = compat_pass(dev_, {}, shadow_format_);
     rhi::GraphicsPipelineDesc s;
@@ -264,8 +306,9 @@ void Renderer::create_pipelines(VkFormat output_format) {
 
     for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k, &rp_w, &rp_a, &rp_o}) rhi::destroy_render_pass(dev_, *rp);
     for (VkShaderModule m :
-         {mesh_vs, gbuf_fs, shadow_vs, fs_vs, light_fs, tone_fs, sky_fs, terrain_vs, terrain_fs, terrain_shadow_vs,
-          veg_vs, veg_shadow_vs, shadow_alpha_fs, veg_cull_cs, water_vs, water_fs, taa_fs, gtao_fs})
+         {mesh_vs,    gbuf_fs,    shadow_vs,         fs_vs,    light_fs,      tone_fs,         sky_fs,
+          terrain_vs, terrain_fs, terrain_shadow_vs, veg_vs,   veg_shadow_vs, shadow_alpha_fs, veg_cull_cs,
+          grass_vs,   grass_fs,   grass_count_cs,    water_vs, water_fs,      taa_fs,          gtao_fs})
         vkDestroyShaderModule(dev_.device(), m, nullptr);
 }
 
@@ -341,6 +384,11 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         s.sun_color = lum > 0.0f ? e / lum : vec3{1.0f};
     }
     FrameBuffers& fb = frames_[slot];
+    // The slot's fence has been waited on, so last frame's grass counter copy in this slot is complete.
+    if (s.grass_stats && fb.grass_readback.mapped) {
+        vmaInvalidateAllocation(dev_.allocator(), fb.grass_readback.allocation, 0, VK_WHOLE_SIZE);
+        grass_blades_ = *static_cast<const u32*>(fb.grass_readback.mapped);
+    }
     const VkExtent2D out_ext = target.extent;
     const f32 scale = s.taa ? clamp(s.render_scale, 0.5f, 1.0f) : 1.0f;
     // Internal (render) resolution; the TAA pass reconstructs the output resolution.
@@ -495,6 +543,54 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         vkCmdDrawIndexed(c, grid_count, shadow_pass ? shadow_patch_count : patch_count, 0, 0, 0);
     };
 
+    // ---- Grass: visible cells (CPU: disc around the camera and frustum), blades are generated on the GPU ----------
+    const bool has_grass = terrain && s.grass;
+    u32 grass_near = 0, grass_far = 0; // cell list: near cells first, then far cells
+    GrassPush grass{};
+    if (has_grass) {
+        const i32 bx = i32(std::floor(camera.position.x)) - kGrassHalf;
+        const i32 bz = i32(std::floor(camera.position.z)) - kGrassHalf;
+        const f32 px = std::fabs(fc.proj.c[0].x), py = std::fabs(fc.proj.c[1].y); // Vulkan y-flip: proj[1][1] < 0
+        const u32 blades =
+            max<u32>(1u, static_cast<u32>(std::lround(f32(kGrassBladesPerCell) * max(s.grass_density, 0.0f))));
+        std::vector<u32> near_cells, far_cells;
+        for (u32 gi = 0; gi < kGrassMaxCells; ++gi) {
+            const f64 cx = f64(bx + i32(gi % kGrassSide)) + 0.5, cz = f64(bz + i32(gi / kGrassSide)) + 0.5;
+            const f64 dx = cx - camera.position.x, dz = cz - camera.position.z;
+            const f32 dist = static_cast<f32>(std::sqrt(dx * dx + dz * dz));
+            if (dist >= kGrassRadius) continue;
+            const f32 ground = terrain->height_at(static_cast<f32>(cx), static_cast<f32>(cz));
+            const vec3 rel{static_cast<f32>(dx), ground + 0.4f - static_cast<f32>(camera.position.y),
+                           static_cast<f32>(dz)};
+            const vec3 v = transform_point(fc.view, rel);
+            const f32 depth = -v.z;
+            if (depth + kGrassMargin < 0.0f) continue;
+            if (depth > kGrassMargin) {
+                // Conservative frustum test on the cell's bounding circle (same test as the GPU count shader).
+                const f32 nx = px * v.x / depth, ny = py * v.y / depth;
+                const f32 rx = px * kGrassMargin / depth, ry = py * kGrassMargin / depth;
+                if (std::fabs(nx) - rx > 1.0f || std::fabs(ny) - ry > 1.0f) continue;
+            }
+            (dist < kGrassLodStart ? near_cells : far_cells).push_back(gi);
+        }
+        grass_near = static_cast<u32>(near_cells.size());
+        grass_far = static_cast<u32>(far_cells.size());
+        auto* list = static_cast<u32*>(fb.grass_cells.mapped);
+        std::memcpy(list, near_cells.data(), near_cells.size() * sizeof(u32));
+        std::memcpy(list + near_cells.size(), far_cells.data(), far_cells.size() * sizeof(u32));
+        vmaFlushAllocation(dev_.allocator(), fb.grass_cells.allocation, 0, VK_WHOLE_SIZE);
+        grass.frame = fb.constants.address;
+        grass.terrain = fb.terrain.address;
+        grass.cells = fb.grass_cells.address;
+        grass.counter = fb.grass_counter.address;
+        grass.p0 = {kGrassRadius, kGrassLodStart, kGrassWind, 3.0f};
+        grass.grid[0] = bx;
+        grass.grid[1] = static_cast<i32>(kGrassSide);
+        grass.grid[2] = bz;
+        grass.grid[3] = static_cast<i32>(blades);
+    }
+    const u32 grass_blades_per_cell = static_cast<u32>(grass.grid[3]);
+
     // ---- Vegetation (GPU culling + indirect draws) --------------------------------------------------
     struct DrawCmd {
         u32 index_count, instance_count, first_index;
@@ -641,6 +737,32 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             });
     }
 
+    if (has_grass && s.grass_stats) {
+        graph_.add_pass(
+            "grass_count", rg::PassType::Compute, [](rg::PassBuilder&) {},
+            [=, this](const rg::PassContext& ctx) {
+                const VkBuffer counter = fb.grass_counter.buffer;
+                vkCmdFillBuffer(ctx.cmd, counter, 0, sizeof(u32), 0);
+                rhi::cmd_memory_barrier(ctx.cmd, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p_grass_count_);
+                vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &bindless, 0, nullptr);
+                GrassPush gp = grass;
+                gp.cell_count = grass_near + grass_far;
+                vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(gp), &gp);
+                const u32 invocations = gp.cell_count * grass_blades_per_cell;
+                vkCmdDispatch(ctx.cmd, (invocations + 63) / 64, 1, 1);
+                rhi::cmd_memory_barrier(ctx.cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_COPY_BIT,
+                                        VK_ACCESS_2_TRANSFER_READ_BIT);
+                VkBufferCopy region{0, 0, sizeof(u32)};
+                vkCmdCopyBuffer(ctx.cmd, counter, fb.grass_readback.buffer, 1, &region);
+                rhi::cmd_memory_barrier(ctx.cmd, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                        VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
+            });
+    }
+
     graph_.add_pass(
         "shadows", rg::PassType::Raster,
         [&](rg::PassBuilder& b) {
@@ -679,6 +801,21 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             draw_list(ctx.cmd, visible, 0, false, p_gbuffer_, p_gbuffer_2s_);
             draw_terrain(ctx.cmd, p_terrain_, false, 0);
             draw_veg(ctx.cmd, false, 0);
+            if (has_grass && grass_near + grass_far > 0) {
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_grass_);
+                // Near cells: 7-vertex blades (3 segments). Far cells: 5-vertex blades (2 segments).
+                for (u32 ring = 0; ring < 2; ++ring) {
+                    const u32 count = ring == 0 ? grass_near : grass_far;
+                    if (count == 0) continue;
+                    const u32 seg = ring == 0 ? 3u : 2u;
+                    GrassPush gp = grass;
+                    gp.p0.w = f32(seg);
+                    vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(gp), &gp);
+                    const u32 verts = grass_blades_per_cell * 3u * (2u * seg - 1u);
+                    vkCmdDraw(ctx.cmd, verts, count, 0, ring == 0 ? 0u : grass_near);
+                    ++*draw_counter;
+                }
+            }
         });
 
     if (atmo) {

@@ -35,6 +35,8 @@ bool parse_common_options(const CommandLine& cl, RunConfig& cfg) {
     cfg.ev100 = static_cast<f32>(cl.get_float("ev", static_cast<f64>(cfg.ev100)));
     cfg.animate = cl.has("animate");
     cfg.no_taa = cl.has("no-taa");
+    cfg.no_grass = cl.has("no-grass");
+    if (cl.has("grass-stats")) cfg.grass_stats = true;
     if (cfg.width == 0 || cfg.height == 0 || cfg.width > 8192 || cfg.height > 8192) {
         TEFRA_LOG_ERROR("invalid resolution %ux%u", cfg.width, cfg.height);
         return false;
@@ -55,7 +57,9 @@ void print_common_usage() {
                 "  --gltf FILE --hdr FILE  glTF model and Radiance HDR environment\n"
                 "  --ev EV100              camera exposure\n"
                 "  --tier T                native | low | medium | high (low = 0.75 render scale + TAAU)\n"
-                "  --no-taa                disable temporal anti-aliasing\n");
+                "  --no-taa                disable temporal anti-aliasing\n"
+                "  --no-grass              disable procedural grass on the terrain\n"
+                "  --grass-stats           count the grass blades drawn (extra compute pass; the bench sets it)\n");
 }
 
 } // namespace tefra::app

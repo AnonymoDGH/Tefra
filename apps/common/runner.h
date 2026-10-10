@@ -41,6 +41,8 @@ struct RunConfig {
     f32 ev100 = -1.0f;           // < 0: scene default
     std::string tier = "native"; // native | low | medium | high
     bool no_taa = false;
+    bool no_grass = false;
+    bool grass_stats = false; // count the grass blades drawn (reported as grass_blades)
     render::TestPatternParams params = default_scene_params();
 };
 
@@ -62,6 +64,7 @@ struct RunResult {
     rhi::AdapterInfo adapter;
     f64 gpu_mem_used_mb = 0, gpu_mem_budget_mb = 0, cpu_rss_mb = 0;
     u32 draw_calls = 0;
+    u32 grass_blades = 0; // last read-back count (lags by the frames in flight)
     std::string present_used = "headless";
     u32 frames_rendered = 0;
 };
