@@ -44,6 +44,7 @@ class Environment {
     u32 cube() const { return cube_index_; }
     u32 mips() const { return settings_.specular_mips; }
     u32 brdf_lut() const { return lut_index_; }
+    u32 background() const { return background_index_; }
     const vec4* sh() const { return sh_; } // 9 coefficients, cosine-convolved irradiance (rgb)
     // Brightest direction found in the source (sun for most HDRIs) and its estimated illuminance.
     vec3 dominant_direction() const { return dominant_dir_; }
@@ -61,6 +62,8 @@ class Environment {
     EnvironmentSettings settings_;
     rhi::Image prefiltered_;
     rhi::Image lut_;
+    rhi::Image background_;
+    u32 background_index_ = ~0u;
     u32 cube_index_ = ~0u;
     u32 lut_index_ = ~0u;
     vec4 sh_[9] = {};

@@ -4,7 +4,8 @@ Las sesiones no recuerdan nada: este archivo es la memoria. Actualízalo al fina
 
 ## Estado actual (2026-10-10)
 
-- **M0 implementado.** Build, core, RHI Vulkan 1.2, captura headless, `tefra_bench` JSON, tests y CI.
+- **M0 y M1 implementados.** M1: render graph (barreras automáticas), bindless, deferred PBR, IBL (HDR o cielo procedural), cascadas de sombra, AgX, glTF (cgltf). Spec M1: `docs/specs/2026-10-10-m1-render-base.md`. Capturas en `docs/captures/`.
+- Assets CC0 de demo: `python3 scripts/fetch_assets.py` → `assets/cache/` (no versionado). Ejemplo: `tefra_bench --gltf assets/cache/models/dead_tree_trunk/dead_tree_trunk.gltf --hdr assets/cache/hdri/dark_autumn_forest.hdr --capture out.png`.
 - El usuario concedió **autonomía total** (2026-10-10): sin preguntas, push libre, decisiones con criterio. Corrige al ver resultados.
 - Spec vigente: `docs/specs/2026-10-10-tefra-vision-y-fundaciones.md`. Plan M0: `docs/plans/2026-10-10-m0-fundaciones.md`.
 - Repo `AnonymoDGH/Tefra` (público; el usuario autorizó el push). Rama de trabajo: `claude/new-session-ksgl0m`.
@@ -57,5 +58,5 @@ clang-format -i $(git ls-files 'engine/*.cpp' 'engine/*.h' 'apps/*.cpp' 'apps/*.
 
 ## Próximos pasos
 
-1. M1: render graph mínimo (barreras automáticas), bindless (descriptor indexing), importador glTF (cgltf) a un formato propio, PBR metal-rough + IBL + sombras en cascada, ImGui y golden images.
-2. M2: GPU-driven + terreno + atmósfera (Hillaire) + niebla + TAAU.
+1. M2 (el look): terreno con LOD y materiales por capas, atmósfera física (Hillaire), niebla de altura + volumétrica (froxels), TAA/TAAU, GTAO, auto-exposición, vegetación instanciada GPU-driven (culling + MDI).
+2. Pendiente de M1: ImGui (debug overlay).

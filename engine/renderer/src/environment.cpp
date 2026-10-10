@@ -160,6 +160,9 @@ void Environment::release_cube() {
     if (cube_index_ != ~0u) heap_.remove_cube(cube_index_);
     cube_index_ = ~0u;
     rhi::destroy_image(dev_, prefiltered_);
+    if (background_index_ != ~0u) heap_.remove_texture(background_index_);
+    background_index_ = ~0u;
+    rhi::destroy_image(dev_, background_);
 }
 
 void Environment::build_brdf_lut() {
@@ -240,7 +243,7 @@ bool Environment::build_from_hdr(const char* path, f32 sky_nits) {
         TEFRA_LOG_ERROR("cannot read HDR %s", path);
         return false;
     }
-    ImageRGBA32F img = downsample_equirect(src, min(2048u, max(512u, settings_.cube_size * 8)));
+    ImageRGBA32F img = downsample_equirect(src, 2048);
     // Mean luminance of the upper hemisphere (solid-angle weighted).
     f64 lum_sum = 0.0, w_sum = 0.0;
     f32 max_lum = 0.0f;
@@ -288,6 +291,20 @@ bool Environment::build_from_hdr(const char* path, f32 sky_nits) {
 void Environment::build_from_equirect(const ImageRGBA32F& source) {
     const u64 t0 = time_now_ns();
     release_cube();
+    {
+        // Full-resolution (<= 2048) equirect for the visible background, with mips against aliasing.
+        const ImageRGBA32F bg = downsample_equirect(source, 2048);
+        std::vector<u16> h(bg.pixels.size());
+        for (usize i = 0; i < h.size(); ++i) h[i] = f32_to_f16(min(bg.pixels[i], 65000.0f));
+        rhi::TextureUpload bu;
+        bu.pixels = h.data();
+        bu.width = bg.width;
+        bu.height = bg.height;
+        bu.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        bu.name = "env_background";
+        background_ = rhi::upload_texture(dev_, bu);
+        background_index_ = heap_.add_texture(background_.view);
+    }
     const ImageRGBA32F eq = downsample_equirect(source, max(256u, settings_.cube_size * 4));
     sh9_project_equirect(eq, sh_);
     sh9_convolve_cosine(sh_);

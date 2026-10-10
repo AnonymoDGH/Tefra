@@ -5,6 +5,8 @@
 
 #include "tefra/core/log.h"
 
+#include <cmath>
+
 namespace tefra::app {
 namespace {
 
@@ -96,10 +98,36 @@ bool build_gltf_scene(render::Scene& scene, render::Environment& env, SceneSetup
         env.build_procedural(sky);
     }
     render::GltfLoadOptions opt;
+    const usize first = scene.instances().size();
     const auto res = render::load_gltf(scene, gltf.c_str(), opt);
     if (!res.ok) return false;
+    // Rest the model on the ground (y = 0) and frame it.
+    f32 lowest = 1e30f, radius = 0.0f;
+    for (usize i = first; i < scene.instances().size(); ++i) {
+        const auto& in = scene.instances()[i];
+        const auto& b = scene.meshes()[in.mesh].bounds;
+        const f32 s = max(max(in.scale.x, in.scale.y), in.scale.z);
+        lowest = min(lowest, static_cast<f32>(in.position.y) + (b.center.y - b.radius) * s);
+        radius = max(radius, b.radius * s +
+                                 length(vec3{static_cast<f32>(in.position.x), 0.0f, static_cast<f32>(in.position.z)}));
+    }
+    for (usize i = first; i < scene.instances().size(); ++i)
+        scene.instances()[i].position.y -= static_cast<f64>(lowest);
+    if (!hdr.empty()) { // look-dev: the HDRI provides the surroundings
+        scene.upload();
+        setup.camera.position = {0.0, static_cast<f64>(radius), static_cast<f64>(max(radius, 0.5f)) * 2.4};
+        return true;
+    }
+    const u32 plane = scene.add_mesh(render::make_plane(400.0f, 400.0f, 1.0f));
+    const u32 ground = scene.add_material(plain(scene, {0.09f, 0.08f, 0.06f}, 0.95f, 0.0f));
+    render::Instance gi;
+    gi.mesh = plane;
+    gi.material = ground;
+    scene.add_instance(gi);
     scene.upload();
-    setup.camera.position = {0.0, 1.0, 3.0};
+    const f64 dist = static_cast<f64>(max(radius, 0.5f)) * 2.6;
+    setup.camera.position = {0.0, 1.0 + static_cast<f64>(radius) * 0.4, dist};
+    setup.camera.pitch = -std::atan2(static_cast<f32>(setup.camera.position.y) - radius * 0.6f, static_cast<f32>(dist));
     return true;
 }
 

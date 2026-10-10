@@ -18,6 +18,7 @@ struct Frame {
     vec4 sun_dir; vec4 sun_color; vec4 camera_pos; vec4 exposure; vec4 viewport;
     vec4 sh[9];
     uint env_cube; uint env_mips; uint brdf_lut; uint shadow_atlas;
+    uint env_background; uint pad0_; uint pad1_; uint pad2_;
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VertexBuffer { Vertex v[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer MaterialBuffer { Material m[]; };

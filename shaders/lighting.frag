@@ -3,6 +3,7 @@
 #include "common/gpu_types.glsl"
 #include "common/bindless.glsl"
 #include "common/brdf.glsl"
+#include "common/cube.glsl"
 layout(push_constant) uniform Push { FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; } pc;
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
@@ -55,7 +56,7 @@ void main() {
     vec3 V = -normalize(p);
     if (depth <= 0.0) {
         vec3 dir = -V;
-        o_color = vec4(textureLod(TEXCUBE(f.env_cube, SMP_LINEAR_CLAMP_MIP), dir, 0.0).rgb * f.exposure.y, 1.0);
+        o_color = vec4(textureLod(TEX2D(f.env_background, SMP_LINEAR_REPEAT), equirect_uv(dir), 0.0).rgb * f.exposure.y, 1.0);
         return;
     }
     vec4 g0 = texelFetch(TEX2D(pc.rt0, SMP_NEAREST_CLAMP), px, 0);

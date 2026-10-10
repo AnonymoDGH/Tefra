@@ -61,8 +61,10 @@ struct FrameConstants {
     vec4 sh[9];                           // irradiance SH9 (rgb) of the environment, cosine-convolved, pre-scaled
     u32 env_cube = 0;                     // bindless cube index (prefiltered specular)
     u32 env_mips = 1;
-    u32 brdf_lut = 0;     // bindless 2D index
-    u32 shadow_atlas = 0; // bindless 2D index
+    u32 brdf_lut = 0;       // bindless 2D index
+    u32 shadow_atlas = 0;   // bindless 2D index
+    u32 env_background = 0; // bindless 2D index: full-resolution equirect for the visible sky
+    u32 pad_[3] = {};
 };
 static_assert(sizeof(FrameConstants) % 16 == 0);
 

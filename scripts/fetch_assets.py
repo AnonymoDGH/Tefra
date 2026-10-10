@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Downloads the CC0 demo assets from Poly Haven into assets/cache/ (not versioned).
+
+Every asset is CC0 (https://polyhaven.com/license). Provenance is written to assets/cache/PROVENANCE.md.
+Usage: python3 scripts/fetch_assets.py [--res 1k|2k]
+"""
+import argparse
+import json
+import os
+import sys
+import urllib.request
+
+MODELS = ["boulder_01", "dead_tree_trunk", "fern_02", "fir_tree_01"]
+HDRIS = ["dark_autumn_forest", "forest_slope"]
+API = "https://api.polyhaven.com"
+
+
+HEADERS = {"User-Agent": "tefra-engine-asset-fetch/0.1"}
+
+
+def get_json(url):
+    with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS)) as r:
+        return json.load(r)
+
+
+def download(url, path):
+    if os.path.exists(path):
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".part"
+    with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS)) as r, open(tmp, "wb") as f:
+        f.write(r.read())
+    os.replace(tmp, path)
+    print("  ", os.path.relpath(path))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--res", default="1k")
+    args = ap.parse_args()
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "cache")
+    lines = ["# Provenance (auto-generated)\n", "All assets: Poly Haven, CC0 1.0. Downloaded by scripts/fetch_assets.py.\n\n"]
+    for m in MODELS:
+        files = get_json(f"{API}/files/{m}")
+        entry = files["gltf"][args.res]["gltf"]
+        base = os.path.join(root, "models", m)
+        download(entry["url"], os.path.join(base, f"{m}.gltf"))
+        for rel, inc in entry.get("include", {}).items():
+            download(inc["url"], os.path.join(base, rel))
+        lines.append(f"- models/{m}: https://polyhaven.com/a/{m} ({args.res})\n")
+    for h in HDRIS:
+        files = get_json(f"{API}/files/{h}")
+        url = files["hdri"][args.res]["hdr"]["url"]
+        download(url, os.path.join(root, "hdri", f"{h}.hdr"))
+        lines.append(f"- hdri/{h}.hdr: https://polyhaven.com/a/{h} ({args.res})\n")
+    with open(os.path.join(root, "PROVENANCE.md"), "w") as f:
+        f.writelines(lines)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

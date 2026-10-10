@@ -264,6 +264,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     fc.env_cube = env.cube();
     fc.env_mips = env.mips();
     fc.brdf_lut = env.brdf_lut();
+    fc.env_background = env.background();
 
     // ---- Instances (camera-relative) and culling ---------------------------------------------------
     const auto& instances = scene.instances();
