@@ -5,9 +5,10 @@
 #include "tefra/core/log.h"
 #include "tefra/world/scene_sync.h"
 
-#include <ImGuizmo.h>
 #include <imgui.h>
 #include <imgui_internal.h>
+// ImGuizmo needs imgui.h first.
+#include <ImGuizmo.h>
 
 #include <algorithm>
 #include <cmath>
