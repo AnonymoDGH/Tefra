@@ -9,6 +9,9 @@ layout(location = 1) out vec3 v_normal;
 layout(location = 2) out vec4 v_tangent;
 layout(location = 3) out vec2 v_uv;
 layout(location = 4) flat out uint v_material;
+#ifndef SHADOW_PASS
+layout(location = 5) flat out float v_rand; // per-instance random: bark tint and moss
+#endif
 void main() {
     Frame f = pc.frame.f;
     VegInstance inst = pc.instances.i[pc.visible.v[gl_InstanceIndex]];
@@ -31,6 +34,9 @@ void main() {
     v_pos = inst.pos_scale.xyz + p - f.camera_pos.xyz;
     v_uv = vtx.uv;
     v_material = pc.material;
+#ifndef SHADOW_PASS
+    v_rand = inst.rot_proto.w;
+#endif
 #ifdef SHADOW_PASS
     gl_Position = f.cascade_view_proj[pc.cascade] * vec4(v_pos, 1.0);
 #else

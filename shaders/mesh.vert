@@ -9,6 +9,7 @@ layout(location = 1) out vec3 v_normal;
 layout(location = 2) out vec4 v_tangent;
 layout(location = 3) out vec2 v_uv;
 layout(location = 4) flat out uint v_material;
+layout(location = 5) flat out float v_rand;
 void main() {
     Instance inst = pc.instances.i[gl_InstanceIndex];
     Vertex vtx = pc.vertices.v[gl_VertexIndex];
@@ -20,5 +21,6 @@ void main() {
     v_pos = wp;
     v_uv = vtx.uv;
     v_material = inst.material;
+    v_rand = 0.0;
     gl_Position = pc.frame.f.view_proj * vec4(wp, 1.0);
 }

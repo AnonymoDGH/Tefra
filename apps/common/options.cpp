@@ -26,6 +26,17 @@ bool parse_common_options(const CommandLine& cl, RunConfig& cfg) {
     }
     if (const char* c = cl.get("capture")) cfg.capture_path = c;
     if (const char* t = cl.get("tier")) cfg.tier = t;
+    if (const char* cam = cl.get("camera")) {
+        double v[5] = {};
+        if (std::sscanf(cam, "%lf,%lf,%lf,%lf,%lf", &v[0], &v[1], &v[2], &v[3], &v[4]) != 5) {
+            TEFRA_LOG_ERROR("invalid --camera '%s' (x,y,z,yaw_deg,pitch_deg)", cam);
+            return false;
+        }
+        cfg.camera_override = true;
+        for (int i = 0; i < 3; ++i) cfg.camera_xyz[i] = v[i];
+        cfg.camera_yaw_pitch[0] = static_cast<f32>(v[3]) * 3.14159265f / 180.0f;
+        cfg.camera_yaw_pitch[1] = static_cast<f32>(v[4]) * 3.14159265f / 180.0f;
+    }
     if (const char* sc = cl.get("scene")) cfg.scene = sc;
     if (const char* g = cl.get("gltf")) {
         cfg.gltf_path = g;
@@ -62,7 +73,8 @@ void print_common_usage() {
                 "  --tier T                native | low | medium | high (low = 0.75 render scale + TAAU)\n"
                 "  --no-taa                disable temporal anti-aliasing\n"
                 "  --no-terrain-detail     terrain: disable POM, stochastic tiling and macro variation\n"
-                "  --pitch DEG             camera pitch (degrees, negative looks down) for scenes\n");
+                "  --pitch DEG             camera pitch (degrees, negative looks down) for scenes\n"
+                "  --camera x,y,z,yaw,pitch  override the scene camera (degrees for yaw/pitch)\n");
 }
 
 } // namespace tefra::app

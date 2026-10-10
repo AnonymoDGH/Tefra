@@ -44,6 +44,9 @@ struct RunConfig {
     bool terrain_detail = true; // terrain POM / stochastic tiling / macro variation
     bool has_pitch = false;     // --pitch: overrides the scene camera pitch
     f32 pitch_deg = 0.0f;
+    bool camera_override = false; // --camera x,y,z,yaw_deg,pitch_deg (scene3d)
+    f64 camera_xyz[3] = {0.0, 0.0, 0.0};
+    f32 camera_yaw_pitch[2] = {0.0f, 0.0f};
     render::TestPatternParams params = default_scene_params();
 };
 

@@ -28,9 +28,9 @@ struct MaterialGPU {
     u32 normal_tex = 0;
     u32 orm_tex = 0;
     u32 emissive_tex = 0;
-    u32 flags = 0; // bit0: foliage (translucency), bit1: double-sided
+    u32 flags = 0; // bit0: foliage (translucency), bit1: double-sided, bit2: bark (tint + moss)
     f32 translucency = 0.0f;
-    u32 pad[2] = {};
+    u32 pad[2] = {}; // bark: pad[0] = moss coverage (float bits)
 };
 static_assert(sizeof(MaterialGPU) == 80);
 constexpr u32 kNoTexture = 0xFFFFFFFFu;

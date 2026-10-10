@@ -7,6 +7,7 @@
 #include "tefra/core/image.h"
 #include "tefra/core/log.h"
 
+#include <bit>
 #include <cmath>
 
 namespace tefra::app {
@@ -232,6 +233,9 @@ void build_valley_scene(render::Scene& scene, render::Environment& env, const re
         load_texture_file(scene, tex + "bark_brown_01/bark_brown_01_nor_gl.jpg", false, scene.flat_normal_texture());
     bark.orm_tex = load_texture_file(scene, tex + "bark_brown_01/bark_brown_01_arm.jpg", false, scene.white_texture());
     bark.occlusion_strength = 1.0f;
+    bark.normal_scale = 1.8f;                // stronger relief: the plates read at 2-5 m
+    bark.flags = 4u;                         // bark: per-instance tint and moss
+    bark.pad[0] = std::bit_cast<u32>(0.85f); // moss coverage
     const u32 bark_mat = scene.add_material(bark);
 
     std::vector<u8> needle_albedo, needle_normal;
