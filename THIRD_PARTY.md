@@ -20,4 +20,10 @@ Herramientas de build (no se redistribuyen): glslang (BSD-3 / Apache-2.0), CMake
 
 ## Assets
 
-Todavía no hay. Política (spec §4): solo CC0, CC-BY o propios, con la procedencia registrada en `assets/PROVENANCE.md`.
+Política (spec §4): solo CC0, CC-BY, OFL (fuentes) o propios, con la procedencia registrada.
+
+| Asset | Versión | Licencia | Ruta | Uso |
+|---|---|---|---|---|
+| Inter (Regular, SemiBold, Bold) | 4.0 (rsms/inter) | SIL OFL 1.1 | `apps/studio/resources/fonts/Inter-*.ttf` | Fuente de la interfaz de Studio y del player |
+| JetBrains Mono (Regular) | 2.304 | SIL OFL 1.1 | `apps/studio/resources/fonts/JetBrainsMono-Regular.ttf` | Editor de scripts y salida |
+| Miniaturas de plantillas | propias | CC0 | `apps/studio/resources/templates/*.png` | Renderizadas por Tefra Studio (`--render-template-thumbnails`) |

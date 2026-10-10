@@ -6,3 +6,6 @@ tefra_add_library(tefra_core
         src/jobs.cpp src/json.cpp src/json_value.cpp src/image.cpp src/stats.cpp src/sysinfo.cpp src/cli.cpp src/input.cpp
     PUBLIC_DEPS Threads::Threads
     PRIVATE_DEPS tefra_stb)
+if(WIN32)
+    target_link_libraries(tefra_core PRIVATE shell32)
+endif()

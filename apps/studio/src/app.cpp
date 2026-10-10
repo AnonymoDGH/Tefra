@@ -75,6 +75,7 @@ App::~App() {
     mcp_.reset();
     if (device_) device_->wait_idle();
     if (oneshot_pool_) vkDestroyCommandPool(device_->device(), oneshot_pool_, nullptr);
+    release_textures();
     if (ImGui::GetCurrentContext()) {
         if (viewport_tex_) ImGui_ImplVulkan_RemoveTexture(viewport_tex_);
         viewport_tex_ = VK_NULL_HANDLE;
@@ -110,14 +111,20 @@ bool App::init(std::string* error) {
     platform::WindowDesc wd;
     wd.width = cfg_.width;
     wd.height = cfg_.height;
-    wd.title = "Tefra Studio";
+    wd.title = cfg_.title.c_str();
     window_.reset(platform::Window::create(wd));
     if (!window_) {
         *error = "cannot create window (no display?)";
         return false;
     }
+    if (cfg_.player && cfg_.fullscreen) {
+        GLFWwindow* gw = static_cast<GLFWwindow*>(window_->native_handle());
+        GLFWmonitor* mon = glfwGetPrimaryMonitor();
+        if (const GLFWvidmode* mode = mon ? glfwGetVideoMode(mon) : nullptr)
+            glfwSetWindowMonitor(gw, mon, 0, 0, mode->width, mode->height, mode->refreshRate);
+    }
     rhi::DeviceDesc dd;
-    dd.app_name = "tefra_studio";
+    dd.app_name = cfg_.player ? "tefra_player" : "tefra_studio";
     dd.validation = cfg_.validation;
     dd.instance_extensions = platform::Window::required_instance_extensions();
     device_ = rhi::Device::create(dd);
@@ -146,14 +153,30 @@ bool App::init(std::string* error) {
     create_ui_framebuffers();
     init_imgui();
     setup_play_systems();
-    setup_mcp();
+    if (!cfg_.player) setup_mcp();
 
+    screen_ = cfg_.player ? Screen::Player : (cfg_.show_home ? Screen::Home : Screen::Editor);
     if (!cfg_.open_path.empty()) {
         std::string err;
-        if (!session_.open(cfg_.open_path, &err)) TEFRA_LOG_ERROR("Open %s: %s", cfg_.open_path.c_str(), err.c_str());
+        if (session_.open(cfg_.open_path, &err)) {
+            if (!cfg_.player) projects_.touch_recent(cfg_.open_path);
+        } else {
+            TEFRA_LOG_ERROR("Open %s: %s", cfg_.open_path.c_str(), err.c_str());
+            if (cfg_.player) {
+                *error = "cannot load the game: " + err;
+                return false;
+            }
+        }
     } else if (cfg_.demo) {
         session_.new_place(false);
         build_demo_scene();
+    } else if (!cfg_.start_template.empty()) {
+        const TemplateInfo* t = find_template(cfg_.start_template);
+        if (!t) {
+            *error = "unknown template '" + cfg_.start_template + "'";
+            return false;
+        }
+        new_from_template(*t, false);
     }
     // Render defaults for the editor: crisp, responsive, no film grain.
     settings_.cascades = 3;
@@ -249,8 +272,9 @@ void App::init_imgui() {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NavEnableKeyboard;
-    io.IniFilename = "tefra_studio.ini";
+    io.IniFilename = cfg_.player ? nullptr : "tefra_studio.ini";
     apply_theme();
+    load_fonts();
     ImGui_ImplGlfw_InitForVulkan(static_cast<GLFWwindow*>(window_->native_handle()), true);
     ImGui_ImplVulkan_InitInfo ii{};
     ii.ApiVersion = VK_API_VERSION_1_2;
@@ -414,44 +438,48 @@ void App::frame(f32 dt, bool capture_window) {
         acquired = swapchain_->acquire(fc.slot, image_index);
     }
     VkCommandBuffer cmd = fc.cmd;
+    const bool render_scene = screen_ != Screen::Home;
+    rhi::ReadbackRequest vp_readback;
+    bool vp_capture = false;
 
     // Scene -> viewport image.
-    render::OutputTarget out;
-    out.image = viewport_image_.image;
-    out.view = viewport_image_.view;
-    out.format = kViewportFormat;
-    out.extent = viewport_extent_;
-    out.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    out.final_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    out.initial_stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT;
-    out.initial_access = VK_ACCESS_2_NONE;
-    render::RenderWorld rw;
-    rw.scene = scene_.get();
-    rw.env = env_.get();
-    rw.atmosphere = atmosphere_.get();
-    renderer_->render(cmd, fc.slot, frame_index_, nullptr, rw, camera_, f32(time_), settings_, out);
+    if (render_scene) {
+        render::OutputTarget out;
+        out.image = viewport_image_.image;
+        out.view = viewport_image_.view;
+        out.format = kViewportFormat;
+        out.extent = viewport_extent_;
+        out.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        out.final_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        out.initial_stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COPY_BIT;
+        out.initial_access = VK_ACCESS_2_NONE;
+        render::RenderWorld rw;
+        rw.scene = scene_.get();
+        rw.env = env_.get();
+        rw.atmosphere = atmosphere_.get();
+        renderer_->render(cmd, fc.slot, frame_index_, nullptr, rw, camera_, f32(time_), settings_, out);
 
-    VkImageLayout vp_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    VkPipelineStageFlags2 vp_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    VkAccessFlags2 vp_access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    rhi::ReadbackRequest vp_readback;
-    const bool vp_capture = !pending_capture_path_.empty();
-    if (vp_capture) {
-        vp_readback = rhi::cmd_readback_image(*device_, cmd, viewport_image_.image, kViewportFormat, viewport_extent_,
-                                              vp_layout, vp_stage, vp_access);
-        vp_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        vp_stage = VK_PIPELINE_STAGE_2_COPY_BIT;
-        vp_access = VK_ACCESS_2_NONE;
+        VkImageLayout vp_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        VkPipelineStageFlags2 vp_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkAccessFlags2 vp_access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        vp_capture = !pending_capture_path_.empty();
+        if (vp_capture) {
+            vp_readback = rhi::cmd_readback_image(*device_, cmd, viewport_image_.image, kViewportFormat,
+                                                  viewport_extent_, vp_layout, vp_stage, vp_access);
+            vp_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            vp_stage = VK_PIPELINE_STAGE_2_COPY_BIT;
+            vp_access = VK_ACCESS_2_NONE;
+        }
+        rhi::ImageBarrier to_read;
+        to_read.image = viewport_image_.image;
+        to_read.old_layout = vp_layout;
+        to_read.new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        to_read.src_stage = vp_stage;
+        to_read.src_access = vp_access;
+        to_read.dst_stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        to_read.dst_access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        rhi::cmd_image_barrier(cmd, to_read);
     }
-    rhi::ImageBarrier to_read;
-    to_read.image = viewport_image_.image;
-    to_read.old_layout = vp_layout;
-    to_read.new_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    to_read.src_stage = vp_stage;
-    to_read.src_access = vp_access;
-    to_read.dst_stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-    to_read.dst_access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-    rhi::cmd_image_barrier(cmd, to_read);
 
     // UI -> swapchain.
     VkClearValue clear{};
@@ -525,7 +553,13 @@ int App::run() {
     const bool scripted = !cfg_.capture_path.empty() && cfg_.frames > 0;
     while (!quit_) {
         window_->poll_events();
-        if (window_->should_close()) break;
+        if (window_->should_close()) {
+            if (cfg_.player || scripted || screen_ != Screen::Editor || !session_.modified()) break;
+            // Unsaved changes: keep the window and ask first.
+            glfwSetWindowShouldClose(static_cast<GLFWwindow*>(window_->native_handle()), GLFW_FALSE);
+            confirm_discard([this] { quit_ = true; });
+        }
+        update_window_title();
         const u64 now = time_now_ns();
         f32 dt = static_cast<f32>(ns_to_ms(now - prev) * 1e-3);
         prev = now;
@@ -533,7 +567,13 @@ int App::run() {
         dt = min(dt, 0.1f);
         time_ += dt;
         const bool last = scripted && frames_done + 1 >= cfg_.frames;
-        frame(dt, last);
+        if (last && cfg_.capture_viewport) {
+            pending_capture_path_ = cfg_.capture_path;
+            pending_capture_done_ = [this](bool ok) {
+                if (ok) TEFRA_LOG_INFO("Captured %s", cfg_.capture_path.c_str());
+            };
+        }
+        frame(dt, last && !cfg_.capture_viewport);
         ++frames_done;
         if (last) break;
     }

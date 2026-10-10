@@ -3,7 +3,9 @@
 // Tefra Studio application: window + Vulkan + Dear ImGui shell around the engine renderer (spec M3, ADR-011).
 // The 3D scene is rendered to an offscreen image shown in the Viewport panel; the panels are drawn in ui.cpp.
 
+#include "tefra/studio/projects.h"
 #include "tefra/studio/session.h"
+#include "tefra/studio/templates.h"
 
 #include "tefra/core/input.h"
 #include "tefra/core/log.h"
@@ -17,9 +19,12 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <volk.h>
+
+struct ImFont;
 
 namespace tefra::platform {
 class Window;
@@ -65,8 +70,15 @@ struct StudioConfig {
     bool demo = false;        // build the demo scene instead of the baseplate
     std::string capture_path; // non-interactive: render `frames` frames, save the window as PNG and quit
     u32 frames = 0;
-    bool play_at_start = false; // press Play after loading (with --capture: screenshots of play mode)
-    u16 mcp_port = 44755;       // 0 = MCP server off
+    bool play_at_start = false;    // press Play after loading (with --capture: screenshots of play mode)
+    u16 mcp_port = 44755;          // 0 = MCP server off
+    std::string start_template;    // open a new untitled place from this template ("obby"); skips the start page
+    bool capture_viewport = false; // --capture writes the 3D viewport instead of the whole window
+    bool show_home = true;         // start page at launch (false when a place, template or demo is given)
+    // Player mode (tefra_player): the game fills the window, no editor UI, Esc opens the pause menu.
+    bool player = false;
+    std::string title = "Tefra Studio";
+    bool fullscreen = false;
 };
 
 struct LogLine {
@@ -76,6 +88,8 @@ struct LogLine {
 };
 
 enum class Tool : u8 { Select, Move, Rotate, Scale };
+enum class Screen : u8 { Home, Editor, Player };
+enum class HomeTab : u8 { Home, Experiences, Templates, Archive };
 
 class App {
   public:
@@ -115,6 +129,36 @@ class App {
     void play_input(vec2 view_min, vec2 view_size);
     void setup_mcp();
     bool capture_viewport_now(ImageRGBA8& out);
+
+    // ---- Start page and projects (home.cpp) ----
+    void draw_home();
+    void draw_home_sidebar(f32 height);
+    void draw_home_content();
+    void draw_project_grid(const std::vector<ProjectInfo>& items, bool archived, usize max_items);
+    bool draw_project_card(const ProjectInfo& p, bool archived);
+    void draw_template_grid(bool with_descriptions, const char* category);
+    void draw_home_modals();
+    void refresh_projects();
+    void new_from_template(const TemplateInfo& t, bool create_project);
+    void open_place(const std::string& path);
+    void open_place_dialog();
+    void import_roblox_dialog(); // import.cpp
+    bool import_roblox_file(const std::string& path);
+    void export_game_dialog(); // export.cpp
+    void draw_export_modal();
+    void save_place(bool save_as);
+    void save_thumbnail();
+    void go_home();
+    void confirm_discard(std::function<void()> action); // runs now, or after the unsaved-changes modal
+    void frame_camera_for_template(std::string_view id);
+    void update_window_title();
+    void load_fonts();
+    std::string resources_dir() const;
+    // Image files as ImGui textures (thumbnails); reloaded when the file changes.
+    void* texture(const std::string& path, vec2* size = nullptr);
+    void release_textures();
+    // ---- Player mode (home.cpp) ----
+    void draw_player(f32 dt);
 
     // ---- UI (ui.cpp) ----
     void draw_ui(f32 dt);
@@ -183,10 +227,38 @@ class App {
     char rename_buf_[128] = {};
     std::vector<u64> open_scripts_;
     u64 focus_script_ = 0;
-    bool show_open_dialog_ = false, show_save_dialog_ = false;
+    bool show_open_dialog_ = false, show_save_dialog_ = false, show_import_dialog_ = false;
     char path_buf_[512] = {};
     bool quit_ = false;
     bool layout_built_ = false;
+
+    // Start page.
+    Screen screen_ = Screen::Editor;
+    HomeTab home_tab_ = HomeTab::Home;
+    ProjectManager projects_;
+    std::vector<ProjectInfo> recent_, all_projects_, archived_;
+    bool projects_dirty_ = true;
+    char search_[96] = {};
+    int sort_mode_ = 0; // 0 = last modified, 1 = name
+    ProjectInfo modal_project_;
+    bool open_rename_ = false, open_delete_ = false, open_discard_ = false, open_error_ = false;
+    char rename_project_buf_[128] = {};
+    std::function<void()> discard_action_;
+    std::string error_text_;
+    struct UiTexture {
+        rhi::Image image;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        vec2 size{};
+        i64 stamp = 0;
+        bool failed = false;
+    };
+    std::unordered_map<std::string, UiTexture> textures_;
+    ImFont* font_regular_ = nullptr;
+    ImFont* font_bold_ = nullptr;
+    ImFont* font_mono_ = nullptr;
+    std::string window_title_;
+    bool pause_menu_ = false;     // player mode
+    int thumbnail_countdown_ = 0; // frames until an automatic thumbnail of a new project
 
     std::vector<std::function<void(f32)>> frame_callbacks_;
     // Play mode.

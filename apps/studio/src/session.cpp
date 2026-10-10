@@ -1,4 +1,5 @@
 #include "tefra/studio/session.h"
+#include "tefra/studio/templates.h"
 
 #include "tefra/core/log.h"
 
@@ -8,23 +9,6 @@ namespace tefra::studio {
 
 using world::Instance;
 using world::Value;
-
-void build_baseplate(world::DataModel& m) {
-    Instance* ws = m.workspace();
-    Instance* base = m.create("Part", ws, "Baseplate");
-    base->set("Size", Value::vector3({256, 1, 256}));
-    base->set("Position", Value::vector3({0, -0.5f, 0}));
-    base->set("Anchored", Value::boolean(true));
-    base->set("Color", Value::color3({0.39f, 0.40f, 0.42f}));
-    base->set("Material", Value::enumeration(6)); // Concrete
-    Instance* spawn = m.create("SpawnLocation", ws, "SpawnLocation");
-    spawn->set("Size", Value::vector3({6, 0.4f, 6}));
-    spawn->set("Position", Value::vector3({0, 0.2f, 0}));
-    spawn->set("Anchored", Value::boolean(true));
-    spawn->set("Color", Value::color3({0.15f, 0.45f, 0.85f}));
-    spawn->set("Material", Value::enumeration(1));
-    m.service("Lighting")->set("ClockTime", Value::number(14.0));
-}
 
 Session::Session() { new_place(true); }
 
@@ -37,8 +21,17 @@ void Session::replace_model(std::unique_ptr<world::DataModel> m) {
 void Session::new_place(bool baseplate) {
     if (state_ != PlayState::Edit) stop();
     replace_model(std::make_unique<world::DataModel>());
-    if (baseplate) build_baseplate(*model_);
+    if (baseplate) build_template("baseplate", *model_);
     path_.clear();
+    selection_.clear();
+    history_.clear();
+    saved_revision_ = model_->revision();
+}
+
+void Session::adopt(std::unique_ptr<world::DataModel> m, const std::string& path) {
+    if (state_ != PlayState::Edit) stop();
+    replace_model(std::move(m));
+    path_ = path;
     selection_.clear();
     history_.clear();
     saved_revision_ = model_->revision();

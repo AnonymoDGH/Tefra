@@ -2,6 +2,7 @@
 // Output and the C# script editor. Everything edits the place through Session so undo/redo stays consistent.
 #include "tefra/studio/app.h"
 
+#include "tefra/core/fs.h"
 #include "tefra/core/log.h"
 #include "tefra/world/scene_sync.h"
 
@@ -145,6 +146,15 @@ bool input_string(const char* label, std::string& s, ImGuiInputTextFlags flags =
 // ---- Top level --------------------------------------------------------------------------------------------------
 
 void App::draw_ui(f32 dt) {
+    if (screen_ == Screen::Home) {
+        draw_home();
+        return;
+    }
+    if (screen_ == Screen::Player) {
+        draw_player(dt);
+        return;
+    }
+    if (thumbnail_countdown_ > 0 && --thumbnail_countdown_ == 0) save_thumbnail();
     ImGuizmo::BeginFrame();
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
@@ -186,6 +196,8 @@ void App::draw_ui(f32 dt) {
     draw_output();
     draw_script_editors();
     draw_file_dialogs();
+    draw_export_modal();
+    draw_home_modals();
     handle_shortcuts();
 }
 
@@ -197,13 +209,8 @@ void App::handle_shortcuts() {
     if (ctrl && (ImGui::IsKeyPressed(ImGuiKey_Y) || (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z)))) session_.redo();
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D)) session_.duplicate_selection();
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_G)) session_.group_selection();
-    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
-        if (session_.path().empty())
-            show_save_dialog_ = true;
-        else
-            session_.save();
-    }
-    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O)) show_open_dialog_ = true;
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S)) save_place(io.KeyShift);
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O)) open_place_dialog();
     if (ImGui::IsKeyPressed(ImGuiKey_Delete)) session_.destroy_selection();
     if (ImGui::IsKeyPressed(ImGuiKey_F5)) {
         if (session_.play_state() == PlayState::Edit)
@@ -223,24 +230,35 @@ void App::handle_shortcuts() {
 void App::draw_menu_bar() {
     if (!ImGui::BeginMenuBar()) return;
     if (ImGui::BeginMenu("File")) {
-        if (ImGui::MenuItem("New Baseplate")) session_.new_place(true);
-        if (ImGui::MenuItem("New Empty")) session_.new_place(false);
-        if (ImGui::MenuItem("Demo Scene")) {
-            session_.new_place(false);
-            build_demo_scene();
+        const bool editing = session_.play_state() == PlayState::Edit;
+        if (ImGui::MenuItem("Home")) go_home();
+        ImGui::Separator();
+        if (ImGui::BeginMenu("New from Template")) {
+            for (const TemplateInfo& t : templates())
+                if (ImGui::MenuItem(t.name)) new_from_template(t, true);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Empty Place")) confirm_discard([this] { session_.new_place(false); });
+            if (ImGui::MenuItem("Demo Scene"))
+                confirm_discard([this] {
+                    session_.new_place(false);
+                    build_demo_scene();
+                });
+            ImGui::EndMenu();
+        }
+        if (ImGui::MenuItem("Open...", "Ctrl+O")) open_place_dialog();
+        if (ImGui::BeginMenu("Open Recent", !projects_.recent(1).empty())) {
+            for (const ProjectInfo& p : projects_.recent(12))
+                if (ImGui::MenuItem(p.name.c_str())) open_place(p.path);
+            ImGui::EndMenu();
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Open...", "Ctrl+O")) show_open_dialog_ = true;
-        if (ImGui::MenuItem("Save", "Ctrl+S", false, session_.play_state() == PlayState::Edit)) {
-            if (session_.path().empty())
-                show_save_dialog_ = true;
-            else
-                session_.save();
-        }
-        if (ImGui::MenuItem("Save As...", nullptr, false, session_.play_state() == PlayState::Edit))
-            show_save_dialog_ = true;
+        if (ImGui::MenuItem("Save", "Ctrl+S", false, editing)) save_place(false);
+        if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S", false, editing)) save_place(true);
         ImGui::Separator();
-        if (ImGui::MenuItem("Quit")) quit_ = true;
+        if (ImGui::MenuItem("Import Roblox Place...", nullptr, false, editing)) import_roblox_dialog();
+        if (ImGui::MenuItem("Export Game...", nullptr, false, editing)) export_game_dialog();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Quit")) confirm_discard([this] { quit_ = true; });
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Edit")) {
@@ -268,7 +286,7 @@ void App::draw_menu_bar() {
         ImGui::EndMenu();
     }
     // Place name + modified marker on the right.
-    std::string title = session_.path().empty() ? std::string("Untitled") : session_.path();
+    std::string title = session_.path().empty() ? std::string("Untitled") : path_stem(session_.path());
     if (session_.modified()) title += " *";
     const f32 w = ImGui::CalcTextSize(title.c_str()).x;
     ImGui::SameLine(ImGui::GetWindowWidth() - w - 16.0f);
@@ -886,23 +904,36 @@ void App::draw_script_editors() {
 // ---- File dialogs (simple path prompts) ---------------------------------------------------------------------------
 
 void App::draw_file_dialogs() {
-    auto dialog = [&](const char* id, bool& show, bool save) {
+    auto dialog = [&](const char* id, bool& show, bool save, bool import = false) {
         if (show) {
             ImGui::OpenPopup(id);
-            if (path_buf_[0] == 0)
+            if (path_buf_[0] == 0 || import)
                 std::snprintf(path_buf_, sizeof(path_buf_), "%s",
-                              session_.path().empty() ? "places/MyGame.tefra" : session_.path().c_str());
+                              import                    ? ""
+                              : session_.path().empty() ? "places/MyGame.tefra"
+                                                        : session_.path().c_str());
             show = false;
         }
         if (ImGui::BeginPopupModal(id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text(save ? "Save place as (.tefra):" : "Open place (.tefra):");
+            ImGui::Text(import ? "Roblox place to import (.rbxl / .rbxlx):"
+                        : save ? "Save place as (.tefra):"
+                               : "Open place (.tefra):");
             ImGui::SetNextItemWidth(460);
             const bool enter =
                 ImGui::InputText("##path", path_buf_, sizeof(path_buf_), ImGuiInputTextFlags_EnterReturnsTrue);
             if (ImGui::Button(save ? "Save" : "Open", {120, 0}) || enter) {
-                std::string err;
-                const bool ok = save ? session_.save(path_buf_) : session_.open(path_buf_, &err);
-                if (!ok) TEFRA_LOG_ERROR("%s %s failed %s", save ? "Save" : "Open", path_buf_, err.c_str());
+                const std::string path = path_buf_;
+                if (import) {
+                    import_roblox_file(path);
+                } else if (!save) {
+                    open_place(path);
+                } else if (session_.save(path)) {
+                    projects_.touch_recent(path);
+                    save_thumbnail();
+                    projects_dirty_ = true;
+                } else {
+                    TEFRA_LOG_ERROR("Save %s failed", path.c_str());
+                }
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
@@ -912,6 +943,7 @@ void App::draw_file_dialogs() {
     };
     dialog("Open Place", show_open_dialog_, false);
     dialog("Save Place", show_save_dialog_, true);
+    dialog("Import Roblox Place", show_import_dialog_, false, true);
 }
 
 // ---- Demo scene ---------------------------------------------------------------------------------------------------

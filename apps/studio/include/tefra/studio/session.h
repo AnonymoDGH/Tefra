@@ -38,6 +38,8 @@ class Session {
     // ---- Files -----------------------------------------------------------------------------------------------
     void new_place(bool baseplate = true);
     bool open(const std::string& path, std::string* error = nullptr);
+    // Replaces the place with `m` (a template, an imported file). Empty path = untitled (Save asks for a name).
+    void adopt(std::unique_ptr<world::DataModel> m, const std::string& path = {});
     bool save(const std::string& path = {}); // empty: current path
     const std::string& path() const { return path_; }
     bool modified() const { return model_->revision() != saved_revision_; }
