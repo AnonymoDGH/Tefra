@@ -12,3 +12,5 @@ compile_commands.json
 __pycache__/
 /docs/research/calibration/refs/*.jpg
 /docs/research/calibration/views/
+/managed/**/bin/
+/managed/**/obj/

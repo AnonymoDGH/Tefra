@@ -1,0 +1,80 @@
+{
+ "format": "tefra-place",
+ "version": 1,
+ "services": [
+  {
+   "class": "Workspace",
+   "props": {},
+   "children": [
+    {
+     "class": "Part",
+     "id": 100,
+     "props": {
+      "Name": "Spinner",
+      "Position": [
+       0,
+       5,
+       0
+      ],
+      "Size": [
+       4,
+       1,
+       2
+      ]
+     },
+     "children": [
+      {
+       "class": "Script",
+       "id": 101,
+       "props": {
+        "Name": "Spin",
+        "Source": "public class Spinner : TefraScript {\n    public override void Update(float dt) {\n        var p = (Part)Parent;\n        p.Orientation += new Vector3(0, 90 * dt, 0);\n    }\n}\n"
+       }
+      }
+     ]
+    },
+    {
+     "class": "Part",
+     "id": 102,
+     "props": {
+      "Name": "Lamp",
+      "Position": [
+       10,
+       2,
+       0
+      ],
+      "Size": [
+       4,
+       1,
+       2
+      ]
+     },
+     "children": [
+      {
+       "class": "Script",
+       "id": 103,
+       "props": {
+        "Name": "Waiter",
+        "Source": "public class Waiter : TefraScript {\n    public override async void Start() {\n        await Task.Wait(0.5f);\n        Parent.Name = \"Lamp_ready\";\n        Debug.Log(\"waited\");\n    }\n}\n"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "class": "ServerScriptService",
+   "props": {},
+   "children": [
+    {
+     "class": "Script",
+     "id": 104,
+     "props": {
+      "Name": "Spawner",
+      "Source": "public class Spawner : TefraScript {\n    public override void Start() {\n        for (int i = 0; i < 10; i++) {\n            var part = (Part)Instance.New(\"Part\", Game.Workspace);\n            part.Name = \"Spawned\" + i;\n            part.Position = new Vector3(i * 3f, 0.5f, 0);\n            part.Color = Color3.FromRGB(200, 60, 40);\n            part.Anchored = true;\n        }\n        print(\"spawned\", 10);\n    }\n}\n"
+     }
+    }
+   ]
+  }
+ ]
+}

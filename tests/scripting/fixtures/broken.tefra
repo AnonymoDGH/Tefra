@@ -1,0 +1,98 @@
+{
+ "format": "tefra-place",
+ "version": 1,
+ "services": [
+  {
+   "class": "Workspace",
+   "props": {},
+   "children": [
+    {
+     "class": "Part",
+     "id": 100,
+     "props": {
+      "Name": "Spinner",
+      "Position": [
+       0,
+       5,
+       0
+      ],
+      "Size": [
+       4,
+       1,
+       2
+      ]
+     },
+     "children": [
+      {
+       "class": "Script",
+       "id": 101,
+       "props": {
+        "Name": "Spin",
+        "Source": "public class Spinner : TefraScript {\n    public override void Update(float dt) {\n        var p = (Part)Parent;\n        p.Orientation += new Vector3(0, 90 * dt, 0);\n    }\n}\n"
+       }
+      }
+     ]
+    },
+    {
+     "class": "Part",
+     "id": 102,
+     "props": {
+      "Name": "Dummy",
+      "Position": [
+       10,
+       2,
+       0
+      ],
+      "Size": [
+       4,
+       1,
+       2
+      ]
+     },
+     "children": [
+      {
+       "class": "Script",
+       "id": 103,
+       "props": {
+        "Name": "Thrower",
+        "Source": "public class Thrower : TefraScript {\n    private int _n;\n    public override void Update(float dt) {\n        _n++;\n        var p = (Part)Parent;\n        p.Position = new Vector3(_n, 0, 0);\n        if (_n == 3) throw new InvalidOperationException(\"boom\");\n    }\n}\n"
+       }
+      }
+     ]
+    },
+    {
+     "class": "Part",
+     "id": 105,
+     "props": {
+      "Name": "Bad",
+      "Position": [
+       20,
+       2,
+       0
+      ],
+      "Size": [
+       4,
+       1,
+       2
+      ]
+     },
+     "children": [
+      {
+       "class": "Script",
+       "id": 106,
+       "props": {
+        "Name": "Broken",
+        "Source": "public class Broken : TefraScript {\n    public override void Start() {\n        int x = ;\n    }\n}\n"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "class": "ServerScriptService",
+   "props": {},
+   "children": []
+  }
+ ]
+}
