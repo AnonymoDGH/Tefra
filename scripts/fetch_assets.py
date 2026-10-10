@@ -14,7 +14,8 @@ MODELS = ["boulder_01", "dead_tree_trunk", "fern_02", "grass_medium_02", "rock_m
 HDRIS = ["dark_autumn_forest", "forest_slope"]
 # Terrain layers: leaf litter, mud with moss, mossy rock, dirt.
 TERRAIN_LAYERS = ["forest_leaves_02", "brown_mud_leaves_01", "aerial_rocks_02", "brown_mud_02"]
-TEXTURES = TERRAIN_LAYERS + ["bark_brown_01"]
+# Bark: brown conifer bark (valley trunks) and palm trunk bark (palm scene).
+TEXTURES = TERRAIN_LAYERS + ["bark_brown_01", "palm_tree_bark"]
 API = "https://api.polyhaven.com"
 
 
