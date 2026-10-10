@@ -209,6 +209,8 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             setup.settings.shadow_distance = max(setup.settings.shadow_distance, 300.0f);
         }
         if (cfg.no_taa) setup.settings.taa = false;
+        setup.settings.terrain_detail = cfg.terrain_detail;
+        if (cfg.has_pitch) setup.camera.pitch = radians(cfg.pitch_deg);
         renderer = std::make_unique<render::Renderer>(*device, *heap, kFramesInFlight);
         params.camera = setup.camera;
     }

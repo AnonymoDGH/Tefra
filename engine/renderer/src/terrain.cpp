@@ -229,6 +229,18 @@ void Terrain::upload_textures() {
                     if (k == 2) px[0] = 255, px[1] = 230, px[2] = 0;
                 }
             }
+            // Height (Poly Haven Displacement, white = high) goes into the albedo alpha, which is otherwise unused.
+            // Flat (1.0) when the map is missing: the layer then has no relief and no height-blend bias.
+            if (k == 0) {
+                ImageRGBA8 disp;
+                if (ok && image_read((base + "_disp.jpg").c_str(), disp) && disp.width == img.width &&
+                    disp.height == img.height) {
+                    for (usize p = 0; p < usize(img.width) * img.height; ++p)
+                        img.pixels[p * 4 + 3] = disp.pixels[p * 4];
+                } else {
+                    for (usize p = 0; p < usize(img.width) * img.height; ++p) img.pixels[p * 4 + 3] = 255;
+                }
+            }
             rhi::TextureUpload tu;
             tu.pixels = img.pixels.data();
             tu.width = img.width;

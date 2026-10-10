@@ -41,6 +41,9 @@ struct RunConfig {
     f32 ev100 = -1.0f;           // < 0: scene default
     std::string tier = "native"; // native | low | medium | high
     bool no_taa = false;
+    bool terrain_detail = true; // terrain POM / stochastic tiling / macro variation
+    bool has_pitch = false;     // --pitch: overrides the scene camera pitch
+    f32 pitch_deg = 0.0f;
     render::TestPatternParams params = default_scene_params();
 };
 

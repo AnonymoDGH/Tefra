@@ -466,7 +466,9 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, rhi::MemoryUsage::Upload, "terrain_frame");
         }
         u8* dst = static_cast<u8*>(fb.terrain.mapped);
-        std::memcpy(dst, &terrain->gpu(), sizeof(TerrainGPU));
+        TerrainGPU tg = terrain->gpu();
+        tg.flags = s.terrain_detail ? 1u : 0u;
+        std::memcpy(dst, &tg, sizeof(TerrainGPU));
         // Visible patches first (G-buffer), then all patches (shadows) after them.
         std::memcpy(dst + kTerrainPatchOffset, kept.data(), kept.size() * sizeof(TerrainPatchGPU));
         std::memcpy(dst + kTerrainPatchOffset + kept.size() * sizeof(TerrainPatchGPU), patches.data(),

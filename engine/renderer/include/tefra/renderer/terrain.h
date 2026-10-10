@@ -39,7 +39,8 @@ struct TerrainGPU { // in FrameConstants-independent push data
     u32 layer_albedo[4] = {};
     u32 layer_normal[4] = {};
     u32 layer_arm[4] = {};
-    u32 pad[2] = {};
+    u32 flags = 0; // bit 0: detail path (set per frame from RenderSettings::terrain_detail)
+    u32 pad = 0;
 };
 
 class Terrain {
