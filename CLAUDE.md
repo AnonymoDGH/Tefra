@@ -5,9 +5,9 @@ Las sesiones no recuerdan nada: este archivo es la memoria. Actualízalo al fina
 ## Estado actual (2026-10-10)
 
 - **M3 en curso: Tefra Studio** (petición del usuario: hacer juegos de verdad). Spec: `docs/specs/2026-10-10-m3-studio.md` (ADR-011..016).
-  - Hecho (F1): `JsonValue` (core), `engine/world` (DataModel estilo Roblox con reflexión, clases integradas en `classes.cpp`, `.tefra` JSON, `SceneSync` → renderer + raycast).
-  - En paralelo (subagentes, brief `docs/research/M3_AGENT_BRIEF.md`): Studio ImGui (`apps/studio`), C# .NET 8 (`engine/scripting` + `managed/`), MCP (`engine/mcp`, `tefra_mcp`), Jolt (`engine/physics`), avatar R15 + Animator (`engine/anim`).
-  - Pendiente: integrar todo en Play, skinning glTF, plantillas, juego de ejemplo ("Obby"), exportar standalone.
+  - Hecho: `JsonValue`; `engine/world` (DataModel reflejado, `.tefra`, `SceneSync`); `apps/studio` (ImGui docking: Explorer, Properties, Viewport+ImGuizmo, Output, editor C#, undo/redo, Play/Stop; `tefra_studio_core` = session+history testeable); `engine/scripting` + `managed/Tefra.Engine` (.NET 8 hostfxr, Roslyn); `engine/physics` (Jolt 5.6, CharacterController); `engine/anim` (avatar R15, 7 clips, Animator); `engine/mcp` (Streamable HTTP, 13 herramientas + 5 de Studio). Play = scripts → personaje → física → animación; cámara 3ª persona. Guía: `docs/STUDIO.md`. Informes: `docs/research/m3-*/REPORT.md`.
+  - Studio en la nube: `xvfb-run -a ./build/linux-release/bin/tefra_studio --demo [--play] --capture out.png --frames N`.
+  - Pendiente: skinning glTF, LocalScript/ModuleScript, plantillas (playa/valle como Terrain), juego de ejemplo "Obby", exportar standalone, UI en juego (ScreenGui), sonido.
 - Escena playa (`--scene coast`): océano Gerstner + surf guiado por la distancia a la orilla, refracción con absorción por canal, cáusticas, nubes, cocoteros procedurales. Capturas `docs/captures/coast-*`.
 
 - **M2 en curso (valle visible):** atmósfera Hillaire + niebla de altura, terreno procedural 2×2 km (clipmap, capas CC0), vegetación GPU-driven, agua, TAA/TAAU + CAS, GTAO. `tefra_bench --scene valley`.

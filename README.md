@@ -2,7 +2,11 @@
 
 Tefra (motor 3D) es un motor open source, clean-room, orientado a **mundos abiertos fotorrealistas** con rendimiento escalable por niveles de calidad. Usa C++20 y Vulkan 1.2 y funciona en Windows (MinGW) y Linux.
 
-> Estado: **M2 en curso**. Vertical slice "Valle de Ceniza": bosque de coníferas brumoso de 2×2 km (`tefra_bench --scene valley`). Ver `docs/specs/`, `docs/research/` y `CLAUDE.md`.
+> **Tefra Studio** (editor estilo Roblox Studio con C#, física, avatares animados y MCP para IA): ver [docs/STUDIO.md](docs/STUDIO.md).
+>
+> ![Tefra Studio](docs/captures/studio-play.png)
+>
+> Estado: **M3 en curso** (Studio). M2 (look): Vertical slice "Valle de Ceniza": bosque de coníferas brumoso de 2×2 km (`tefra_bench --scene valley`). Ver `docs/specs/`, `docs/research/` y `CLAUDE.md`.
 
 ![Valle de Ceniza](docs/captures/m2-valley-v8-backlit.png)
 
