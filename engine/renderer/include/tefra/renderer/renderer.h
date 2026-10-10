@@ -71,6 +71,10 @@ struct RenderSettings {
     // Sky visibility under the vegetation canopy (canopy.h): ambient light is cut where canopy lies above.
     bool canopy_occlusion = false;
     f32 canopy_strength = 0.85f; // fraction of the ambient light removed under a full canopy
+    // Procedural grass on the terrain (G-buffer pass only, foliage class). Needs a terrain.
+    bool grass = true;
+    f32 grass_density = 1.5f; // candidate blades per m^2 = 256 * density (cost scales with it)
+    bool grass_stats = false; // count the blades drawn with an extra compute pass; see Renderer::grass_blades()
 };
 
 struct OutputTarget {
@@ -96,6 +100,9 @@ class Renderer {
                 const Camera& camera, f32 time, const RenderSettings& settings, const OutputTarget& target);
 
     u32 draw_calls() const { return draw_calls_; }
+    // Grass blades rasterized in the last frame whose statistics were read back (needs grass_stats; the value lags
+    // by the number of frames in flight).
+    u32 grass_blades() const { return grass_blades_; }
     const rg::Graph& graph() const { return graph_; }
 
   private:
@@ -108,6 +115,9 @@ class Renderer {
         rhi::Buffer veg_visible, veg_shadow_visible, veg_cmds, veg_shadow_cmds;
         rhi::Buffer exposure; // ExposureState (auto exposure); per slot so it is fenced like the other buffers
         u32 veg_capacity = 0;
+        rhi::Buffer grass_cells;    // visible cell list (host-written each frame)
+        rhi::Buffer grass_counter;  // blade counter (GPU), copied to grass_readback by the count pass
+        rhi::Buffer grass_readback; // host-visible copy of the counter
     };
     void create_pipelines(VkFormat output_format);
     void compute_cascades(const Camera& camera, f32 aspect, const RenderSettings& s, FrameConstants& fc,
@@ -125,6 +135,8 @@ class Renderer {
                p_veg_cull_ = VK_NULL_HANDLE, p_water_ = VK_NULL_HANDLE;
     rhi::Buffer veg_cmd_template_;
     std::unique_ptr<CanopyMap> canopy_;
+    VkPipeline p_grass_ = VK_NULL_HANDLE, p_grass_count_ = VK_NULL_HANDLE;
+    u32 grass_blades_ = 0;
     // TAA history (ping-pong), persistent across frames.
     rhi::Image history_[2];
     u32 history_bindless_[2] = {~0u, ~0u};

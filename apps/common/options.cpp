@@ -60,6 +60,8 @@ bool parse_common_options(const CommandLine& cl, RunConfig& cfg) {
     cfg.auto_exposure = cl.has("auto-exposure");
     cfg.no_film = cl.has("no-film");
     cfg.no_canopy = cl.has("no-canopy");
+    cfg.no_grass = cl.has("no-grass");
+    if (cl.has("grass-stats")) cfg.grass_stats = true;
     if (cfg.width == 0 || cfg.height == 0 || cfg.width > 8192 || cfg.height > 8192) {
         TEFRA_LOG_ERROR("invalid resolution %ux%u", cfg.width, cfg.height);
         return false;
@@ -89,7 +91,9 @@ void print_common_usage() {
                 "  --no-bloom              disable bloom\n"
                 "  --auto-exposure         enable auto exposure (EV compensation clamped to +-2 EV)\n"
                 "  --no-film               disable vignette, chromatic aberration and grain\n"
-                "  --no-canopy             disable the canopy occlusion map (sky visibility under trees)\n");
+                "  --no-canopy             disable the canopy occlusion map (sky visibility under trees)\n"
+                "  --no-grass              disable procedural grass on the terrain\n"
+                "  --grass-stats           count the grass blades drawn (extra compute pass; the bench sets it)\n");
 }
 
 } // namespace tefra::app
