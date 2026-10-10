@@ -79,6 +79,10 @@ struct RunConfig {
     bool debug_sun_shadow = false;
     render::TestPatternParams params = default_scene_params();
     std::shared_ptr<CustomScene> custom_scene; // when set, scene is only a label and the custom build is used
+    // scene == "custom" (used by tefra_physics_demo): build_custom fills the scene once before the first frame and
+    // on_frame runs before each frame is recorded (update the instances there; the renderer reads them every frame).
+    std::function<void(render::Scene&, render::Environment&, render::Atmosphere&, SceneSetup&)> build_custom;
+    std::function<void(u64 frame_index)> on_frame;
 };
 
 struct RunStats {
