@@ -76,5 +76,13 @@ void main() {
     vec3 h = from_ycocg(hist);
     float alpha = pc.sizes.x < pc.sizes.z ? 0.08 : 0.1;
     float wc = alpha / (1.0 + luma(cur)), wh = (1.0 - alpha) / (1.0 + luma(h));
-    o_color = vec4(max((cur * wc + h * wh) / (wc + wh), vec3(0.0)), 1.0);
+    vec3 res = (cur * wc + h * wh) / (wc + wh);
+    // Detail restoration (calibration report: TAA/TAAU removed ~5x high-frequency energy). Contrast-adaptive
+    // unsharp mask against the neighbourhood mean, limited by the local range so it cannot ring.
+    vec3 mean_rgb = from_ycocg(mean);
+    vec3 detail = res - mean_rgb;
+    float range = max(hi.x - lo.x, 1e-4);
+    float amount = 0.55 * clamp(1.0 - range / (mean.x + 1e-3) * 0.5, 0.2, 1.0);
+    res = clamp(res + detail * amount, from_ycocg(lo) * 0.0 + min(res, mean_rgb) * 0.7, max(res, mean_rgb) * 1.3);
+    o_color = vec4(max(res, vec3(0.0)), 1.0);
 }

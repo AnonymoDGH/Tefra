@@ -219,7 +219,7 @@ void build_valley_scene(render::Scene& scene, render::Environment& env, const re
     setup.settings.fog_height = terrain.height_at(0.0f, 0.0f);
     setup.settings.cascades = 3;
     setup.settings.shadow_distance = 200.0f;
-    setup.settings.ev100 = 12.5f;
+    setup.settings.ev100 = 11.3f; // calibration vs CC0 forest photos: +1.2 EV (docs/research/calibration)
     build_atmosphere_environment(atmo, env, setup.settings.sun_direction);
 
     // ---- Materials --------------------------------------------------------------------------------
