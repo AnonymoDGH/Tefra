@@ -199,6 +199,9 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             built = true;
         } else if (cfg.scene == "gltf") {
             built = build_gltf_scene(*scene, *env, setup, cfg.gltf_path, cfg.hdr_path);
+        } else if (cfg.scene == "custom" && cfg.build_custom) {
+            cfg.build_custom(*scene, *env, *atmosphere, setup);
+            built = true;
         }
         if (!built) {
             result.error = "unknown scene or failed to load: " + cfg.scene;
@@ -337,6 +340,7 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             world.vegetation = vegetation.get();
             world.water = water.get();
             world.ocean = ocean.get();
+            if (cfg.on_frame) cfg.on_frame(frame_index);
             renderer->render(cmd, fc.slot, frame_index, &timer, world, params.camera, params.time, setup.settings, out);
             result.draw_calls = renderer->draw_calls();
             result.grass_blades = renderer->grass_blades();

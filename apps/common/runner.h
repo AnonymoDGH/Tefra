@@ -8,11 +8,20 @@
 #include "tefra/rhi/device.h"
 #include "tefra/rhi/swapchain.h"
 
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
 
+namespace tefra::render {
+class Atmosphere;
+class Environment;
+class Scene;
+} // namespace tefra::render
+
 namespace tefra::app {
+
+struct SceneSetup;
 
 // Default view: 1.7 m eye height, 6 m behind the origin so both axis markers are visible.
 inline render::TestPatternParams default_scene_params() {
@@ -60,6 +69,10 @@ struct RunConfig {
     bool no_contact_shadows = false;
     bool debug_sun_shadow = false;
     render::TestPatternParams params = default_scene_params();
+    // scene == "custom" (used by tefra_physics_demo): build_custom fills the scene once before the first frame and
+    // on_frame runs before each frame is recorded (update the instances there; the renderer reads them every frame).
+    std::function<void(render::Scene&, render::Environment&, render::Atmosphere&, SceneSetup&)> build_custom;
+    std::function<void(u64 frame_index)> on_frame;
 };
 
 struct RunStats {
