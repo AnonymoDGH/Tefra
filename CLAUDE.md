@@ -4,7 +4,9 @@ Las sesiones no recuerdan nada: este archivo es la memoria. Actualízalo al fina
 
 ## Estado actual (2026-10-10)
 
-- **M2 en curso (valle visible):** atmósfera Hillaire + niebla de altura, terreno procedural 2×2 km (clipmap, capas CC0), vegetación GPU-driven (coníferas procedurales + sotobosque CC0, culling compute + indirect), agua de río/lago. `tefra_bench --scene valley`. Falta: TAA/TAAU, GTAO, auto-exposición, niebla volumétrica, SSR, impostores.
+- **M2 en curso (valle visible):** atmósfera Hillaire + niebla de altura, terreno procedural 2×2 km (clipmap, capas CC0), vegetación GPU-driven, agua, TAA/TAAU + CAS, GTAO. `tefra_bench --scene valley`.
+- **Noche de fotorrealismo (2026-10-10):** 9 subagentes en worktrees; informes en `docs/research/<tema>/REPORT.md`. Integrados: terrain-detail (POM, height blend, stochastic), trunks (contrafuertes, raíces, musgo), volumetric-light (raymarch media res.), camera-post (bloom, auto-exposición, viñeta/CA/grano), canopy-occlusion (mapa CPU de cobertura), grass (briznas en vertex shader; densidad sigue al dosel), gradación pre-AgX (calibración). Cada técnica con flag en `RenderSettings` y `--no-*` en CLI. Brief para agentes: `docs/research/AGENT_BRIEF.md`.
+- Costes de todo lo nuevo **sin medir en la HD 520**; la hierba (3–8 ms estimados) y la volumétrica (2–3 ms) son los riesgos.
 - **M0 y M1 implementados.** M1: render graph (barreras automáticas), bindless, deferred PBR, IBL (HDR o cielo procedural), cascadas de sombra, AgX, glTF (cgltf). Spec M1: `docs/specs/2026-10-10-m1-render-base.md`. Capturas en `docs/captures/`.
 - Assets CC0 de demo: `python3 scripts/fetch_assets.py` → `assets/cache/` (no versionado). Ejemplo: `tefra_bench --gltf assets/cache/models/dead_tree_trunk/dead_tree_trunk.gltf --hdr assets/cache/hdri/dark_autumn_forest.hdr --capture out.png`.
 - El usuario concedió **autonomía total** (2026-10-10): sin preguntas, push libre, decisiones con criterio. Corrige al ver resultados.
