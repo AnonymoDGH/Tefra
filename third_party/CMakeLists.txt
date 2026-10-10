@@ -50,4 +50,19 @@ if(TEFRA_WITH_WINDOW)
     add_subdirectory(glfw EXCLUDE_FROM_ALL)
     get_target_property(_glfw_inc glfw INTERFACE_INCLUDE_DIRECTORIES)
     set_target_properties(glfw PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_glfw_inc}")
+
+    # --- Dear ImGui (docking branch, MIT) with the GLFW and Vulkan backends, used by Tefra Studio (ADR-011).
+    # The Vulkan backend loads its functions through volk (IMGUI_IMPL_VULKAN_USE_VOLK), like the rest of the engine.
+    add_library(tefra_imgui STATIC
+        imgui/imgui.cpp imgui/imgui_draw.cpp imgui/imgui_tables.cpp imgui/imgui_widgets.cpp
+        imgui/backends/imgui_impl_glfw.cpp imgui/backends/imgui_impl_vulkan.cpp)
+    target_include_directories(tefra_imgui SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/imgui
+                                                         ${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends)
+    target_compile_definitions(tefra_imgui PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK)
+    target_link_libraries(tefra_imgui PUBLIC tefra_volk glfw)
+
+    # --- ImGuizmo (MIT): transform gizmos for Dear ImGui.
+    add_library(tefra_imguizmo STATIC imguizmo/src/ImGuizmo.cpp)
+    target_include_directories(tefra_imguizmo SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/imguizmo/src)
+    target_link_libraries(tefra_imguizmo PUBLIC tefra_imgui)
 endif()

@@ -12,6 +12,11 @@ LogLevel log_level();
 bool log_set_file(const char* path);
 void log_write(LogLevel level, const char* fmt, ...) TEFRA_PRINTF(2, 3);
 
+// Receives every message at or above the level filter, after formatting (no timestamp prefix). One sink at a
+// time; nullptr removes it. Called under the logger's lock from any thread: it must not log.
+using LogSinkFn = void (*)(void* user, LogLevel level, f64 seconds, const char* text);
+void log_set_sink(LogSinkFn fn, void* user);
+
 } // namespace tefra
 
 #define TEFRA_LOG_TRACE(...) ::tefra::log_write(::tefra::LogLevel::Trace, __VA_ARGS__)
