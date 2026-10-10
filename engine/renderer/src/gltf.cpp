@@ -75,7 +75,8 @@ struct Loader {
             return texture(mr, false, scene.white_texture());
         ImageRGBA8 orm, occ_px;
         if (!decode_image(occ.texture->image, occ_px)) return texture(mr, false, scene.white_texture());
-        if (has_mr && decode_image(mr.texture->image, orm) && orm.width == occ_px.width && orm.height == occ_px.height) {
+        if (has_mr && decode_image(mr.texture->image, orm) && orm.width == occ_px.width &&
+            orm.height == occ_px.height) {
             for (usize i = 0; i < orm.pixels.size(); i += 4) orm.pixels[i] = occ_px.pixels[i];
         } else {
             orm = occ_px;
@@ -142,10 +143,14 @@ struct Loader {
         const cgltf_accessor *pos = nullptr, *nrm = nullptr, *tan = nullptr, *uv = nullptr;
         for (cgltf_size i = 0; i < prim.attributes_count; ++i) {
             const cgltf_attribute& a = prim.attributes[i];
-            if (a.type == cgltf_attribute_type_position) pos = a.data;
-            else if (a.type == cgltf_attribute_type_normal) nrm = a.data;
-            else if (a.type == cgltf_attribute_type_tangent) tan = a.data;
-            else if (a.type == cgltf_attribute_type_texcoord && a.index == 0) uv = a.data;
+            if (a.type == cgltf_attribute_type_position)
+                pos = a.data;
+            else if (a.type == cgltf_attribute_type_normal)
+                nrm = a.data;
+            else if (a.type == cgltf_attribute_type_tangent)
+                tan = a.data;
+            else if (a.type == cgltf_attribute_type_texcoord && a.index == 0)
+                uv = a.data;
         }
         if (!pos) return ~0u;
         struct F3 {
@@ -224,16 +229,20 @@ struct Loader {
             quat q;
             if (tr > 0.0f) {
                 const f32 k = std::sqrt(tr + 1.0f) * 2.0f;
-                q = {(r.at(2, 1) - r.at(1, 2)) / k, (r.at(0, 2) - r.at(2, 0)) / k, (r.at(1, 0) - r.at(0, 1)) / k, 0.25f * k};
+                q = {(r.at(2, 1) - r.at(1, 2)) / k, (r.at(0, 2) - r.at(2, 0)) / k, (r.at(1, 0) - r.at(0, 1)) / k,
+                     0.25f * k};
             } else if (r.at(0, 0) > r.at(1, 1) && r.at(0, 0) > r.at(2, 2)) {
                 const f32 k = std::sqrt(1.0f + r.at(0, 0) - r.at(1, 1) - r.at(2, 2)) * 2.0f;
-                q = {0.25f * k, (r.at(0, 1) + r.at(1, 0)) / k, (r.at(0, 2) + r.at(2, 0)) / k, (r.at(2, 1) - r.at(1, 2)) / k};
+                q = {0.25f * k, (r.at(0, 1) + r.at(1, 0)) / k, (r.at(0, 2) + r.at(2, 0)) / k,
+                     (r.at(2, 1) - r.at(1, 2)) / k};
             } else if (r.at(1, 1) > r.at(2, 2)) {
                 const f32 k = std::sqrt(1.0f + r.at(1, 1) - r.at(0, 0) - r.at(2, 2)) * 2.0f;
-                q = {(r.at(0, 1) + r.at(1, 0)) / k, 0.25f * k, (r.at(1, 2) + r.at(2, 1)) / k, (r.at(0, 2) - r.at(2, 0)) / k};
+                q = {(r.at(0, 1) + r.at(1, 0)) / k, 0.25f * k, (r.at(1, 2) + r.at(2, 1)) / k,
+                     (r.at(0, 2) - r.at(2, 0)) / k};
             } else {
                 const f32 k = std::sqrt(1.0f + r.at(2, 2) - r.at(0, 0) - r.at(1, 1)) * 2.0f;
-                q = {(r.at(0, 2) + r.at(2, 0)) / k, (r.at(1, 2) + r.at(2, 1)) / k, 0.25f * k, (r.at(1, 0) - r.at(0, 1)) / k};
+                q = {(r.at(0, 2) + r.at(2, 0)) / k, (r.at(1, 2) + r.at(2, 1)) / k, 0.25f * k,
+                     (r.at(1, 0) - r.at(0, 1)) / k};
             }
             for (cgltf_size i = 0; i < nd->mesh->primitives_count; ++i) {
                 const cgltf_primitive& prim = nd->mesh->primitives[i];

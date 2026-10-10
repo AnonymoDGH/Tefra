@@ -7,7 +7,7 @@ namespace tefra::render {
 class Scene;
 
 struct GltfLoadOptions {
-    dvec3 position{};  // where the asset's origin is placed in the world
+    dvec3 position{}; // where the asset's origin is placed in the world
     quat rotation{};
     f32 scale = 1.0f;
 };

@@ -89,3 +89,15 @@ TEST_CASE("strict baseline clamps limits to the reference hardware") {
     CHECK_FALSE(dev->caps().shader_draw_parameters);
     CHECK(dev->adapter().meets_baseline);
 }
+
+TEST_CASE("materials: deferred PBR + IBL + cascades, matches golden, zero validation errors") {
+    app::RunConfig cfg = base_config();
+    cfg.scene = "materials";
+    cfg.capture_to_memory = true;
+    const app::RunResult r = app::run(cfg);
+    REQUIRE_MESSAGE(r.ok, r.error);
+    CHECK(r.validation_errors == 0);
+    CHECK(r.draw_calls > 36);
+    REQUIRE(r.capture.width == 640);
+    check_golden("materials", r.capture);
+}

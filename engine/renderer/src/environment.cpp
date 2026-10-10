@@ -17,6 +17,8 @@ namespace tefra::render {
 
 namespace {
 
+f32 tc(u32 i, u32 n) { return (static_cast<f32>(i) + 0.5f) / static_cast<f32>(n); }
+
 void sh9_basis(vec3 d, f32 y[9]) {
     y[0] = 0.282095f;
     y[1] = 0.488603f * d.y;
@@ -57,7 +59,8 @@ ImageRGBA32F downsample_equirect(const ImageRGBA32F& src, u32 width) {
             f64 acc[4] = {};
             for (u32 j = y0; j < y1 && j < src.height; ++j)
                 for (u32 i = x0; i < x1 && i < src.width; ++i)
-                    for (int c = 0; c < 4; ++c) acc[c] += src.pixels[(usize(j) * src.width + i) * 4 + usize(c)];
+                    for (int c = 0; c < 4; ++c)
+                        acc[c] += static_cast<f64>(src.pixels[(usize(j) * src.width + i) * 4 + usize(c)]);
             const f64 n = f64((y1 - y0) * (x1 - x0));
             for (int c = 0; c < 4; ++c) dst.pixels[(usize(y) * dst.width + x) * 4 + usize(c)] = f32(acc[c] / n);
         }
@@ -97,8 +100,8 @@ void sh9_project_equirect(const ImageRGBA32F& img, vec4 out[9]) {
 }
 
 void sh9_convolve_cosine(vec4 sh[9]) {
-    const f32 a[9] = {kPi, 2.0f * kPi / 3.0f, 2.0f * kPi / 3.0f, 2.0f * kPi / 3.0f, kPi / 4.0f, kPi / 4.0f,
-                      kPi / 4.0f, kPi / 4.0f, kPi / 4.0f};
+    const f32 a[9] = {kPi,        2.0f * kPi / 3.0f, 2.0f * kPi / 3.0f, 2.0f * kPi / 3.0f, kPi / 4.0f,
+                      kPi / 4.0f, kPi / 4.0f,        kPi / 4.0f,        kPi / 4.0f};
     for (int i = 0; i < 9; ++i) sh[i] = sh[i] * a[i];
 }
 
@@ -142,7 +145,8 @@ vec2 brdf_lut_integrate(f32 n_dot_v, f32 roughness, u32 samples) {
 
 Environment::Environment(const rhi::Device& dev, rhi::BindlessHeap& heap, const EnvironmentSettings& settings)
     : dev_(dev), heap_(heap), settings_(settings) {
-    settings_.specular_mips = min(settings_.specular_mips, rhi::mip_count_for(settings_.cube_size, settings_.cube_size));
+    settings_.specular_mips =
+        min(settings_.specular_mips, rhi::mip_count_for(settings_.cube_size, settings_.cube_size));
     build_brdf_lut();
 }
 
@@ -201,7 +205,7 @@ void Environment::build_procedural(const ProceduralSky& sky) {
     const vec3 ground_l = sky.ground_albedo * ((sky.sun_illuminance * max(s.y, 0.0f) + sky_irr) / kPi);
     for (u32 y = 0; y < h; ++y) {
         for (u32 x = 0; x < w; ++x) {
-            const vec3 d = equirect_direction((x + 0.5f) / w, (y + 0.5f) / h);
+            const vec3 d = equirect_direction(tc(x, w), tc(y, h));
             const f32 mu = dot(d, s);
             vec3 c;
             const f32 up = max(d.y, 0.0f);
@@ -246,8 +250,8 @@ bool Environment::build_from_hdr(const char* path, f32 sky_nits) {
         for (u32 x = 0; x < img.width; ++x) {
             const f32* p = &img.pixels[(usize(y) * img.width + x) * 4];
             const f32 l = luminance({p[0], p[1], p[2]});
-            lum_sum += f64(l) * dw;
-            w_sum += dw;
+            lum_sum += f64(l) * f64(dw);
+            w_sum += f64(dw);
             if (l > max_lum) {
                 max_lum = l;
                 max_x = x;
@@ -259,7 +263,7 @@ bool Environment::build_from_hdr(const char* path, f32 sky_nits) {
     const f32 k = (sky_nits > 0.0f && mean > 0.0f) ? sky_nits / mean : 1.0f;
     // Sun detection: texels far above the mean are cut out of the map and returned as an analytic light.
     const f32 threshold = mean * 40.0f;
-    dominant_dir_ = equirect_direction((max_x + 0.5f) / img.width, (max_y + 0.5f) / img.height);
+    dominant_dir_ = equirect_direction(tc(max_x, img.width), tc(max_y, img.height));
     dominant_lux_ = 0.0f;
     for (u32 y = 0; y < img.height; ++y) {
         const f32 dw = texel_solid_angle(img, y);
@@ -268,15 +272,15 @@ bool Environment::build_from_hdr(const char* path, f32 sky_nits) {
             const f32 l = luminance({p[0], p[1], p[2]});
             if (max_lum > threshold && l > threshold) {
                 const f32 excess = (l - threshold) / l;
-                const vec3 d = equirect_direction((x + 0.5f) / img.width, (y + 0.5f) / img.height);
+                const vec3 d = equirect_direction(tc(x, img.width), tc(y, img.height));
                 dominant_lux_ += (l - threshold) * k * dw * max(dot(d, dominant_dir_), 0.0f);
                 for (int c = 0; c < 3; ++c) p[c] *= (1.0f - excess);
             }
             for (int c = 0; c < 3; ++c) p[c] *= k;
         }
     }
-    TEFRA_LOG_INFO("HDR %s: %ux%u, mean sky %.1f -> %.0f nits, sun %.0f lux", path, src.width, src.height, mean,
-                   mean * k, dominant_lux_);
+    TEFRA_LOG_INFO("HDR %s: %ux%u, mean sky %.1f -> %.0f nits, sun %.0f lux", path, src.width, src.height, f64(mean),
+                   f64(mean * k), f64(dominant_lux_));
     build_from_equirect(img);
     return true;
 }

@@ -31,11 +31,14 @@ struct RunConfig {
     bool validation = false;
     bool strict_baseline = false;
     rhi::PresentMode present = rhi::PresentMode::Fifo;
-    std::string capture_path;       // write the last frame as PNG
-    bool capture_to_memory = false; // keep the last frame in RunResult::capture
-    bool fly_camera = false;        // interactive camera (window mode)
-    bool animate = false;           // advance time/camera between frames
-    std::string scene = "testpattern";
+    std::string capture_path;          // write the last frame as PNG
+    bool capture_to_memory = false;    // keep the last frame in RunResult::capture
+    bool fly_camera = false;           // interactive camera (window mode)
+    bool animate = false;              // advance time/camera between frames
+    std::string scene = "testpattern"; // testpattern | materials | gltf
+    std::string gltf_path;
+    std::string hdr_path;
+    f32 ev100 = -1.0f; // < 0: scene default
     std::string tier = "low";
     render::TestPatternParams params = default_scene_params();
 };

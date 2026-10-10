@@ -1,0 +1,421 @@
+#include "tefra/renderer/renderer.h"
+
+#include "tefra/renderer/environment.h"
+#include "tefra/renderer/scene.h"
+#include "tefra/rhi/bindless.h"
+#include "tefra/rhi/device.h"
+#include "tefra/rhi/gpu_timer.h"
+
+#include "tefra/core/log.h"
+
+#include <cmath>
+#include <cstring>
+
+namespace tefra::render {
+namespace {
+
+constexpr VkFormat kRt0 = VK_FORMAT_R8G8B8A8_SRGB;
+constexpr VkFormat kRt1 = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+constexpr VkFormat kRt2 = VK_FORMAT_R8G8B8A8_UNORM;
+constexpr VkFormat kRt3 = VK_FORMAT_R16G16_SFLOAT;
+constexpr VkFormat kDepth = VK_FORMAT_D32_SFLOAT;
+
+struct MeshPush {
+    VkDeviceAddress frame, vertices, instances, materials;
+    u32 cascade;
+    u32 pad[3];
+};
+struct LightingPush {
+    VkDeviceAddress frame;
+    u32 depth, rt0, rt1, rt2;
+};
+struct TonemapPush {
+    VkDeviceAddress frame;
+    u32 hdr;
+    u32 pad;
+};
+constexpr u32 kPushBytes = 64;
+static_assert(sizeof(MeshPush) <= kPushBytes && sizeof(LightingPush) <= kPushBytes);
+
+bool format_supports(const rhi::Device& dev, VkFormat f, VkFormatFeatureFlags need) {
+    VkFormatProperties p{};
+    vkGetPhysicalDeviceFormatProperties(dev.physical(), f, &p);
+    return (p.optimalTilingFeatures & need) == need;
+}
+
+// Dummy render pass with matching formats, only used for pipeline compatibility.
+rhi::RenderPassObjects compat_pass(const rhi::Device& dev, std::initializer_list<VkFormat> colors, VkFormat depth) {
+    std::vector<rhi::AttachmentDesc> c;
+    for (VkFormat f : colors) {
+        rhi::AttachmentDesc d;
+        d.format = f;
+        d.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        d.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        c.push_back(d);
+    }
+    rhi::AttachmentDesc dd;
+    dd.format = depth;
+    dd.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    dd.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    rhi::RenderPassDesc rpd;
+    rpd.colors = c;
+    rpd.depth = depth != VK_FORMAT_UNDEFINED ? &dd : nullptr;
+    return rhi::create_render_pass(dev, rpd, {1, 1});
+}
+
+void store_rows(vec4 rows[3], const mat4& m) {
+    for (int r = 0; r < 3; ++r) rows[r] = {m.at(r, 0), m.at(r, 1), m.at(r, 2), m.at(r, 3)};
+}
+
+bool sphere_in_frustum(const vec4 planes[6], vec3 c, f32 r) {
+    for (int i = 0; i < 6; ++i)
+        if (dot(planes[i].xyz(), c) + planes[i].w < -r) return false;
+    return true;
+}
+
+// Gribb-Hartmann planes from a view-projection matrix (Vulkan depth range, reverse-Z infinite: far plane skipped).
+void frustum_planes(const mat4& m, vec4 out[6]) {
+    auto row = [&](int r) { return vec4{m.at(r, 0), m.at(r, 1), m.at(r, 2), m.at(r, 3)}; };
+    const vec4 r0 = row(0), r1 = row(1), r2 = row(2), r3 = row(3);
+    out[0] = r3 + r0;
+    out[1] = r3 - r0;
+    out[2] = r3 + r1;
+    out[3] = r3 - r1;
+    out[4] = r2;      // z >= 0
+    out[5] = r3 - r2; // z <= w
+    for (int i = 0; i < 6; ++i) {
+        const f32 l = length(out[i].xyz());
+        if (l > 0.0f) out[i] = out[i] * (1.0f / l);
+    }
+}
+
+} // namespace
+
+Renderer::Renderer(const rhi::Device& dev, rhi::BindlessHeap& heap, u32 frames_in_flight)
+    : dev_(dev), heap_(heap), graph_(dev, heap) {
+    frames_.resize(frames_in_flight);
+    for (auto& f : frames_)
+        f.constants = rhi::create_buffer(dev_, sizeof(FrameConstants), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                         rhi::MemoryUsage::Upload, "frame_constants");
+    if (!format_supports(dev_, hdr_format_,
+                         VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))
+        hdr_format_ = VK_FORMAT_R16G16B16A16_SFLOAT;
+    if (!format_supports(dev_, shadow_format_,
+                         VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                             VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
+        shadow_format_ = VK_FORMAT_D16_UNORM;
+    const VkDescriptorSetLayout sets[1] = {heap_.layout()};
+    layout_ = rhi::create_pipeline_layout(dev_, sets, kPushBytes);
+}
+
+Renderer::~Renderer() {
+    dev_.wait_idle();
+    for (auto& f : frames_) {
+        rhi::destroy_buffer(dev_, f.constants);
+        rhi::destroy_buffer(dev_, f.instances);
+    }
+    for (VkPipeline p : {p_gbuffer_, p_gbuffer_2s_, p_shadow_, p_lighting_, p_tonemap_})
+        if (p) vkDestroyPipeline(dev_.device(), p, nullptr);
+    vkDestroyPipelineLayout(dev_.device(), layout_, nullptr);
+}
+
+void Renderer::create_pipelines(VkFormat output_format) {
+    for (VkPipeline* p : {&p_gbuffer_, &p_gbuffer_2s_, &p_shadow_, &p_lighting_, &p_tonemap_}) {
+        if (*p) vkDestroyPipeline(dev_.device(), *p, nullptr);
+        *p = VK_NULL_HANDLE;
+    }
+    output_format_ = output_format;
+    VkShaderModule mesh_vs = rhi::load_shader(dev_, "mesh.vert");
+    VkShaderModule gbuf_fs = rhi::load_shader(dev_, "gbuffer.frag");
+    VkShaderModule shadow_vs = rhi::load_shader(dev_, "shadow.vert");
+    VkShaderModule fs_vs = rhi::load_shader(dev_, "fullscreen.vert");
+    VkShaderModule light_fs = rhi::load_shader(dev_, "lighting.frag");
+    VkShaderModule tone_fs = rhi::load_shader(dev_, "tonemap.frag");
+
+    auto rp_g = compat_pass(dev_, {kRt0, kRt1, kRt2, kRt3}, kDepth);
+    rhi::GraphicsPipelineDesc g;
+    g.vs = mesh_vs;
+    g.fs = gbuf_fs;
+    g.layout = layout_;
+    g.render_pass = rp_g.pass;
+    g.color_count = 4;
+    g.cull = VK_CULL_MODE_BACK_BIT;
+    g.depth_test = true;
+    g.depth_write = true;
+    g.depth_compare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+    g.name = "gbuffer";
+    p_gbuffer_ = rhi::create_graphics_pipeline(dev_, g);
+    g.cull = VK_CULL_MODE_NONE;
+    g.name = "gbuffer_two_sided";
+    p_gbuffer_2s_ = rhi::create_graphics_pipeline(dev_, g);
+
+    auto rp_s = compat_pass(dev_, {}, shadow_format_);
+    rhi::GraphicsPipelineDesc s;
+    s.vs = shadow_vs;
+    s.layout = layout_;
+    s.render_pass = rp_s.pass;
+    s.color_count = 0;
+    s.cull = VK_CULL_MODE_NONE; // both faces: thin geometry and fewer light leaks
+    s.depth_test = true;
+    s.depth_write = true;
+    s.depth_compare = VK_COMPARE_OP_LESS_OR_EQUAL;
+    s.depth_clamp = true; // casters behind the near plane still cast (pancaking)
+    s.name = "shadow";
+    p_shadow_ = rhi::create_graphics_pipeline(dev_, s);
+
+    auto rp_l = compat_pass(dev_, {hdr_format_}, VK_FORMAT_UNDEFINED);
+    rhi::GraphicsPipelineDesc l;
+    l.vs = fs_vs;
+    l.fs = light_fs;
+    l.layout = layout_;
+    l.render_pass = rp_l.pass;
+    l.name = "lighting";
+    p_lighting_ = rhi::create_graphics_pipeline(dev_, l);
+
+    auto rp_t = compat_pass(dev_, {output_format}, VK_FORMAT_UNDEFINED);
+    l.fs = tone_fs;
+    l.render_pass = rp_t.pass;
+    l.name = "tonemap";
+    p_tonemap_ = rhi::create_graphics_pipeline(dev_, l);
+
+    for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t}) rhi::destroy_render_pass(dev_, *rp);
+    for (VkShaderModule m : {mesh_vs, gbuf_fs, shadow_vs, fs_vs, light_fs, tone_fs})
+        vkDestroyShaderModule(dev_.device(), m, nullptr);
+}
+
+void Renderer::compute_cascades(const Camera& cam, f32 aspect, const RenderSettings& s, FrameConstants& fc,
+                                vec4 spheres[kMaxCascades]) const {
+    const u32 n = clamp<u32>(s.cascades, 1u, kMaxCascades);
+    const f32 z_near_ = cam.z_near, z_far_ = s.shadow_distance;
+    const f32 lambda = 0.75f;
+    f32 splits[kMaxCascades + 1];
+    splits[0] = z_near_;
+    for (u32 i = 1; i <= n; ++i) {
+        const f32 t = f32(i) / f32(n);
+        splits[i] =
+            lambda * z_near_ * std::pow(z_far_ / z_near_, t) + (1.0f - lambda) * (z_near_ + (z_far_ - z_near_) * t);
+    }
+    const f32 tan_y = std::tan(cam.fovy * 0.5f), tan_x = tan_y * aspect;
+    const vec3 fwd = cam.forward(), right = cam.right(), up = cross(right, fwd);
+    const vec3 L = normalize(s.sun_direction);
+    const mat4 light_rot = look_at(vec3{}, -L, std::fabs(L.y) > 0.99f ? vec3{1, 0, 0} : vec3{0, 1, 0});
+    const f32 res = f32(s.shadow_resolution);
+    for (u32 c = 0; c < n; ++c) {
+        vec3 corners[8];
+        u32 k = 0;
+        for (f32 d : {splits[c], splits[c + 1]})
+            for (f32 sy : {-1.0f, 1.0f})
+                for (f32 sx : {-1.0f, 1.0f}) corners[k++] = fwd * d + right * (sx * tan_x * d) + up * (sy * tan_y * d);
+        vec3 center{};
+        for (const vec3& p : corners) center += p;
+        center = center * (1.0f / 8.0f);
+        f32 r = 0.0f;
+        for (const vec3& p : corners) r = max(r, length(p - center));
+        r = std::ceil(r * 16.0f) / 16.0f; // quantized radius: stable texel size while the camera rotates
+        // Snap the center to the shadow texel grid, in world space (camera-relative positions shift with the
+        // camera, so snap the absolute world position).
+        const vec3 world_center = center + vec3{f32(cam.position.x), f32(cam.position.y), f32(cam.position.z)};
+        vec3 cl = transform_point(light_rot, world_center);
+        const f32 texel = 2.0f * r / res;
+        cl.x = std::floor(cl.x / texel) * texel;
+        cl.y = std::floor(cl.y / texel) * texel;
+        const mat4 inv_rot = transpose(light_rot);
+        const vec3 snapped_world = transform_point(inv_rot, cl);
+        const vec3 snapped_rel = snapped_world - vec3{f32(cam.position.x), f32(cam.position.y), f32(cam.position.z)};
+        const f32 zn = r + 400.0f; // casters up to 400 m towards the sun
+        mat4 ortho;
+        ortho.c[0] = {1.0f / r, 0, 0, 0};
+        ortho.c[1] = {0, 1.0f / r, 0, 0};
+        ortho.c[2] = {0, 0, -1.0f / (zn + r), 0};
+        ortho.c[3] = {0, 0, zn / (zn + r), 1};
+        fc.cascade_view_proj[c] = ortho * translate(-transform_point(light_rot, snapped_rel)) * light_rot;
+        fc.cascade_splits[static_cast<int>(c)] = splits[c + 1];
+        fc.cascade_atlas[c] = {f32(c) / f32(n), 0.0f, 1.0f / f32(n), 1.0f};
+        spheres[c] = vec4(snapped_rel, r);
+    }
+    for (u32 c = n; c < kMaxCascades; ++c) fc.cascade_splits[static_cast<int>(c)] = 1e30f;
+    fc.shadow_params = {1.0f / (res * f32(n)), 1.0f / res, f32(n), res};
+}
+
+void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTimer* timer, const Scene& scene,
+                      const Environment& env, const Camera& camera, f32 time, const RenderSettings& s,
+                      const OutputTarget& target) {
+    if (output_format_ != target.format) create_pipelines(target.format);
+    FrameBuffers& fb = frames_[slot];
+    const VkExtent2D ext = target.extent;
+    const f32 aspect = f32(ext.width) / f32(ext.height);
+
+    // ---- Per-frame constants ---------------------------------------------------------------------
+    FrameConstants fc{};
+    fc.view = camera.view_rotation();
+    fc.proj = camera.projection(aspect);
+    fc.view_proj = fc.proj * fc.view;
+    fc.inv_view_proj = inverse(fc.view_proj);
+    vec4 cascade_spheres[kMaxCascades];
+    const u32 cascades = clamp<u32>(s.cascades, 1u, kMaxCascades);
+    compute_cascades(camera, aspect, s, fc, cascade_spheres);
+    const vec3 sun_col = s.sun_color / (0.2126f * s.sun_color.x + 0.7152f * s.sun_color.y + 0.0722f * s.sun_color.z);
+    fc.sun_dir = vec4(normalize(s.sun_direction), s.sun_illuminance);
+    fc.sun_color = vec4(sun_col, 0.00465f);
+    fc.camera_pos = {f32(camera.position.x), f32(camera.position.y), f32(camera.position.z), time};
+    fc.exposure = {1.0f / (1.2f * std::exp2(s.ev100)), s.ibl_intensity, s.ev100, f32(frame_index)};
+    fc.viewport = {f32(ext.width), f32(ext.height), 1.0f / f32(ext.width), 1.0f / f32(ext.height)};
+    for (int i = 0; i < 9; ++i) fc.sh[i] = env.sh()[i];
+    fc.env_cube = env.cube();
+    fc.env_mips = env.mips();
+    fc.brdf_lut = env.brdf_lut();
+
+    // ---- Instances (camera-relative) and culling ---------------------------------------------------
+    const auto& instances = scene.instances();
+    if (fb.instance_capacity < instances.size()) {
+        rhi::destroy_buffer(dev_, fb.instances);
+        fb.instance_capacity = max<u32>(64u, static_cast<u32>(instances.size()) * 2u);
+        fb.instances = rhi::create_buffer(dev_, sizeof(InstanceGPU) * fb.instance_capacity,
+                                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, rhi::MemoryUsage::Upload, "instances");
+    }
+    vec4 planes[6];
+    frustum_planes(fc.view_proj, planes);
+    std::vector<u32> visible, casters[kMaxCascades];
+    auto* gpu_inst = static_cast<InstanceGPU*>(fb.instances.mapped);
+    for (u32 i = 0; i < instances.size(); ++i) {
+        const Instance& in = instances[i];
+        const vec3 rel = relative_to(in.position, camera.position);
+        const mat4 model = compose_trs(rel, in.rotation, in.scale);
+        const mat4 normal_m = transpose(inverse(model));
+        InstanceGPU g{};
+        store_rows(g.model_rows, model);
+        store_rows(g.normal_rows, normal_m);
+        g.material = in.material;
+        gpu_inst[i] = g;
+        const MeshRange& mr = scene.meshes()[in.mesh];
+        const vec3 c = transform_point(model, mr.bounds.center);
+        const f32 r = mr.bounds.radius * max(max(in.scale.x, in.scale.y), in.scale.z);
+        if (sphere_in_frustum(planes, c, r)) visible.push_back(i);
+        if (in.cast_shadows)
+            for (u32 k = 0; k < cascades; ++k) {
+                // Cylinder test along the light direction approximated by sphere distance in the light plane.
+                const vec3 d = c - cascade_spheres[k].xyz();
+                const vec3 dl = d - fc.sun_dir.xyz() * dot(d, fc.sun_dir.xyz());
+                if (length(dl) <= cascade_spheres[k].w + r) casters[k].push_back(i);
+            }
+    }
+    vmaFlushAllocation(dev_.allocator(), fb.instances.allocation, 0, VK_WHOLE_SIZE);
+
+    // ---- Frame graph -----------------------------------------------------------------------------
+    graph_.begin(slot, timer);
+    const u32 sres = s.shadow_resolution;
+    rg::TextureHandle shadow, depth, rt0, rt1, rt2, rt3, hdr;
+    const VkDeviceAddress frame_addr = fb.constants.address;
+    draw_calls_ = 0;
+    u32* draw_counter = &draw_calls_;
+    const VkPipelineLayout layout = layout_;
+    const VkDescriptorSet bindless = heap_.set(slot);
+    const Scene* sc = &scene;
+    const VkDeviceAddress inst_addr = fb.instances.address;
+
+    auto draw_list = [=](VkCommandBuffer c, const std::vector<u32>& list, u32 cascade, bool shadow_pass,
+                         VkPipeline one_sided, VkPipeline two_sided) {
+        MeshPush push{frame_addr, sc->vertex_buffer().address, inst_addr, sc->material_buffer().address, cascade, {}};
+        vkCmdPushConstants(c, layout, VK_SHADER_STAGE_ALL, 0, sizeof(push), &push);
+        vkCmdBindIndexBuffer(c, sc->index_buffer().buffer, 0, VK_INDEX_TYPE_UINT32);
+        VkPipeline bound = VK_NULL_HANDLE;
+        for (u32 i : list) {
+            const Instance& in = sc->instances()[i];
+            const bool two = !shadow_pass && (sc->materials()[in.material].flags & 2u);
+            const VkPipeline want = two ? two_sided : one_sided;
+            if (want != bound) {
+                vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                bound = want;
+            }
+            const MeshRange& mr = sc->meshes()[in.mesh];
+            vkCmdDrawIndexed(c, mr.index_count, 1, mr.first_index, mr.vertex_offset, i);
+            ++*draw_counter;
+        }
+    };
+
+    graph_.add_pass(
+        "shadows", rg::PassType::Raster,
+        [&](rg::PassBuilder& b) {
+            shadow = b.create({shadow_format_, sres * cascades, sres, "shadow_atlas"});
+            b.depth(shadow, rg::Load::Clear, 1.0f, true);
+        },
+        [=, this](const rg::PassContext& ctx) {
+            vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
+            for (u32 c = 0; c < cascades; ++c) {
+                VkViewport vp{f32(c * sres), 0.0f, f32(sres), f32(sres), 0.0f, 1.0f};
+                VkRect2D sc_rect{{i32(c * sres), 0}, {sres, sres}};
+                vkCmdSetViewport(ctx.cmd, 0, 1, &vp);
+                vkCmdSetScissor(ctx.cmd, 0, 1, &sc_rect);
+                draw_list(ctx.cmd, casters[c], c, true, p_shadow_, p_shadow_);
+            }
+        });
+
+    graph_.add_pass(
+        "gbuffer", rg::PassType::Raster,
+        [&](rg::PassBuilder& b) {
+            depth = b.create({kDepth, ext.width, ext.height, "depth"});
+            rt0 = b.create({kRt0, ext.width, ext.height, "gbuf_albedo"});
+            rt1 = b.create({kRt1, ext.width, ext.height, "gbuf_normal"});
+            rt2 = b.create({kRt2, ext.width, ext.height, "gbuf_material"});
+            rt3 = b.create({kRt3, ext.width, ext.height, "gbuf_velocity"});
+            b.color(rt0, rg::Load::DontCare);
+            b.color(rt1, rg::Load::DontCare);
+            b.color(rt2, rg::Load::DontCare);
+            b.color(rt3, rg::Load::Clear);
+            b.depth(depth, rg::Load::Clear, 0.0f, true);
+        },
+        [=, this](const rg::PassContext& ctx) {
+            vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
+            draw_list(ctx.cmd, visible, 0, false, p_gbuffer_, p_gbuffer_2s_);
+        });
+
+    graph_.add_pass(
+        "lighting", rg::PassType::Raster,
+        [&](rg::PassBuilder& b) {
+            hdr = b.create({hdr_format_, ext.width, ext.height, "hdr"});
+            for (auto h : {depth, rt0, rt1, rt2, shadow}) b.read(h, rg::Access::Sampled);
+            b.color(hdr, rg::Load::DontCare);
+        },
+        [=, this, &fc](const rg::PassContext& ctx) {
+            // The shadow atlas index is only known once the graph has bound physical textures.
+            fc.shadow_atlas = ctx.sampled(shadow);
+            std::memcpy(frames_[slot].constants.mapped, &fc, sizeof(fc));
+            vmaFlushAllocation(dev_.allocator(), frames_[slot].constants.allocation, 0, VK_WHOLE_SIZE);
+            vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
+            vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_lighting_);
+            LightingPush p{frame_addr, ctx.sampled(depth), ctx.sampled(rt0), ctx.sampled(rt1), ctx.sampled(rt2)};
+            vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
+            vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
+        });
+
+    rg::ImportDesc out;
+    out.name = "output";
+    out.image = target.image;
+    out.view = target.view;
+    out.format = target.format;
+    out.extent = ext;
+    out.usage = target.usage;
+    out.initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    out.initial_stage = target.initial_stage;
+    out.initial_access = target.initial_access;
+    out.final_layout = target.final_layout;
+    const rg::TextureHandle output = graph_.import(out);
+
+    graph_.add_pass(
+        "tonemap", rg::PassType::Raster,
+        [&](rg::PassBuilder& b) {
+            b.read(hdr, rg::Access::Sampled);
+            b.color(output, rg::Load::DontCare);
+        },
+        [=, this](const rg::PassContext& ctx) {
+            vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
+            vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_tonemap_);
+            TonemapPush p{frame_addr, ctx.sampled(hdr), 0};
+            vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
+            vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
+        });
+
+    graph_.execute(cmd);
+}
+
+} // namespace tefra::render

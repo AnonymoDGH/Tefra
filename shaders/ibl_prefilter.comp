@@ -1,0 +1,48 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common/bindless.glsl"
+#include "common/cube.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 1, binding = 0, rgba16f) uniform writeonly image2DArray u_dst;
+layout(push_constant) uniform Push { uint src; uint size; float roughness; uint samples; float src_size; } pc;
+const float PI = 3.14159265358979;
+float vdc(uint b) {
+    b = (b << 16u) | (b >> 16u);
+    b = ((b & 0x55555555u) << 1u) | ((b & 0xAAAAAAAAu) >> 1u);
+    b = ((b & 0x33333333u) << 2u) | ((b & 0xCCCCCCCCu) >> 2u);
+    b = ((b & 0x0F0F0F0Fu) << 4u) | ((b & 0xF0F0F0F0u) >> 4u);
+    b = ((b & 0x00FF00FFu) << 8u) | ((b & 0xFF00FF00u) >> 8u);
+    return float(b) * 2.3283064365386963e-10;
+}
+void main() {
+    uvec3 id = gl_GlobalInvocationID;
+    if (id.x >= pc.size || id.y >= pc.size) return;
+    vec3 N = cube_dir(id.z, (vec2(id.xy) + 0.5) / float(pc.size) * 2.0 - 1.0);
+    if (pc.roughness <= 0.0) {
+        imageStore(u_dst, ivec3(id), vec4(textureLod(TEXCUBE(pc.src, SMP_LINEAR_CLAMP_MIP), N, 0.0).rgb, 1.0));
+        return;
+    }
+    vec3 up = abs(N.y) < 0.999 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+    vec3 T = normalize(cross(up, N)), B = cross(N, T);
+    float a = pc.roughness * pc.roughness, a2 = a * a;
+    float texel_sa = 4.0 * PI / (6.0 * pc.src_size * pc.src_size);
+    vec3 acc = vec3(0.0);
+    float wsum = 0.0;
+    for (uint i = 0u; i < pc.samples; ++i) {
+        float e1 = (float(i) + 0.5) / float(pc.samples), e2 = vdc(i);
+        float phi = 2.0 * PI * e2;
+        float ct = sqrt((1.0 - e1) / (1.0 + (a2 - 1.0) * e1)), st = sqrt(1.0 - ct * ct);
+        vec3 H = T * (st * cos(phi)) + B * (st * sin(phi)) + N * ct;
+        vec3 L = 2.0 * dot(N, H) * H - N;
+        float ndl = dot(N, L);
+        if (ndl <= 0.0) continue;
+        float d = (ct * ct * (a2 - 1.0) + 1.0);
+        float D = a2 / (PI * d * d);
+        float pdf = D * 0.25;
+        float sample_sa = 1.0 / (float(pc.samples) * pdf + 1e-6);
+        float lod = max(0.5 * log2(sample_sa / texel_sa) + 1.0, 0.0);
+        acc += textureLod(TEXCUBE(pc.src, SMP_LINEAR_CLAMP_MIP), L, lod).rgb * ndl;
+        wsum += ndl;
+    }
+    imageStore(u_dst, ivec3(id), vec4(acc / max(wsum, 1e-6), 1.0));
+}

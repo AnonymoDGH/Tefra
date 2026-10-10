@@ -113,7 +113,8 @@ Requirement requirement(Access a, PassType type, bool depth_format, Load load) {
         return {VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, depth_stages,
                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT};
     case Access::Sampled:
-        return {depth_format ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        return {depth_format ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                             : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 shader_stage, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_USAGE_SAMPLED_BIT};
     case Access::TransferSrc:
         return {VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_BLIT_BIT,
@@ -169,7 +170,7 @@ struct GraphImpl {
         p->image = rhi::create_image(dev, d);
         if (v.usage & VK_IMAGE_USAGE_SAMPLED_BIT) {
             const VkImageLayout l = rhi::is_depth_format(v.format) ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-                                                                    : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                                                                   : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             p->bindless = heap.add_texture(p->image.view, l);
         }
         p->used = true;
@@ -402,8 +403,7 @@ void Graph::execute(VkCommandBuffer cmd) {
     for (const Pass& p : g.passes) {
         for (const AccessRec& a : p.accesses) {
             Virtual& v = g.textures[a.tex];
-            if (!v.imported)
-                v.usage |= requirement(a.access, p.type, rhi::is_depth_format(v.format), a.load).usage;
+            if (!v.imported) v.usage |= requirement(a.access, p.type, rhi::is_depth_format(v.format), a.load).usage;
         }
     }
     // 2. Bind transient textures to cached physical images.
@@ -443,8 +443,10 @@ void Graph::execute(VkCommandBuffer cmd) {
 
         if (p.type == PassType::Raster) {
             VkExtent2D extent{};
-            if (!p.colors.empty()) extent = g.textures[p.colors[0].tex].extent;
-            else if (p.has_depth) extent = g.textures[p.depth.tex].extent;
+            if (!p.colors.empty())
+                extent = g.textures[p.colors[0].tex].extent;
+            else if (p.has_depth)
+                extent = g.textures[p.depth.tex].extent;
             TEFRA_VERIFY(extent.width > 0);
             const rhi::RenderPassObjects& rp = g.render_pass_for(p, extent);
             VkImageView views[9];
@@ -466,8 +468,10 @@ void Graph::execute(VkCommandBuffer cmd) {
             ctx.extent = {};
             if (p.fn) p.fn(p.data, ctx);
         }
-        if (g.timer) g.timer->end(cmd, scope);
-        else rhi::cmd_end_label(cmd);
+        if (g.timer)
+            g.timer->end(cmd, scope);
+        else
+            rhi::cmd_end_label(cmd);
         ++g.stat_passes;
     }
 
@@ -488,14 +492,18 @@ void Graph::execute(VkCommandBuffer cmd) {
     }
     usize keep = 0;
     for (Physical* p : g.cache) {
-        if (g.frame - p->last_frame > kEvictAfterFrames) g.destroy_physical(p);
-        else g.cache[keep++] = p;
+        if (g.frame - p->last_frame > kEvictAfterFrames)
+            g.destroy_physical(p);
+        else
+            g.cache[keep++] = p;
     }
     g.cache.resize(keep);
     usize keep_rp = 0;
     for (auto& e : g.rp_cache) {
-        if (g.frame - e.last_frame > kEvictAfterFrames) rhi::destroy_render_pass(g.dev, e.rp);
-        else g.rp_cache[keep_rp++] = std::move(e);
+        if (g.frame - e.last_frame > kEvictAfterFrames)
+            rhi::destroy_render_pass(g.dev, e.rp);
+        else
+            g.rp_cache[keep_rp++] = std::move(e);
     }
     g.rp_cache.resize(keep_rp);
 }

@@ -131,8 +131,8 @@ Buffer upload_buffer(const Device& dev, const void* data, VkDeviceSize size, VkB
     VkCommandBuffer cmd = ctx.begin();
     VkBufferCopy region{0, 0, size};
     vkCmdCopyBuffer(cmd, staging.buffer, buf.buffer, 1, &region);
-    cmd_memory_barrier(cmd, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                       VK_ACCESS_2_MEMORY_READ_BIT);
+    cmd_memory_barrier(cmd, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                       VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT);
     ctx.submit_and_wait();
     destroy_buffer(dev, staging);
     return buf;

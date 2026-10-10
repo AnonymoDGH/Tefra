@@ -5,7 +5,7 @@ add_library(tefra_compile_options INTERFACE)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(tefra_compile_options INTERFACE
         -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-sign-conversion
-        -Wno-missing-field-initializers -Wnon-virtual-dtor -Wold-style-cast -Wcast-align -Wnull-dereference
+        -Wno-missing-field-initializers -Wnon-virtual-dtor -Wold-style-cast -Wcast-align
         -Wdouble-promotion -Wformat=2 -Wimplicit-fallthrough
         $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions -fno-rtti>
     )

@@ -1,4 +1,5 @@
 #include "runner.h"
+#include "scenes.h"
 
 #include "tefra/core/fs.h"
 #include "tefra/core/json.h"
@@ -6,6 +7,7 @@
 #include "tefra/core/stats.h"
 #include "tefra/core/sysinfo.h"
 #include "tefra/core/time.h"
+#include "tefra/rhi/bindless.h"
 #include "tefra/rhi/commands.h"
 #include "tefra/rhi/frame.h"
 #include "tefra/rhi/gpu_timer.h"
@@ -145,6 +147,31 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
     auto testpattern = std::make_unique<render::TestPattern>(*device, target_format, target_usage);
 
     render::TestPatternParams params = cfg.params;
+    const bool scene3d = cfg.scene != "testpattern";
+    std::unique_ptr<rhi::BindlessHeap> heap;
+    std::unique_ptr<render::Scene> scene;
+    std::unique_ptr<render::Environment> env;
+    std::unique_ptr<render::Renderer> renderer;
+    SceneSetup setup;
+    if (scene3d) {
+        heap = std::make_unique<rhi::BindlessHeap>(*device, kFramesInFlight);
+        scene = std::make_unique<render::Scene>(*device, *heap);
+        env = std::make_unique<render::Environment>(*device, *heap);
+        bool built = false;
+        if (cfg.scene == "materials") {
+            build_materials_scene(*scene, *env, setup);
+            built = true;
+        } else if (cfg.scene == "gltf") {
+            built = build_gltf_scene(*scene, *env, setup, cfg.gltf_path, cfg.hdr_path);
+        }
+        if (!built) {
+            result.error = "unknown scene or failed to load: " + cfg.scene;
+            return;
+        }
+        if (cfg.ev100 >= 0.0f) setup.settings.ev100 = cfg.ev100;
+        renderer = std::make_unique<render::Renderer>(*device, *heap, kFramesInFlight);
+        params.camera = setup.camera;
+    }
     const u32 total_frames = cfg.frames;
     u64 prev_start = 0;
     u64 frame_index = 0;
@@ -168,7 +195,7 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
 #endif
         if (cfg.animate) {
             params.time = static_cast<f32>(frame_index) / 60.0f;
-            params.camera.yaw = cfg.params.camera.yaw + params.time * 0.2f;
+            params.camera.yaw = (scene3d ? setup.camera.yaw : cfg.params.camera.yaw) + params.time * 0.2f;
         }
 
         // Swapchain acquire (with recreate on resize/out-of-date).
@@ -211,18 +238,35 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
         const VkImage target_image = swapchain ? swapchain->image(image_index) : offscreen.image;
         const VkImageView target_view = swapchain ? swapchain->view(image_index) : offscreen.view;
 
-        rhi::ImageBarrier to_color;
-        to_color.image = target_image;
-        to_color.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-        to_color.new_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        to_color.src_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_COPY_BIT;
-        to_color.src_access = swapchain ? VK_ACCESS_2_NONE : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-        to_color.dst_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        to_color.dst_access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-        rhi::cmd_image_barrier(cmd, to_color);
-
-        testpattern->record(cmd, &timer, target_view, extent, params);
-        result.draw_calls = testpattern->draw_calls_last_frame();
+        const VkPipelineStageFlags2 prev_stage =
+            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_COPY_BIT;
+        const VkAccessFlags2 prev_access = swapchain ? VK_ACCESS_2_NONE : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        if (scene3d) {
+            render::OutputTarget out;
+            out.image = target_image;
+            out.view = target_view;
+            out.format = target_format;
+            out.extent = extent;
+            out.usage = target_usage;
+            out.final_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            out.initial_stage = prev_stage;
+            out.initial_access = prev_access;
+            renderer->render(cmd, fc.slot, frame_index, &timer, *scene, *env, params.camera, params.time,
+                             setup.settings, out);
+            result.draw_calls = renderer->draw_calls();
+        } else {
+            rhi::ImageBarrier to_color;
+            to_color.image = target_image;
+            to_color.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            to_color.new_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            to_color.src_stage = prev_stage;
+            to_color.src_access = prev_access;
+            to_color.dst_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            to_color.dst_access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            rhi::cmd_image_barrier(cmd, to_color);
+            testpattern->record(cmd, &timer, target_view, extent, params);
+            result.draw_calls = testpattern->draw_calls_last_frame();
+        }
 
         const bool can_capture = (target_usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
         const bool capture_now = can_capture && ((last_frame && (!cfg.capture_path.empty() || cfg.capture_to_memory)) ||
@@ -303,6 +347,10 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
     device->memory_usage_mb(result.gpu_mem_used_mb, result.gpu_mem_budget_mb);
     result.cpu_rss_mb = process_rss_mb();
 
+    renderer.reset();
+    env.reset();
+    scene.reset();
+    heap.reset();
     testpattern.reset();
     rhi::destroy_image(*device, offscreen);
     swapchain.reset();

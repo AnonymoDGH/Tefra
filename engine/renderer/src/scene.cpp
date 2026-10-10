@@ -100,8 +100,8 @@ void Scene::upload() {
         vbuf_ = rhi::upload_buffer(dev_, vertices_.data(), vertices_.size() * sizeof(Vertex),
                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "vertices");
     if (!indices_.empty())
-        ibuf_ = rhi::upload_buffer(dev_, indices_.data(), indices_.size() * sizeof(u32), VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                                   "indices");
+        ibuf_ = rhi::upload_buffer(dev_, indices_.data(), indices_.size() * sizeof(u32),
+                                   VK_BUFFER_USAGE_INDEX_BUFFER_BIT, "indices");
     if (materials_.empty()) add_material(MaterialGPU{});
     mbuf_ = rhi::upload_buffer(dev_, materials_.data(), materials_.size() * sizeof(MaterialGPU),
                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "materials");

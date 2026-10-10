@@ -26,6 +26,13 @@ bool parse_common_options(const CommandLine& cl, RunConfig& cfg) {
     }
     if (const char* c = cl.get("capture")) cfg.capture_path = c;
     if (const char* t = cl.get("tier")) cfg.tier = t;
+    if (const char* sc = cl.get("scene")) cfg.scene = sc;
+    if (const char* g = cl.get("gltf")) {
+        cfg.gltf_path = g;
+        if (!cl.get("scene")) cfg.scene = "gltf";
+    }
+    if (const char* h = cl.get("hdr")) cfg.hdr_path = h;
+    cfg.ev100 = static_cast<f32>(cl.get_float("ev", static_cast<f64>(cfg.ev100)));
     cfg.animate = cl.has("animate");
     if (cfg.width == 0 || cfg.height == 0 || cfg.width > 8192 || cfg.height > 8192) {
         TEFRA_LOG_ERROR("invalid resolution %ux%u", cfg.width, cfg.height);
@@ -42,7 +49,10 @@ void print_common_usage() {
                 "  --capture FILE.png      save the last frame\n"
                 "  --validation            enable Vulkan validation (default on in Debug; --no-validation)\n"
                 "  --strict                only baseline features of the reference hardware\n"
-                "  --animate               move the camera/time between frames\n");
+                "  --animate               move the camera/time between frames\n"
+                "  --scene NAME            testpattern | materials | gltf\n"
+                "  --gltf FILE --hdr FILE  glTF model and Radiance HDR environment\n"
+                "  --ev EV100              camera exposure\n");
 }
 
 } // namespace tefra::app

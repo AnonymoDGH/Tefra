@@ -1,4 +1,4 @@
-add_library(tefra_app STATIC common/runner.cpp common/options.cpp)
+add_library(tefra_app STATIC common/runner.cpp common/options.cpp common/scenes.cpp)
 target_include_directories(tefra_app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/common)
 target_link_libraries(tefra_app PUBLIC tefra_renderer PRIVATE tefra_compile_options)
 target_compile_definitions(tefra_app PUBLIC
