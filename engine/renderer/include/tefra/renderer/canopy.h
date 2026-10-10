@@ -58,7 +58,7 @@ class CanopyMap {
     std::vector<f32> tau_, top_, tmp_; // scratch (CPU rebuild)
     vec2 origin_{};
     f64 center_x_ = 0.0, center_z_ = 0.0; // camera position at the last rebuild
-    u64 veg_uid_ = 0; // Vegetation::uid() of the last rebuild
+    u64 veg_uid_ = 0;                     // Vegetation::uid() of the last rebuild
     u32 version_ = 0;
     bool built_ = false;
     bool supported_ = false;

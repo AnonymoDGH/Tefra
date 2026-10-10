@@ -51,6 +51,13 @@ class PhysicsWorld {
     // Closest solid (non-sensor) part along the ray. direction need not be normalised; max_distance in metres.
     bool raycast(vec3 origin, vec3 direction, f32 max_distance, RaycastResult& out) const;
 
+    // Static landscape heightfield (one per world; a new call replaces the old one): n x n samples, row-major, the
+    // sample (x, z) sits at origin_xz + (x, z) * cell with height heights[z * n + x]. n must be even (Jolt's block
+    // size is 2). owner is the Terrain instance that raycasts report. The heights are copied.
+    void set_heightfield(const f32* heights, u32 n, f32 cell, vec2 origin_xz, const world::Instance* owner);
+    void clear_heightfield();
+    bool has_heightfield() const;
+
     usize add_touched_listener(TouchedFn fn);
     void remove_touched_listener(usize handle);
 

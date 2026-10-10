@@ -119,6 +119,7 @@ class App {
     void apply_theme();
     void update_lighting(bool force);
     void sync_world();
+    void sync_environment(); // environment.cpp: Terrain / Ocean of the Workspace (world::EnvironmentSync)
     void frame(f32 dt, bool capture_window);
 
     // ---- Play mode systems (play.cpp) ----
@@ -190,6 +191,7 @@ class App {
     std::unique_ptr<render::Atmosphere> atmosphere_;
     std::unique_ptr<render::Renderer> renderer_;
     std::unique_ptr<world::SceneSync> sync_;
+    std::shared_ptr<void> environment_; // world::EnvironmentSync (type-erased: no world/renderer types here)
     u64 synced_generation_ = ~0ull;
 
     VkRenderPass ui_pass_ = VK_NULL_HANDLE;

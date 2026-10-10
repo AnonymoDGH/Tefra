@@ -9,6 +9,7 @@
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
+#include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/ScaledShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 
@@ -176,7 +177,16 @@ WorldImpl::WorldImpl(world::DataModel& m) : model(m), temp(kTempBytes), jobs(kMa
     for (world::Instance* d : model.root().descendants()) mark(*d, kDirtyRebuild);
 }
 
+void WorldImpl::clear_heightfield() {
+    if (!has_heightfield) return;
+    JPH::BodyInterface& bi = system.GetBodyInterface();
+    bi.RemoveBody(heightfield_body);
+    bi.DestroyBody(heightfield_body);
+    has_heightfield = false;
+}
+
 WorldImpl::~WorldImpl() {
+    clear_heightfield();
     model.remove_listener(listener);
     for (CharacterImpl* c : characters) character_detach(*c);
     characters.clear();
@@ -397,6 +407,37 @@ bool PhysicsWorld::raycast(vec3 origin, vec3 direction, f32 max_distance, Raycas
     }
     return out.instance != nullptr;
 }
+
+void PhysicsWorld::set_heightfield(const f32* heights, u32 n, f32 cell, vec2 origin_xz, const world::Instance* owner) {
+    detail::WorldImpl& w = *impl_;
+    w.clear_heightfield();
+    if (!heights || n < 2 || (n & 1u) != 0 || !(cell > 0.0f)) {
+        TEFRA_LOG_WARN("physics: invalid heightfield (%u samples per side, cell %.3f m)", n, static_cast<f64>(cell));
+        return;
+    }
+    JPH::HeightFieldShapeSettings hs(heights, JPH::Vec3(origin_xz.x, 0.0f, origin_xz.y), JPH::Vec3(cell, 1.0f, cell),
+                                     n);
+    JPH::Shape::ShapeResult res = hs.Create();
+    if (res.HasError()) {
+        TEFRA_LOG_WARN("physics: Jolt rejected the %u x %u heightfield", n, n);
+        return;
+    }
+    JPH::BodyCreationSettings bcs(res.Get(), JPH::RVec3(0.0, 0.0, 0.0), JPH::Quat::sIdentity(),
+                                  JPH::EMotionType::Static, detail::kLayerStatic);
+    bcs.mFriction = 0.8f; // grass, sand and rock: walkable without sliding
+    bcs.mUserData = owner ? owner->id() : 0;
+    const JPH::BodyID id = w.system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+    if (id.IsInvalid()) {
+        TEFRA_LOG_WARN("physics: no room for the heightfield body");
+        return;
+    }
+    w.heightfield_body = id;
+    w.has_heightfield = true;
+}
+
+void PhysicsWorld::clear_heightfield() { impl_->clear_heightfield(); }
+
+bool PhysicsWorld::has_heightfield() const { return impl_->has_heightfield; }
 
 usize PhysicsWorld::add_touched_listener(TouchedFn fn) {
     const usize handle = impl_->next_touch_handle++;

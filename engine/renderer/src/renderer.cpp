@@ -482,9 +482,8 @@ void Renderer::compute_cascades(const Camera& cam, f32 aspect, const RenderSetti
     fc.shadow_soft = vec4{s.penumbra_scale, s.contact_length, 0.0f, 0.0f};
 }
 
-void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTimer* timer,
-                      const RenderWorld& world_in, const Camera& camera, f32 time, const RenderSettings& settings_in,
-                      const OutputTarget& target) {
+void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTimer* timer, const RenderWorld& world_in,
+                      const Camera& camera, f32 time, const RenderSettings& settings_in, const OutputTarget& target) {
     RenderWorld world = world_in;
     if (!world.terrain) world.terrain = landscape_.terrain;
     if (!world.vegetation) world.vegetation = landscape_.vegetation;
