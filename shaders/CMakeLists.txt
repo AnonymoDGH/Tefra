@@ -22,4 +22,9 @@ tefra_compile_shaders(
         ${CMAKE_CURRENT_SOURCE_DIR}/water.vert
         ${CMAKE_CURRENT_SOURCE_DIR}/water.frag
         ${CMAKE_CURRENT_SOURCE_DIR}/taa.frag
-        ${CMAKE_CURRENT_SOURCE_DIR}/gtao.frag)
+        ${CMAKE_CURRENT_SOURCE_DIR}/gtao.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/bloom_down.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/bloom_up.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/exposure_first.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/exposure_reduce.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/exposure_adapt.comp)

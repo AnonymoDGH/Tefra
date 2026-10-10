@@ -41,6 +41,9 @@ struct RunConfig {
     f32 ev100 = -1.0f;           // < 0: scene default
     std::string tier = "native"; // native | low | medium | high
     bool no_taa = false;
+    bool no_bloom = false;
+    bool auto_exposure = false; // on for this run (scene default is off)
+    bool no_film = false;
     render::TestPatternParams params = default_scene_params();
 };
 

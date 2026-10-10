@@ -41,6 +41,40 @@ struct TonemapPush {
     u32 hdr;
     u32 pad;
 };
+// Camera post (tonemap.frag). Layout must match the GLSL push block.
+struct PostPush {
+    VkDeviceAddress frame;
+    u32 hdr, bloom;
+    VkDeviceAddress exposure;
+    u32 flags;
+    f32 bloom_mix;
+};
+static_assert(sizeof(PostPush) == 32 && offsetof(PostPush, exposure) == 16 && offsetof(PostPush, flags) == 24);
+// Auto exposure state, one per frame slot (tonemap.frag reads ev; exposure_adapt.comp writes it).
+struct ExposureState {
+    f32 ev; // EV compensation, clamped to +-kExposureLimitEv
+    u32 last_frame;
+    u32 valid;
+    u32 pad;
+};
+static_assert(sizeof(ExposureState) == 16);
+struct ExposureAdaptPush {
+    VkDeviceAddress state;
+    u32 log_lum, frame_index;
+    f32 key_log2, limit_ev, tau_darken, tau_brighten;
+};
+static_assert(sizeof(ExposureAdaptPush) == 32 && offsetof(ExposureAdaptPush, key_log2) == 16);
+constexpr f32 kExposureKey = 0.18f;        // linear luminance the log-average is mapped to (Reinhard 2002 key)
+constexpr f32 kExposureLimitEv = 2.0f;     // compensation clamp (+-EV)
+constexpr f32 kExposureTauDarken = 0.4f;   // s: scene got brighter, compensation drops quickly
+constexpr f32 kExposureTauBrighten = 1.2f; // s: scene got darker, compensation rises slowly
+constexpr f32 kNominalFps = 60.0f;         // the adaptation runs per frame; seconds are converted with this rate
+struct BloomPush {
+    u32 src, karis; // downsample
+};
+struct BloomUpPush {
+    u32 coarse, fine;
+};
 constexpr u32 kPushBytes = 128;
 static_assert(sizeof(MeshPush) <= kPushBytes && sizeof(LightingPush) <= kPushBytes);
 
@@ -101,9 +135,14 @@ void frustum_planes(const mat4& m, vec4 out[6]) {
 Renderer::Renderer(const rhi::Device& dev, rhi::BindlessHeap& heap, u32 frames_in_flight)
     : dev_(dev), heap_(heap), graph_(dev, heap) {
     frames_.resize(frames_in_flight);
-    for (auto& f : frames_)
+    for (auto& f : frames_) {
         f.constants = rhi::create_buffer(dev_, sizeof(FrameConstants), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                          rhi::MemoryUsage::Upload, "frame_constants");
+        // Zeroed: valid = 0 makes the first adaptation snap to the measured exposure.
+        f.exposure = rhi::create_buffer(dev_, sizeof(ExposureState), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                        rhi::MemoryUsage::Upload, "exposure");
+        std::memset(f.exposure.mapped, 0, sizeof(ExposureState));
+    }
     if (!format_supports(dev_, hdr_format_,
                          VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))
         hdr_format_ = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -119,6 +158,7 @@ Renderer::~Renderer() {
     dev_.wait_idle();
     for (auto& f : frames_) {
         rhi::destroy_buffer(dev_, f.constants);
+        rhi::destroy_buffer(dev_, f.exposure);
         rhi::destroy_buffer(dev_, f.instances);
         rhi::destroy_buffer(dev_, f.terrain);
         for (rhi::Buffer* b : {&f.veg_visible, &f.veg_shadow_visible, &f.veg_cmds, &f.veg_shadow_cmds})
@@ -129,16 +169,19 @@ Renderer::~Renderer() {
         if (history_bindless_[i] != ~0u) heap_.remove_texture(history_bindless_[i]);
         rhi::destroy_image(dev_, history_[i]);
     }
-    for (VkPipeline p : {p_gbuffer_, p_gbuffer_2s_, p_shadow_, p_lighting_, p_tonemap_, p_skyview_, p_terrain_,
-                         p_terrain_shadow_, p_veg_, p_veg_2s_, p_veg_shadow_, p_veg_cull_, p_water_, p_taa_, p_gtao_})
+    for (VkPipeline p :
+         {p_gbuffer_,        p_gbuffer_2s_, p_shadow_,   p_lighting_,   p_tonemap_,     p_skyview_,   p_terrain_,
+          p_terrain_shadow_, p_veg_,        p_veg_2s_,   p_veg_shadow_, p_veg_cull_,    p_water_,     p_taa_,
+          p_gtao_,           p_bloom_down_, p_bloom_up_, p_expo_first_, p_expo_reduce_, p_expo_adapt_})
         if (p) vkDestroyPipeline(dev_.device(), p, nullptr);
     vkDestroyPipelineLayout(dev_.device(), layout_, nullptr);
 }
 
 void Renderer::create_pipelines(VkFormat output_format) {
     for (VkPipeline* p :
-         {&p_gbuffer_, &p_gbuffer_2s_, &p_shadow_, &p_lighting_, &p_tonemap_, &p_skyview_, &p_terrain_,
-          &p_terrain_shadow_, &p_veg_, &p_veg_2s_, &p_veg_shadow_, &p_veg_cull_, &p_water_, &p_taa_, &p_gtao_}) {
+         {&p_gbuffer_,        &p_gbuffer_2s_, &p_shadow_,   &p_lighting_,   &p_tonemap_,     &p_skyview_,   &p_terrain_,
+          &p_terrain_shadow_, &p_veg_,        &p_veg_2s_,   &p_veg_shadow_, &p_veg_cull_,    &p_water_,     &p_taa_,
+          &p_gtao_,           &p_bloom_down_, &p_bloom_up_, &p_expo_first_, &p_expo_reduce_, &p_expo_adapt_}) {
         if (*p) vkDestroyPipeline(dev_.device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -161,6 +204,11 @@ void Renderer::create_pipelines(VkFormat output_format) {
     VkShaderModule water_fs = rhi::load_shader(dev_, "water.frag");
     VkShaderModule taa_fs = rhi::load_shader(dev_, "taa.frag");
     VkShaderModule gtao_fs = rhi::load_shader(dev_, "gtao.frag");
+    VkShaderModule bloom_down_fs = rhi::load_shader(dev_, "bloom_down.frag");
+    VkShaderModule bloom_up_fs = rhi::load_shader(dev_, "bloom_up.frag");
+    VkShaderModule expo_first_fs = rhi::load_shader(dev_, "exposure_first.frag");
+    VkShaderModule expo_reduce_fs = rhi::load_shader(dev_, "exposure_reduce.frag");
+    VkShaderModule expo_adapt_cs = rhi::load_shader(dev_, "exposure_adapt.comp");
     p_veg_cull_ = rhi::create_compute_pipeline(dev_, veg_cull_cs, layout_, "veg_cull");
 
     auto rp_g = compat_pass(dev_, {kRt0, kRt1, kRt2, kRt3}, kDepth);
@@ -250,6 +298,31 @@ void Renderer::create_pipelines(VkFormat output_format) {
     ta.name = "gtao";
     p_gtao_ = rhi::create_graphics_pipeline(dev_, ta);
 
+    auto rp_b = compat_pass(dev_, {hdr_format_}, VK_FORMAT_UNDEFINED);
+    rhi::GraphicsPipelineDesc bd;
+    bd.vs = fs_vs;
+    bd.fs = bloom_down_fs;
+    bd.layout = layout_;
+    bd.render_pass = rp_b.pass;
+    bd.name = "bloom_down";
+    p_bloom_down_ = rhi::create_graphics_pipeline(dev_, bd);
+    bd.fs = bloom_up_fs;
+    bd.name = "bloom_up";
+    p_bloom_up_ = rhi::create_graphics_pipeline(dev_, bd);
+
+    auto rp_e = compat_pass(dev_, {VK_FORMAT_R16_SFLOAT}, VK_FORMAT_UNDEFINED);
+    rhi::GraphicsPipelineDesc ed;
+    ed.vs = fs_vs;
+    ed.layout = layout_;
+    ed.render_pass = rp_e.pass;
+    ed.fs = expo_first_fs;
+    ed.name = "exposure_first";
+    p_expo_first_ = rhi::create_graphics_pipeline(dev_, ed);
+    ed.fs = expo_reduce_fs;
+    ed.name = "exposure_reduce";
+    p_expo_reduce_ = rhi::create_graphics_pipeline(dev_, ed);
+    p_expo_adapt_ = rhi::create_compute_pipeline(dev_, expo_adapt_cs, layout_, "exposure_adapt");
+
     auto rp_t = compat_pass(dev_, {output_format}, VK_FORMAT_UNDEFINED);
     l.fs = tone_fs;
     l.render_pass = rp_t.pass;
@@ -262,10 +335,13 @@ void Renderer::create_pipelines(VkFormat output_format) {
     l.name = "skyview";
     p_skyview_ = rhi::create_graphics_pipeline(dev_, l);
 
-    for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k, &rp_w, &rp_a, &rp_o}) rhi::destroy_render_pass(dev_, *rp);
-    for (VkShaderModule m :
-         {mesh_vs, gbuf_fs, shadow_vs, fs_vs, light_fs, tone_fs, sky_fs, terrain_vs, terrain_fs, terrain_shadow_vs,
-          veg_vs, veg_shadow_vs, shadow_alpha_fs, veg_cull_cs, water_vs, water_fs, taa_fs, gtao_fs})
+    for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k, &rp_w, &rp_a, &rp_o, &rp_b, &rp_e})
+        rhi::destroy_render_pass(dev_, *rp);
+    for (VkShaderModule m : {mesh_vs,       gbuf_fs,        shadow_vs,       fs_vs,         light_fs,
+                             tone_fs,       sky_fs,         terrain_vs,      terrain_fs,    terrain_shadow_vs,
+                             veg_vs,        veg_shadow_vs,  shadow_alpha_fs, veg_cull_cs,   water_vs,
+                             water_fs,      taa_fs,         gtao_fs,         bloom_down_fs, bloom_up_fs,
+                             expo_first_fs, expo_reduce_fs, expo_adapt_cs})
         vkDestroyShaderModule(dev_.device(), m, nullptr);
 }
 
@@ -844,6 +920,117 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         taa_handles_[1] = hist_next;
     }
 
+    // ---- Auto exposure: mean log2 luminance reduced to 1x1 (4x4 per level), then adapted by a compute pass -------
+    // The adapted EV compensation lives in this slot's buffer and is read by the tonemap of this frame.
+    // Always a valid address (the buffer exists per slot): the tonemap must never dereference a null pointer.
+    const VkDeviceAddress exposure_addr = fb.exposure.address;
+    if (s.auto_exposure) {
+        rg::TextureHandle lum = resolved;
+        u32 lw = out_ext.width, lh = out_ext.height;
+        bool first = true;
+        for (;;) {
+            const u32 nw = max(1u, (lw + 3u) / 4u), nh = max(1u, (lh + 3u) / 4u);
+            const rg::TextureHandle src = lum;
+            const bool is_first = first;
+            rg::TextureHandle level;
+            graph_.add_pass(
+                "exposure_reduce", rg::PassType::Raster,
+                [&, nw, nh](rg::PassBuilder& b) {
+                    level = b.create({VK_FORMAT_R16_SFLOAT, nw, nh, "exposure_reduce"});
+                    b.read(src, rg::Access::Sampled);
+                    b.color(level, rg::Load::DontCare);
+                },
+                [=, this](const rg::PassContext& ctx) {
+                    const u32 idx = ctx.sampled(src);
+                    vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0,
+                                            nullptr);
+                    vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                      is_first ? p_expo_first_ : p_expo_reduce_);
+                    vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(idx), &idx);
+                    vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
+                });
+            lum = level;
+            lw = nw;
+            lh = nh;
+            first = false;
+            if (nw == 1 && nh == 1) break;
+        }
+        const rg::TextureHandle mean = lum;
+        const u32 frame32 = static_cast<u32>(frame_index);
+        graph_.add_pass(
+            "exposure_adapt", rg::PassType::Compute, [&](rg::PassBuilder& b) { b.read(mean, rg::Access::Sampled); },
+            [=, this](const rg::PassContext& ctx) {
+                const ExposureAdaptPush ap{exposure_addr,
+                                           ctx.sampled(mean),
+                                           frame32,
+                                           std::log2(kExposureKey),
+                                           kExposureLimitEv,
+                                           kExposureTauDarken * kNominalFps,
+                                           kExposureTauBrighten * kNominalFps};
+                vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &bindless, 0, nullptr);
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p_expo_adapt_);
+                vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(ap), &ap);
+                vkCmdDispatch(ctx.cmd, 1, 1, 1);
+                rhi::cmd_memory_barrier(ctx.cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+            });
+    }
+
+    // ---- Bloom: 6-level dual filter (13-tap down with Karis on the first level, tent up), no threshold --------
+    rg::TextureHandle bloom;
+    if (s.bloom) {
+        constexpr u32 kLevels = 6;
+        rg::TextureHandle down[kLevels];
+        rg::TextureHandle prev = resolved;
+        for (u32 l = 0; l < kLevels; ++l) {
+            const u32 w = max(1u, out_ext.width >> (l + 1)), h = max(1u, out_ext.height >> (l + 1));
+            const rg::TextureHandle src = prev;
+            const u32 karis = l == 0 ? 1u : 0u;
+            graph_.add_pass(
+                "bloom_down", rg::PassType::Raster,
+                [&, l, w, h](rg::PassBuilder& b) {
+                    down[l] = b.create({hdr_format_, w, h, "bloom_down"});
+                    b.read(src, rg::Access::Sampled);
+                    b.color(down[l], rg::Load::DontCare);
+                },
+                [=, this](const rg::PassContext& ctx) {
+                    const BloomPush bp{ctx.sampled(src), karis};
+                    vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0,
+                                            nullptr);
+                    vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_bloom_down_);
+                    vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(bp), &bp);
+                    vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
+                });
+            prev = down[l];
+        }
+        rg::TextureHandle chain = down[kLevels - 1];
+        for (int l = static_cast<int>(kLevels) - 2; l >= 0; --l) {
+            const u32 w = max(1u, out_ext.width >> (static_cast<u32>(l) + 1));
+            const u32 h = max(1u, out_ext.height >> (static_cast<u32>(l) + 1));
+            const rg::TextureHandle coarse = chain, fine = down[l];
+            rg::TextureHandle level;
+            graph_.add_pass(
+                "bloom_up", rg::PassType::Raster,
+                [&, w, h](rg::PassBuilder& b) {
+                    level = b.create({hdr_format_, w, h, "bloom_up"});
+                    b.read(coarse, rg::Access::Sampled);
+                    b.read(fine, rg::Access::Sampled);
+                    b.color(level, rg::Load::DontCare);
+                },
+                [=, this](const rg::PassContext& ctx) {
+                    const BloomUpPush up{ctx.sampled(coarse), ctx.sampled(fine)};
+                    vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0,
+                                            nullptr);
+                    vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_bloom_up_);
+                    vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(up), &up);
+                    vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
+                });
+            chain = level;
+        }
+        bloom = chain;
+    }
+
     rg::ImportDesc out;
     out.name = "output";
     out.image = target.image;
@@ -857,16 +1044,19 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     out.final_layout = target.final_layout;
     const rg::TextureHandle output = graph_.import(out);
 
+    const u32 post_flags = (s.bloom ? 1u : 0u) | (s.auto_exposure ? 2u : 0u) | (s.film_effects ? 4u : 0u);
     graph_.add_pass(
         "tonemap", rg::PassType::Raster,
         [&](rg::PassBuilder& b) {
             b.read(resolved, rg::Access::Sampled);
+            if (bloom.valid()) b.read(bloom, rg::Access::Sampled);
             b.color(output, rg::Load::DontCare);
         },
         [=, this](const rg::PassContext& ctx) {
             vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
             vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_tonemap_);
-            TonemapPush p{frame_addr, ctx.sampled(resolved), 0};
+            const PostPush p{frame_addr, ctx.sampled(resolved), bloom.valid() ? ctx.sampled(bloom) : 0u, exposure_addr,
+                             post_flags, s.bloom_intensity};
             vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
             vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
         });

@@ -1,0 +1,35 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_buffer_reference : require
+#include "common/bindless.glsl"
+// Auto exposure adaptation (one thread). Reads the mean log2 luminance (1x1) of the resolved HDR, computes the EV
+// compensation that puts the log-average at the key, clamps it to +-limit_ev and moves the stored state towards it
+// with a time constant in frames (exponential, so the result does not depend on how often this slot runs).
+// The state lives in a per-frame-slot buffer: it is written here and read by the tonemap of the same frame.
+// Push layout must match ExposureAdaptPush in renderer.cpp.
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer ExposureState { float ev; uint last_frame; uint valid; uint pad; };
+layout(push_constant) uniform Push {
+    ExposureState state;
+    uint log_lum;
+    uint frame_index;
+    float key_log2;
+    float limit_ev;
+    float tau_darken;   // frames, used when the scene got brighter (compensation goes down)
+    float tau_brighten; // frames, used when the scene got darker (compensation goes up)
+} pc;
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    const float mean_log2 = texelFetch(TEX2D(pc.log_lum, SMP_NEAREST_CLAMP), ivec2(0), 0).r;
+    const float target = clamp(pc.key_log2 - mean_log2, -pc.limit_ev, pc.limit_ev);
+    float ev = target;
+    if (pc.state.valid != 0u) {
+        const float cur = pc.state.ev;
+        const float frames = float(pc.frame_index - min(pc.state.last_frame, pc.frame_index));
+        const float tau = max(target < cur ? pc.tau_darken : pc.tau_brighten, 1e-3);
+        ev = cur + (target - cur) * (1.0 - exp(-frames / tau));
+    }
+    pc.state.ev = clamp(ev, -pc.limit_ev, pc.limit_ev);
+    pc.state.last_frame = pc.frame_index;
+    pc.state.valid = 1u;
+}
