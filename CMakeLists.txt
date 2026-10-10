@@ -37,6 +37,24 @@ if(GIT_FOUND AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/.git)
         OUTPUT_VARIABLE TEFRA_GIT_SHA OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 endif()
 
+# C# runtime for scripts (managed/Tefra.Engine, .NET 8). Optional: without dotnet the engine builds and runs without
+# scripting (ScriptHost::init reports it). The output lands in bin/managed next to the executables.
+option(TEFRA_MANAGED "Build the C# scripting assembly with dotnet (needs the .NET 8 SDK)" ON)
+if(TEFRA_MANAGED)
+    find_program(TEFRA_DOTNET dotnet)
+    if(TEFRA_DOTNET)
+        add_custom_target(tefra_managed ALL
+            COMMAND ${CMAKE_COMMAND} -E env DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+                    ${TEFRA_DOTNET} build "${CMAKE_CURRENT_SOURCE_DIR}/managed/Tefra.Engine/Tefra.Engine.csproj"
+                    -c Release -o "${CMAKE_BINARY_DIR}/bin/managed" -nologo -v:minimal
+            BYPRODUCTS "${CMAKE_BINARY_DIR}/bin/managed/Tefra.Engine.dll"
+            COMMENT "Building managed Tefra.Engine (.NET 8)"
+            VERBATIM)
+    else()
+        message(STATUS "dotnet not found: C# scripting assembly not built (scripts disabled at run time)")
+    endif()
+endif()
+
 add_subdirectory(third_party)
 add_subdirectory(engine)
 add_subdirectory(shaders)

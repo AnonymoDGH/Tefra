@@ -29,3 +29,7 @@ if(TEFRA_WITH_WINDOW)
         SOURCES studio/main.cpp studio/src/app.cpp studio/src/ui.cpp
         DEPS tefra_studio_core tefra_platform tefra_imgui tefra_imguizmo)
 endif()
+tefra_add_executable(tefra_run SOURCES run/main.cpp DEPS tefra_scripting tefra_world)
+if(TARGET tefra_managed)
+    add_dependencies(tefra_run tefra_managed)
+endif()

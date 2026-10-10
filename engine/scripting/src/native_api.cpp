@@ -1,0 +1,198 @@
+// Native functions handed to managed code (TefraNativeApi). Each one resolves ids against the DataModel of the
+// running session and returns a plain C value. Functions return 0 / nullptr when there is no session or the id is
+// unknown; they never throw and never let a C++ exception escape.
+
+#include "script_session.h"
+
+#include <cstdint>
+#include <utility>
+
+namespace tefra::scripting::detail {
+namespace {
+
+world::DataModel* g_model = nullptr;
+const LogCallback* g_log = nullptr;
+
+world::Instance* find(std::uint64_t id) { return g_model && id != 0 ? g_model->find(id) : nullptr; }
+
+bool valid_type(std::int32_t t) { return t >= 0 && t <= static_cast<std::int32_t>(world::PropType::Ref); }
+
+void to_flat(const world::Value& v, TefraValue& out) {
+    out.type = static_cast<std::int32_t>(v.type);
+    out.n[0] = v.n[0];
+    out.n[1] = v.n[1];
+    out.n[2] = v.n[2];
+    out.str = v.s.data();
+    out.str_len = static_cast<std::uint32_t>(v.s.size());
+    out.ref = v.ref;
+}
+
+bool from_flat(const TefraValue& in, world::Value& out) {
+    if (!valid_type(in.type)) return false;
+    out = world::Value{};
+    out.type = static_cast<world::PropType>(in.type);
+    out.n[0] = in.n[0];
+    out.n[1] = in.n[1];
+    out.n[2] = in.n[2];
+    if (in.str && in.str_len > 0) out.s.assign(in.str, in.str_len);
+    out.ref = in.ref;
+    return true;
+}
+
+} // namespace
+
+world::DataModel* current_model() { return g_model; }
+
+void set_session(world::DataModel* model, const LogCallback* log) {
+    g_model = model;
+    g_log = log;
+}
+
+void session_log(LogLevel level, std::string_view message) {
+    if (g_log && *g_log) {
+        (*g_log)(level, message);
+        return;
+    }
+    log_write(level, "%.*s", static_cast<int>(message.size()), message.data());
+}
+
+// C linkage: these are the entries of the TefraNativeApi table in abi.h.
+extern "C" {
+
+std::int32_t tefra_script_get_prop(std::uint64_t id, std::uint32_t index, TefraValue* out) {
+    tefra::world::Instance* inst = find(id);
+    if (!inst || !out || index >= inst->cls().prop_count()) return 0;
+    to_flat(inst->get(index), *out);
+    return 1;
+}
+
+std::int32_t tefra_script_set_prop(std::uint64_t id, std::uint32_t index, const TefraValue* value) {
+    tefra::world::Instance* inst = find(id);
+    tefra::world::Value v;
+    if (!inst || !value || !from_flat(*value, v)) return 0;
+    return inst->set(index, std::move(v)) ? 1 : 0;
+}
+
+std::int32_t tefra_script_prop_index(const char* class_name, const char* prop_name) {
+    if (!class_name || !prop_name) return -1;
+    const tefra::world::ClassInfo* cls = tefra::world::ClassRegistry::get().find(class_name);
+    const tefra::world::PropInfo* p = cls ? cls->find_prop(prop_name) : nullptr;
+    return p ? static_cast<std::int32_t>(p->index) : -1;
+}
+
+std::int32_t tefra_script_prop_type(const char* class_name, const char* prop_name) {
+    if (!class_name || !prop_name) return -1;
+    const tefra::world::ClassInfo* cls = tefra::world::ClassRegistry::get().find(class_name);
+    const tefra::world::PropInfo* p = cls ? cls->find_prop(prop_name) : nullptr;
+    return p ? static_cast<std::int32_t>(p->type) : -1;
+}
+
+const char* tefra_script_prop_name(std::uint64_t id, std::uint32_t index) {
+    tefra::world::Instance* inst = find(id);
+    const tefra::world::PropInfo* p = inst ? inst->cls().prop(index) : nullptr;
+    return p ? p->name.c_str() : nullptr;
+}
+
+const char* tefra_script_class_name(std::uint64_t id) {
+    tefra::world::Instance* inst = find(id);
+    return inst ? inst->class_name().c_str() : nullptr;
+}
+
+std::int32_t tefra_script_is_a(std::uint64_t id, const char* class_name) {
+    tefra::world::Instance* inst = find(id);
+    return inst && class_name && inst->is_a(std::string_view(class_name)) ? 1 : 0;
+}
+
+std::uint64_t tefra_script_create(const char* class_name, std::uint64_t parent, const char* name) {
+    if (!current_model() || !class_name) return 0;
+    tefra::world::Instance* p = nullptr;
+    if (parent != 0) {
+        p = find(parent);
+        if (!p) return 0;
+    }
+    tefra::world::Instance* inst = current_model()->create(class_name, p, name ? name : "");
+    return inst ? inst->id() : 0;
+}
+
+std::int32_t tefra_script_destroy(std::uint64_t id) {
+    tefra::world::Instance* inst = find(id);
+    return inst && current_model()->destroy(inst) ? 1 : 0;
+}
+
+std::int32_t tefra_script_set_parent(std::uint64_t id, std::uint64_t parent) {
+    tefra::world::Instance* inst = find(id);
+    if (!inst) return 0;
+    tefra::world::Instance* p = nullptr;
+    if (parent != 0) {
+        p = find(parent);
+        if (!p) return 0;
+    }
+    return current_model()->set_parent(inst, p) ? 1 : 0;
+}
+
+std::uint64_t tefra_script_parent(std::uint64_t id) {
+    tefra::world::Instance* inst = find(id);
+    return inst && inst->parent() ? inst->parent()->id() : 0;
+}
+
+std::int32_t tefra_script_child_count(std::uint64_t id) {
+    tefra::world::Instance* inst = find(id);
+    return inst ? static_cast<std::int32_t>(inst->children().size()) : 0;
+}
+
+std::uint64_t tefra_script_child_at(std::uint64_t id, std::int32_t index) {
+    tefra::world::Instance* inst = find(id);
+    if (!inst || index < 0 || static_cast<std::size_t>(index) >= inst->children().size()) return 0;
+    return inst->children()[static_cast<std::size_t>(index)]->id();
+}
+
+std::uint64_t tefra_script_find_child(std::uint64_t id, const char* name) {
+    tefra::world::Instance* inst = find(id);
+    if (!inst || !name) return 0;
+    tefra::world::Instance* child = inst->find_first_child(std::string_view(name));
+    return child ? child->id() : 0;
+}
+
+std::uint64_t tefra_script_service(const char* name) {
+    if (!current_model() || !name) return 0;
+    tefra::world::Instance* s = current_model()->service(name);
+    return s ? s->id() : 0;
+}
+
+std::uint64_t tefra_script_clone(std::uint64_t id, std::uint64_t parent) {
+    tefra::world::Instance* src = find(id);
+    if (!src) return 0;
+    tefra::world::Instance* p = nullptr;
+    if (parent != 0) {
+        p = find(parent);
+        if (!p) return 0;
+    }
+    tefra::world::Instance* copy = current_model()->clone(*src, p);
+    return copy ? copy->id() : 0;
+}
+
+std::uint64_t tefra_script_find_path(const char* path) {
+    if (!current_model() || !path) return 0;
+    tefra::world::Instance* inst = current_model()->find_path(path);
+    return inst ? inst->id() : 0;
+}
+
+void tefra_script_log(std::int32_t level, const char* message) {
+    const std::int32_t clamped = level < 0 ? 0 : (level > 4 ? 4 : level);
+    session_log(static_cast<tefra::LogLevel>(clamped), message ? message : "");
+}
+
+} // extern "C"
+
+const TefraNativeApi* native_table() {
+    static const TefraNativeApi table = {
+        TEFRA_SCRIPT_ABI_VERSION, tefra_script_get_prop,  tefra_script_set_prop,   tefra_script_prop_index,
+        tefra_script_prop_type,   tefra_script_prop_name, tefra_script_class_name, tefra_script_is_a,
+        tefra_script_create,      tefra_script_destroy,   tefra_script_set_parent, tefra_script_parent,
+        tefra_script_child_count, tefra_script_child_at,  tefra_script_find_child, tefra_script_service,
+        tefra_script_clone,       tefra_script_find_path, tefra_script_log,
+    };
+    return &table;
+}
+
+} // namespace tefra::scripting::detail

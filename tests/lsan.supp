@@ -1,0 +1,11 @@
+# LeakSanitizer suppressions for the unit tests (ASan preset).
+#
+# The C# scripting tests start the .NET runtime inside the test process (ADR-013). The runtime keeps its own heap
+# (type loader, JIT code, GC metadata) for the life of the process, and is not shut down, so LeakSanitizer reports
+# those blocks as leaks. Only allocations that start in these runtime modules are suppressed; engine leaks still fail.
+leak:libcoreclr
+leak:libclrjit
+leak:libSystem.Native
+leak:System.Private.CoreLib
+leak:System.Reflection.Metadata
+leak:doublemapper
