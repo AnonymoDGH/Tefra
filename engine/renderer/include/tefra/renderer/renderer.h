@@ -20,6 +20,7 @@ namespace tefra::render {
 
 class Scene;
 class Environment;
+class Atmosphere;
 
 struct RenderSettings {
     u32 shadow_resolution = 1024; // per cascade
@@ -30,6 +31,11 @@ struct RenderSettings {
     vec3 sun_color{1.0f, 0.86f, 0.70f};                         // normalized to luminance 1 internally
     f32 sun_illuminance = 30000.0f;                             // lux
     f32 ibl_intensity = 1.0f;
+    // Height fog (spec 2 §2). density = 0 disables.
+    f32 fog_density = 0.0f;  // 1/m at fog_height
+    f32 fog_falloff = 0.02f; // 1/m
+    f32 fog_height = 0.0f;   // m (world y)
+    f32 fog_anisotropy = 0.6f;
 };
 
 struct OutputTarget {
@@ -52,8 +58,8 @@ class Renderer {
 
     // Records the whole frame into cmd. Output ends in target.final_layout.
     void render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTimer* timer, const Scene& scene,
-                const Environment& env, const Camera& camera, f32 time, const RenderSettings& settings,
-                const OutputTarget& target);
+                const Environment& env, const Atmosphere* atmosphere, const Camera& camera, f32 time,
+                const RenderSettings& settings, const OutputTarget& target);
 
     u32 draw_calls() const { return draw_calls_; }
     const rg::Graph& graph() const { return graph_; }
@@ -75,6 +81,7 @@ class Renderer {
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
     VkPipeline p_gbuffer_ = VK_NULL_HANDLE, p_gbuffer_2s_ = VK_NULL_HANDLE, p_shadow_ = VK_NULL_HANDLE;
     VkPipeline p_lighting_ = VK_NULL_HANDLE, p_tonemap_ = VK_NULL_HANDLE;
+    VkPipeline p_skyview_ = VK_NULL_HANDLE;
     VkFormat output_format_ = VK_FORMAT_UNDEFINED;
     VkFormat hdr_format_ = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
     VkFormat shadow_format_ = VK_FORMAT_D32_SFLOAT;

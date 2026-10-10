@@ -10,4 +10,5 @@ tefra_compile_shaders(
         ${CMAKE_CURRENT_SOURCE_DIR}/gbuffer.frag
         ${CMAKE_CURRENT_SOURCE_DIR}/shadow.vert
         ${CMAKE_CURRENT_SOURCE_DIR}/lighting.frag
-        ${CMAKE_CURRENT_SOURCE_DIR}/tonemap.frag)
+        ${CMAKE_CURRENT_SOURCE_DIR}/tonemap.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/skyview.frag)

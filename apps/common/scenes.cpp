@@ -132,3 +132,23 @@ bool build_gltf_scene(render::Scene& scene, render::Environment& env, SceneSetup
 }
 
 } // namespace tefra::app
+
+namespace tefra::app {
+
+void build_atmosphere_environment(const render::Atmosphere& atmo, render::Environment& env, vec3 sun_dir) {
+    env.build_from_equirect(atmo.render_equirect(sun_dir, 256));
+}
+
+void build_materials_sky_scene(render::Scene& scene, render::Environment& env, const render::Atmosphere& atmo,
+                               SceneSetup& setup) {
+    build_materials_scene(scene, env, setup);
+    setup.use_atmosphere = true;
+    setup.settings.sun_direction = normalize(vec3{0.45f, 0.16f, -0.88f}); // ~9 deg: early morning
+    setup.settings.fog_density = 0.012f;
+    setup.settings.fog_falloff = 0.08f;
+    setup.settings.fog_height = 0.0f;
+    setup.settings.ev100 = 13.0f;
+    build_atmosphere_environment(atmo, env, setup.settings.sun_direction);
+}
+
+} // namespace tefra::app

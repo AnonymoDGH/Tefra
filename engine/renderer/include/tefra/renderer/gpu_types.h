@@ -3,6 +3,7 @@
 // CPU mirrors of GPU structs (std430, shaders/common/gpu_types.glsl). Sizes are static_asserted.
 
 #include "tefra/core/math.h"
+#include "tefra/renderer/atmosphere.h"
 
 namespace tefra::render {
 
@@ -65,6 +66,8 @@ struct FrameConstants {
     u32 shadow_atlas = 0;   // bindless 2D index
     u32 env_background = 0; // bindless 2D index: full-resolution equirect for the visible sky
     u32 pad_[3] = {};
+    vec4 fog; // x density (1/m) at reference height, y height falloff (1/m), z reference height, w g
+    AtmosphereGPU atmo;
 };
 static_assert(sizeof(FrameConstants) % 16 == 0);
 

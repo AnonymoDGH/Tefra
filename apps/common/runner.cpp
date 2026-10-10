@@ -151,21 +151,32 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
     std::unique_ptr<rhi::BindlessHeap> heap;
     std::unique_ptr<render::Scene> scene;
     std::unique_ptr<render::Environment> env;
+    std::unique_ptr<render::Atmosphere> atmosphere;
     std::unique_ptr<render::Renderer> renderer;
     SceneSetup setup;
     if (scene3d) {
         heap = std::make_unique<rhi::BindlessHeap>(*device, kFramesInFlight);
         scene = std::make_unique<render::Scene>(*device, *heap);
         env = std::make_unique<render::Environment>(*device, *heap);
+        atmosphere = std::make_unique<render::Atmosphere>(*device, *heap);
         bool built = false;
         if (cfg.scene == "materials") {
             build_materials_scene(*scene, *env, setup);
+            built = true;
+        } else if (cfg.scene == "materials_sky") {
+            build_materials_sky_scene(*scene, *env, *atmosphere, setup);
             built = true;
         } else if (cfg.scene == "gltf") {
             built = build_gltf_scene(*scene, *env, setup, cfg.gltf_path, cfg.hdr_path);
         }
         if (!built) {
             result.error = "unknown scene or failed to load: " + cfg.scene;
+            renderer.reset();
+            env.reset();
+            atmosphere.reset();
+            scene.reset();
+            heap.reset();
+            rhi::destroy_image(*device, offscreen);
             return;
         }
         if (cfg.ev100 >= 0.0f) setup.settings.ev100 = cfg.ev100;
@@ -251,7 +262,8 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             out.final_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             out.initial_stage = prev_stage;
             out.initial_access = prev_access;
-            renderer->render(cmd, fc.slot, frame_index, &timer, *scene, *env, params.camera, params.time,
+            renderer->render(cmd, fc.slot, frame_index, &timer, *scene, *env,
+                             setup.use_atmosphere ? atmosphere.get() : nullptr, params.camera, params.time,
                              setup.settings, out);
             result.draw_calls = renderer->draw_calls();
         } else {
@@ -349,6 +361,7 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
 
     renderer.reset();
     env.reset();
+    atmosphere.reset();
     scene.reset();
     heap.reset();
     testpattern.reset();

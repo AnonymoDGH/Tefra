@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tefra/renderer/atmosphere.h"
 #include "tefra/renderer/environment.h"
 #include "tefra/renderer/renderer.h"
 #include "tefra/renderer/scene.h"
@@ -11,7 +12,14 @@ namespace tefra::app {
 struct SceneSetup {
     render::Camera camera;
     render::RenderSettings settings;
+    bool use_atmosphere = false;
 };
+
+// Builds the IBL environment from the atmosphere for the current sun direction.
+void build_atmosphere_environment(const render::Atmosphere& atmo, render::Environment& env, vec3 sun_dir);
+// "materials_sky": the materials scene under the physical atmosphere with morning valley fog.
+void build_materials_sky_scene(render::Scene& scene, render::Environment& env, const render::Atmosphere& atmo,
+                               SceneSetup& setup);
 
 // "materials": 7x5 spheres (roughness by column; dielectric, metal, colored rows) on a checker floor.
 void build_materials_scene(render::Scene& scene, render::Environment& env, SceneSetup& setup);

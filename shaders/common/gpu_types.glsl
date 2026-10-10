@@ -11,6 +11,10 @@ struct Material {
     uint flags; float translucency; uint pad0; uint pad1;
 };
 struct Instance { vec4 model_rows[3]; vec4 normal_rows[3]; uint material; uint p0; uint p1; uint p2; };
+struct Atmosphere {
+    vec4 rayleigh; vec4 mie; vec4 ozone; vec4 radii; vec4 ground; vec4 sun;
+    uint transmittance_lut; uint multiscatter_lut; uint skyview_lut; uint pad;
+};
 struct Frame {
     mat4 view_proj; mat4 inv_view_proj; mat4 view; mat4 proj;
     mat4 cascade_view_proj[4];
@@ -19,6 +23,8 @@ struct Frame {
     vec4 sh[9];
     uint env_cube; uint env_mips; uint brdf_lut; uint shadow_atlas;
     uint env_background; uint pad0_; uint pad1_; uint pad2_;
+    vec4 fog; // x density (1/m) at reference height, y height falloff (1/m), z reference height (m), w anisotropy
+    Atmosphere atmo;
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VertexBuffer { Vertex v[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer MaterialBuffer { Material m[]; };

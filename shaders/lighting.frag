@@ -4,6 +4,7 @@
 #include "common/bindless.glsl"
 #include "common/brdf.glsl"
 #include "common/cube.glsl"
+#include "common/atmosphere.glsl"
 layout(push_constant) uniform Push { FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; } pc;
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
@@ -46,6 +47,40 @@ float sun_shadow(Frame f, vec3 p, vec3 n, float view_depth) {
     return 1.0;
 }
 
+// Exponential height fog, integrated analytically along the view ray (spec 2 §2).
+vec3 apply_fog(Frame f, vec3 color, vec3 dir, float dist) {
+    float dens = f.fog.x;
+    if (dens <= 0.0) return color;
+    float b = f.fog.y;
+    float h0 = f.camera_pos.y - f.fog.z;
+    float k = dir.y * b * dist;
+    float shape = abs(k) > 1e-4 ? (1.0 - exp(-k)) / k : 1.0 - 0.5 * k;
+    float T = exp(-dens * exp(-b * h0) * dist * shape);
+    vec3 ambient = (sh9_eval(f, vec3(0, 1, 0)) + sh9_eval(f, vec3(0, -1, 0))) / (2.0 * BRDF_PI) * f.exposure.y;
+    float g = f.fog.w, c = dot(dir, f.sun_dir.xyz);
+    float hg = (1.0 - g * g) / (4.0 * BRDF_PI * pow(1.0 + g * g - 2.0 * g * c, 1.5));
+    vec3 sun = f.sun_color.rgb * f.sun_dir.w * hg;
+    return color * T + (ambient + sun) * (1.0 - T);
+}
+
+vec3 sky_color(Frame f, vec3 dir) {
+    if (f.atmo.skyview_lut == 0xFFFFFFFFu)
+        return textureLod(TEX2D(f.env_background, SMP_LINEAR_REPEAT), equirect_uv(dir), 0.0).rgb * f.exposure.y;
+    Atmosphere a = f.atmo;
+    vec3 s = a.sun.xyz;
+    vec3 L = textureLod(TEX2D(a.skyview_lut, SMP_LINEAR_CLAMP), skyview_uv(dir, s), 0.0).rgb * a.ground.w;
+    // Sun disk with limb darkening, attenuated by the atmosphere.
+    float cos_d = dot(dir, s), cos_r = cos(a.sun.w);
+    if (cos_d > cos_r) {
+        float r = a.radii.x + a.radii.w + max(f.camera_pos.y, 0.0);
+        vec3 T = atmo_transmittance(a, r, dir.y);
+        float x = clamp(acos(min(cos_d, 1.0)) / a.sun.w, 0.0, 1.0);
+        float limb = 1.0 - 0.6 * (1.0 - sqrt(1.0 - x * x));
+        L += T * a.ground.w / (ATMO_PI * a.sun.w * a.sun.w) * limb;
+    }
+    return L;
+}
+
 void main() {
     Frame f = pc.frame.f;
     ivec2 px = ivec2(gl_FragCoord.xy);
@@ -56,7 +91,8 @@ void main() {
     vec3 V = -normalize(p);
     if (depth <= 0.0) {
         vec3 dir = -V;
-        o_color = vec4(textureLod(TEX2D(f.env_background, SMP_LINEAR_REPEAT), equirect_uv(dir), 0.0).rgb * f.exposure.y, 1.0);
+        vec3 sky = apply_fog(f, sky_color(f, dir), dir, 1e5);
+        o_color = vec4(min(sky * f.exposure.x, vec3(60000.0)), 1.0); // pre-exposed
         return;
     }
     vec4 g0 = texelFetch(TEX2D(pc.rt0, SMP_NEAREST_CLAMP), px, 0);
@@ -99,5 +135,6 @@ void main() {
     vec3 kd = diff_col * (1.0 - fss - fms * ems);
     float spec_occ = clamp(pow(ndv + ao, exp2(-16.0 * a - 1.0)) - 1.0 + ao, 0.0, 1.0);
     color += (prefiltered * fss * spec_occ + (fms * ems + kd) * irradiance / BRDF_PI * ao) * f.exposure.y;
-    o_color = vec4(color, 1.0);
+    color = apply_fog(f, color, -V, length(p));
+    o_color = vec4(min(color * f.exposure.x, vec3(60000.0)), 1.0); // pre-exposed
 }

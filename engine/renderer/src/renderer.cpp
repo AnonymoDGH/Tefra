@@ -1,5 +1,6 @@
 #include "tefra/renderer/renderer.h"
 
+#include "tefra/renderer/atmosphere.h"
 #include "tefra/renderer/environment.h"
 #include "tefra/renderer/scene.h"
 #include "tefra/rhi/bindless.h"
@@ -114,13 +115,13 @@ Renderer::~Renderer() {
         rhi::destroy_buffer(dev_, f.constants);
         rhi::destroy_buffer(dev_, f.instances);
     }
-    for (VkPipeline p : {p_gbuffer_, p_gbuffer_2s_, p_shadow_, p_lighting_, p_tonemap_})
+    for (VkPipeline p : {p_gbuffer_, p_gbuffer_2s_, p_shadow_, p_lighting_, p_tonemap_, p_skyview_})
         if (p) vkDestroyPipeline(dev_.device(), p, nullptr);
     vkDestroyPipelineLayout(dev_.device(), layout_, nullptr);
 }
 
 void Renderer::create_pipelines(VkFormat output_format) {
-    for (VkPipeline* p : {&p_gbuffer_, &p_gbuffer_2s_, &p_shadow_, &p_lighting_, &p_tonemap_}) {
+    for (VkPipeline* p : {&p_gbuffer_, &p_gbuffer_2s_, &p_shadow_, &p_lighting_, &p_tonemap_, &p_skyview_}) {
         if (*p) vkDestroyPipeline(dev_.device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -131,6 +132,7 @@ void Renderer::create_pipelines(VkFormat output_format) {
     VkShaderModule fs_vs = rhi::load_shader(dev_, "fullscreen.vert");
     VkShaderModule light_fs = rhi::load_shader(dev_, "lighting.frag");
     VkShaderModule tone_fs = rhi::load_shader(dev_, "tonemap.frag");
+    VkShaderModule sky_fs = rhi::load_shader(dev_, "skyview.frag");
 
     auto rp_g = compat_pass(dev_, {kRt0, kRt1, kRt2, kRt3}, kDepth);
     rhi::GraphicsPipelineDesc g;
@@ -178,8 +180,14 @@ void Renderer::create_pipelines(VkFormat output_format) {
     l.name = "tonemap";
     p_tonemap_ = rhi::create_graphics_pipeline(dev_, l);
 
-    for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t}) rhi::destroy_render_pass(dev_, *rp);
-    for (VkShaderModule m : {mesh_vs, gbuf_fs, shadow_vs, fs_vs, light_fs, tone_fs})
+    auto rp_k = compat_pass(dev_, {VK_FORMAT_R16G16B16A16_SFLOAT}, VK_FORMAT_UNDEFINED);
+    l.fs = sky_fs;
+    l.render_pass = rp_k.pass;
+    l.name = "skyview";
+    p_skyview_ = rhi::create_graphics_pipeline(dev_, l);
+
+    for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k}) rhi::destroy_render_pass(dev_, *rp);
+    for (VkShaderModule m : {mesh_vs, gbuf_fs, shadow_vs, fs_vs, light_fs, tone_fs, sky_fs})
         vkDestroyShaderModule(dev_.device(), m, nullptr);
 }
 
@@ -238,9 +246,18 @@ void Renderer::compute_cascades(const Camera& cam, f32 aspect, const RenderSetti
 }
 
 void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTimer* timer, const Scene& scene,
-                      const Environment& env, const Camera& camera, f32 time, const RenderSettings& s,
-                      const OutputTarget& target) {
+                      const Environment& env, const Atmosphere* atmo, const Camera& camera, f32 time,
+                      const RenderSettings& settings_in, const OutputTarget& target) {
     if (output_format_ != target.format) create_pipelines(target.format);
+    RenderSettings s = settings_in;
+    if (atmo) {
+        // Sun light at the camera from the atmosphere: color and intensity change with the sun elevation.
+        const f32 alt = atmo->params().ground_altitude + max(static_cast<f32>(camera.position.y), 0.0f);
+        const vec3 e = atmo->sun_illuminance(alt, s.sun_direction);
+        const f32 lum = 0.2126f * e.x + 0.7152f * e.y + 0.0722f * e.z;
+        s.sun_illuminance = lum;
+        s.sun_color = lum > 0.0f ? e / lum : vec3{1.0f};
+    }
     FrameBuffers& fb = frames_[slot];
     const VkExtent2D ext = target.extent;
     const f32 aspect = f32(ext.width) / f32(ext.height);
@@ -265,6 +282,11 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     fc.env_mips = env.mips();
     fc.brdf_lut = env.brdf_lut();
     fc.env_background = env.background();
+    fc.fog = {s.fog_density, s.fog_falloff, s.fog_height, s.fog_anisotropy};
+    if (atmo)
+        fc.atmo = atmo->gpu(s.sun_direction, 0);
+    else
+        fc.atmo.skyview_lut = 0xFFFFFFFFu;
 
     // ---- Instances (camera-relative) and culling ---------------------------------------------------
     const auto& instances = scene.instances();
@@ -305,7 +327,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     // ---- Frame graph -----------------------------------------------------------------------------
     graph_.begin(slot, timer);
     const u32 sres = s.shadow_resolution;
-    rg::TextureHandle shadow, depth, rt0, rt1, rt2, rt3, hdr;
+    rg::TextureHandle shadow, depth, rt0, rt1, rt2, rt3, hdr, skyview;
     const VkDeviceAddress frame_addr = fb.constants.address;
     draw_calls_ = 0;
     u32* draw_counter = &draw_calls_;
@@ -370,16 +392,35 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             draw_list(ctx.cmd, visible, 0, false, p_gbuffer_, p_gbuffer_2s_);
         });
 
+    if (atmo) {
+        graph_.add_pass(
+            "skyview_lut", rg::PassType::Raster,
+            [&](rg::PassBuilder& b) {
+                skyview =
+                    b.create({VK_FORMAT_R16G16B16A16_SFLOAT, Atmosphere::kSkyViewW, Atmosphere::kSkyViewH, "skyview"});
+                b.color(skyview, rg::Load::DontCare);
+            },
+            [=, this](const rg::PassContext& ctx) {
+                vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_skyview_);
+                TonemapPush p{frame_addr, 0, 0};
+                vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
+                vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
+            });
+    }
+
     graph_.add_pass(
         "lighting", rg::PassType::Raster,
         [&](rg::PassBuilder& b) {
             hdr = b.create({hdr_format_, ext.width, ext.height, "hdr"});
             for (auto h : {depth, rt0, rt1, rt2, shadow}) b.read(h, rg::Access::Sampled);
+            if (skyview.valid()) b.read(skyview, rg::Access::Sampled);
             b.color(hdr, rg::Load::DontCare);
         },
         [=, this, &fc](const rg::PassContext& ctx) {
             // The shadow atlas index is only known once the graph has bound physical textures.
             fc.shadow_atlas = ctx.sampled(shadow);
+            if (skyview.valid()) fc.atmo.skyview_lut = ctx.sampled(skyview);
             std::memcpy(frames_[slot].constants.mapped, &fc, sizeof(fc));
             vmaFlushAllocation(dev_.allocator(), frames_[slot].constants.allocation, 0, VK_WHOLE_SIZE);
             vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
