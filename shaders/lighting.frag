@@ -103,6 +103,8 @@ void main() {
     vec3 N = oct_decode01(g1.xy);
     float rough = max(g1.z, 0.03);
     float metal = g2.r;
+    float translucency = g2.g;
+    bool foliage = g1.w > 0.2 && g1.w < 0.5; // class 1/3
     float a = rough * rough;
     vec3 f0 = mix(vec3(0.04), albedo, metal);
     vec3 diff_col = albedo * (1.0 - metal);
@@ -121,6 +123,15 @@ void main() {
         vec3 spec = D_GGX(ndh, a) * V_SmithGGX(ndv, ndl, a) * F;
         vec3 diff = diff_col / BRDF_PI * (1.0 - F);
         color += (diff + spec) * (f.sun_color.rgb * f.sun_dir.w) * ndl * sh;
+    }
+    if (foliage && translucency > 0.0) {
+        // Thin-leaf transmission: light through the needles towards the viewer (strongest against the sun).
+        float view_depth = -(f.view * vec4(p, 1.0)).z;
+        float sh = sun_shadow(f, p, -N, view_depth);
+        float back = max(dot(-N, L), 0.0);
+        float forward = pow(max(dot(-V, L), 0.0), 6.0);
+        vec3 trans_col = albedo * vec3(1.1, 1.25, 0.6); // light through chlorophyll is yellow-green
+        color += trans_col * translucency * (0.35 * back + 1.6 * forward) / BRDF_PI * (f.sun_color.rgb * f.sun_dir.w) * sh * ao;
     }
 
     // Image-based lighting (split-sum, multi-scatter compensation).

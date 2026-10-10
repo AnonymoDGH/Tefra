@@ -53,6 +53,7 @@ void add_trunk(MeshData& m, f32 h, f32 r0, u32 segments, f32 ring_step, f32 top)
 }
 
 // Branch card: a curved quad strip from `root` along `dir`, drooping, oriented by `side`.
+// Foliage cards store a crown-occlusion factor in tangent_sign (their normal maps are flat).
 void add_card(MeshData& m, vec3 root, vec3 dir, vec3 side, f32 length, f32 width, f32 droop, vec3 crown_center,
               f32 crown_radius) {
     const u32 segs = 3;
@@ -68,7 +69,10 @@ void add_card(MeshData& m, vec3 root, vec3 dir, vec3 side, f32 length, f32 width
             vec3 out = p - crown_center;
             out.y *= 0.6f;
             const vec3 n = normalize(card_n * 0.35f + normalize(out) * (0.65f + 0.35f * length / crown_radius));
-            m.vertices.push_back(make_vertex(p, n, {t, k == 0 ? 0.0f : 1.0f}, dir, 1.0f));
+            // Inner parts of the crown (near the trunk, low) receive less sky light.
+            const f32 radial = tefra::length(vec3{p.x, 0.0f, p.z}) / max(crown_radius, 0.1f);
+            const f32 ao = clamp(0.25f + 0.75f * radial, 0.25f, 1.0f);
+            m.vertices.push_back(make_vertex(p, n, {t, k == 0 ? 0.0f : 1.0f}, dir, ao));
         }
     }
     for (u32 i = 0; i < segs; ++i) {
@@ -95,7 +99,7 @@ ConiferMeshes make_conifer(u32 seed, f32 h, f32 r0) {
     u32 whorl = 0;
     while (y < h - 0.4f) {
         const f32 t = (y - crown_start) / (h - crown_start);
-        const u32 n = 5 + (rng.next() % 2);
+        const u32 n = 6 + (rng.next() % 3);
         const f32 len = std::max(0.45f, (h - y) * 0.27f * rng.range(0.8f, 1.15f) * (1.0f - 0.2f * t));
         for (u32 i = 0; i < n; ++i) {
             const f32 a = f32(whorl) * 2.399963f + f32(i) / f32(n) * kTwoPi + rng.range(-0.3f, 0.3f);
@@ -105,8 +109,11 @@ ConiferMeshes make_conifer(u32 seed, f32 h, f32 r0) {
             side = normalize(side * std::cos(tilt) + vec3{0, 1, 0} * std::sin(tilt));
             const vec3 root{dir.x * trunk_radius_at(y, h, r0), y, dir.z * trunk_radius_at(y, h, r0)};
             add_card(out.crown_lod0, root, dir, side, len, len * 0.55f + 0.3f, 0.35f, {0, y, 0}, crown_r);
+            // Second card crossed at ~70 degrees around the branch axis gives volume from every angle.
+            const vec3 side2 = normalize(side * 0.34f + normalize(cross(dir, side)) * 0.94f);
+            add_card(out.crown_lod0, root, dir, side2, len * 0.9f, len * 0.45f + 0.25f, 0.3f, {0, y, 0}, crown_r);
         }
-        y += rng.range(0.42f, 0.62f);
+        y += rng.range(0.32f, 0.48f);
         ++whorl;
     }
     // Leader at the top.
@@ -176,8 +183,8 @@ void make_needle_textures(u32 seed, u32 w, u32 h, std::vector<u8>& albedo, std::
         vec2 a, b;
     };
     std::vector<Twig> twigs = {{{2.0f, cy}, {f32(w) - 4.0f, cy + rng.range(-6.0f, 6.0f)}}};
-    for (int i = 0; i < 9; ++i) {
-        const f32 x = f32(w) * rng.range(0.08f, 0.75f);
+    for (int i = 0; i < 14; ++i) {
+        const f32 x = f32(w) * rng.range(0.06f, 0.78f);
         const f32 side = (i % 2) ? 1.0f : -1.0f;
         const f32 len = f32(w) * 0.28f * (1.0f - x / f32(w) * 0.7f);
         twigs.push_back({{x, cy}, {x + len * 0.8f, cy + side * len * rng.range(0.45f, 0.7f)}});
@@ -188,17 +195,17 @@ void make_needle_textures(u32 seed, u32 w, u32 h, std::vector<u8>& albedo, std::
         const f32 len = std::sqrt(dot(d, d));
         const vec2 dn = d * (1.0f / len);
         const vec2 perp{-dn.y, dn.x};
-        for (f32 s = 2.0f; s < len; s += 1.6f) {
+        for (f32 s = 2.0f; s < len; s += 1.1f) {
             const f32 t = s / len;
             const vec2 p = tw.a + dn * s;
             for (int k = 0; k < 2; ++k) {
                 const f32 sign = k == 0 ? 1.0f : -1.0f;
                 const f32 ang = rng.range(0.6f, 1.1f);
-                const f32 nl = f32(h) * rng.range(0.10f, 0.15f) * (1.0f - 0.45f * t);
+                const f32 nl = f32(h) * rng.range(0.13f, 0.19f) * (1.0f - 0.4f * t);
                 const vec2 nd = dn * std::cos(ang) + perp * (std::sin(ang) * sign);
                 const f32 g = rng.range(0.85f, 1.15f);
-                const vec3 c = vec3{0.11f, 0.20f, 0.09f} * g + vec3{0.02f, 0.03f, 0.0f} * rng.f();
-                plot_line(p, p + nd * nl, 1.6f, c);
+                const vec3 c = vec3{0.045f, 0.085f, 0.035f} * g + vec3{0.01f, 0.015f, 0.0f} * rng.f();
+                plot_line(p, p + nd * nl, 2.0f, c);
             }
         }
     }
@@ -232,7 +239,7 @@ void make_needle_textures(u32 seed, u32 w, u32 h, std::vector<u8>& albedo, std::
         dil = next;
     }
     for (usize i = 0; i < cov.size(); ++i) {
-        const vec3 c = length(dil[i]) > 0.0f ? dil[i] : vec3{0.11f, 0.19f, 0.09f};
+        const vec3 c = length(dil[i]) > 0.0f ? dil[i] : vec3{0.045f, 0.08f, 0.035f};
         albedo[i * 4 + 0] = srgb(c.x);
         albedo[i * 4 + 1] = srgb(c.y);
         albedo[i * 4 + 2] = srgb(c.z);

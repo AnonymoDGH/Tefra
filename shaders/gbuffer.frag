@@ -20,6 +20,7 @@ void main() {
     if (m.emissive_cutoff.w > 0.0 && base.a < m.emissive_cutoff.w) discard;
     vec3 orm = texture(TEX2D(m.orm_tex, SMP_ANISO_REPEAT), v_uv).rgb;
     float ao = mix(1.0, orm.r, m.occlusion_strength);
+    if ((m.flags & 1u) != 0u) ao *= clamp(abs(v_tangent.w), 0.0, 1.0); // foliage: baked crown occlusion
     float rough = clamp(orm.g * m.roughness, 0.02, 1.0);
     float metal = clamp(orm.b * m.metallic, 0.0, 1.0);
     vec3 tn = texture(TEX2D(m.normal_tex, SMP_ANISO_REPEAT), v_uv).xyz * 2.0 - 1.0;
@@ -27,7 +28,7 @@ void main() {
     vec3 N = normalize(v_normal);
     if (!gl_FrontFacing) N = -N;
     vec3 T = normalize(v_tangent.xyz - N * dot(N, v_tangent.xyz));
-    vec3 B = cross(N, T) * v_tangent.w;
+    vec3 B = cross(N, T) * (v_tangent.w < 0.0 ? -1.0 : 1.0);
     N = normalize(T * tn.x + B * tn.y + N * max(tn.z, 1e-3));
     // Geometric specular AA (Tokuyoshi & Kaplanyan 2019).
     vec3 dndx = dFdx(N), dndy = dFdy(N);
