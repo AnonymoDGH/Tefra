@@ -8,6 +8,11 @@ if(TEFRA_WITH_WINDOW)
     target_compile_definitions(tefra_app PUBLIC TEFRA_WITH_WINDOW=1)
 endif()
 
+# MCP (ADR-015): headless demo server, and the stdio <-> HTTP bridge for clients that only speak stdio.
+tefra_add_executable(tefra_mcp_demo SOURCES mcp_demo/main.cpp DEPS tefra_mcp)
+tefra_add_executable(tefra_mcp_bridge SOURCES mcp_bridge/main.cpp DEPS tefra_mcp)
+set_target_properties(tefra_mcp_bridge PROPERTIES OUTPUT_NAME tefra_mcp)
+
 tefra_add_executable(tefra_info SOURCES info/main.cpp DEPS tefra_app)
 tefra_add_executable(tefra_bench SOURCES bench/main.cpp DEPS tefra_app)
 tefra_add_executable(tefra_avatar_demo SOURCES avatar_demo/main.cpp DEPS tefra_app tefra_anim tefra_world)
