@@ -2,9 +2,19 @@
 tefra_add_executable(tefra_unit_tests
     SOURCES unit/main.cpp unit/test_math.cpp unit/test_memory.cpp unit/test_jobs.cpp unit/test_json.cpp
             unit/test_stats.cpp unit/test_image.cpp unit/test_environment.cpp unit/test_foliage.cpp unit/test_palm.cpp unit/test_world.cpp
-    DEPS tefra_renderer tefra_world tefra_doctest)
+            unit/test_mcp.cpp
+    DEPS tefra_renderer tefra_world tefra_mcp tefra_doctest)
 add_test(NAME unit COMMAND tefra_unit_tests)
 set_tests_properties(unit PROPERTIES LABELS "unit")
+
+# MCP end-to-end (ADR-015): starts tefra_mcp_demo, speaks Streamable HTTP to it, then drives the stdio bridge.
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME mcp_demo
+        COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_SOURCE_DIR}/mcp/test_mcp_demo.py
+                $<TARGET_FILE:tefra_mcp_demo> $<TARGET_FILE:tefra_mcp_bridge>)
+    set_tests_properties(mcp_demo PROPERTIES LABELS "mcp")
+endif()
 
 # GPU integration tests (lavapipe in CI). Golden images live in tests/golden.
 tefra_add_executable(tefra_gpu_tests
