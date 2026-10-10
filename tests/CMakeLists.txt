@@ -2,8 +2,8 @@
 tefra_add_executable(tefra_unit_tests
     SOURCES unit/main.cpp unit/test_math.cpp unit/test_memory.cpp unit/test_jobs.cpp unit/test_json.cpp
             unit/test_stats.cpp unit/test_image.cpp unit/test_environment.cpp unit/test_foliage.cpp unit/test_palm.cpp unit/test_world.cpp unit/test_studio.cpp unit/test_projects.cpp unit/test_anim.cpp
-            unit/test_mcp.cpp unit/test_physics.cpp unit/test_scripting.cpp
-    DEPS tefra_renderer tefra_world tefra_studio_core tefra_runtime tefra_anim tefra_mcp tefra_physics tefra_scripting tefra_doctest)
+            unit/test_mcp.cpp unit/test_physics.cpp unit/test_scripting.cpp unit/test_ui.cpp
+    DEPS tefra_renderer tefra_world tefra_studio_core tefra_runtime tefra_anim tefra_mcp tefra_physics tefra_scripting tefra_ui tefra_imgui tefra_doctest)
 add_test(NAME unit COMMAND tefra_unit_tests)
 set_tests_properties(unit PROPERTIES LABELS "unit")
 target_compile_definitions(tefra_unit_tests PRIVATE TEFRA_SCRIPTING_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures")

@@ -100,9 +100,15 @@ void App::play_stop() {
 void App::play_input(vec2 view_min, vec2 view_size) {
     const ImGuiIO& io = ImGui::GetIO();
     ui::input_from_imgui(play_input_, view_min, view_size, viewport_hovered_, !io.WantTextInput);
-    if (runtime_ && game_gui_)
+    if (runtime_ && game_gui_) {
+        game_gui_->set_fonts(font_regular_, font_bold_, font_mono_);
+        game_gui_->enable_textures(*device_);
+        if (game_gui_->wants_keyboard()) play_input_.keyboard = false; // a TextBox is being typed into
+        const runtime::CameraState& cs = runtime_->camera();
+        const ui::GuiCamera gui_cam = ui::make_gui_camera(cs.position, cs.yaw, cs.pitch, cs.fov_y);
         if (world::Instance* gui = runtime_->player_gui())
-            game_gui_->draw(ImGui::GetWindowDrawList(), {view_min, view_size}, *gui, &play_input_, true);
+            game_gui_->draw(ImGui::GetWindowDrawList(), {view_min, view_size}, *gui, &play_input_, true, &gui_cam);
+    }
 }
 
 // ---- MCP ----------------------------------------------------------------------------------------------------------
