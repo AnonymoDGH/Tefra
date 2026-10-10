@@ -91,13 +91,16 @@ class Vegetation {
     u32 visible_capacity_ = 0;
 };
 
-// Procedural assets (clean-room): conifer meshes and the textures for needle cards / distant silhouettes.
+// Procedural assets (clean-room): conifer meshes and the baked needle atlas for their foliage cards.
+// LOD0 crown: drooping limbs of small two-sided cards. LOD1: skirts. Dead lower branches use the dead twig tile.
 struct ConiferMeshes {
     MeshData trunk_lod0, crown_lod0, trunk_lod1, crown_lod1;
     f32 height = 0.0f, crown_radius = 0.0f;
 };
 ConiferMeshes make_conifer(u32 seed, f32 height, f32 trunk_radius);
-// RGBA8 sRGB-encoded albedo + alpha for a branch card (needles), and a matching normal map.
+// Baked needle atlas, width x height = 1024 x 512: 2x2 tiles of 512x256 (tile = row * 2 + column). Tiles 0-2 are
+// living twigs, tile 3 a dead one. Albedo RGBA8 sRGB (alpha = coverage, alpha-test it with a cutoff of ~0.4).
+// Normal RGBA8: tangent-space normal in RGB (engine convention), depth AO in A (material flag 4).
 void make_needle_textures(u32 seed, u32 width, u32 height, std::vector<u8>& albedo, std::vector<u8>& normal);
 
 // Rule-based scatter of the valley forest and undergrowth (deterministic).

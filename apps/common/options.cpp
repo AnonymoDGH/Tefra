@@ -32,6 +32,7 @@ bool parse_common_options(const CommandLine& cl, RunConfig& cfg) {
         if (!cl.get("scene")) cfg.scene = "gltf";
     }
     if (const char* h = cl.get("hdr")) cfg.hdr_path = h;
+    if (const char* c = cl.get("camera")) cfg.camera = c;
     cfg.ev100 = static_cast<f32>(cl.get_float("ev", static_cast<f64>(cfg.ev100)));
     cfg.animate = cl.has("animate");
     cfg.no_taa = cl.has("no-taa");
@@ -55,6 +56,7 @@ void print_common_usage() {
                 "  --gltf FILE --hdr FILE  glTF model and Radiance HDR environment\n"
                 "  --ev EV100              camera exposure\n"
                 "  --tier T                native | low | medium | high (low = 0.75 render scale + TAAU)\n"
+                "  --camera X,Y,Z,YAW,PITCH  override the scene camera (metres, degrees)\n"
                 "  --no-taa                disable temporal anti-aliasing\n");
 }
 

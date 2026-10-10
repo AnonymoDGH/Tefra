@@ -41,6 +41,7 @@ struct RunConfig {
     f32 ev100 = -1.0f;           // < 0: scene default
     std::string tier = "native"; // native | low | medium | high
     bool no_taa = false;
+    std::string camera; // "x,y,z,yaw_deg,pitch_deg": overrides the scene camera (close-up captures)
     render::TestPatternParams params = default_scene_params();
 };
 

@@ -28,7 +28,8 @@ struct MaterialGPU {
     u32 normal_tex = 0;
     u32 orm_tex = 0;
     u32 emissive_tex = 0;
-    u32 flags = 0; // bit0: foliage (translucency), bit1: double-sided
+    u32 flags = 0; // bit0: foliage (translucency, normal blended with the crown normal), bit1: double-sided,
+                   // bit2: normal map alpha holds baked AO (needles)
     f32 translucency = 0.0f;
     u32 pad[2] = {};
 };

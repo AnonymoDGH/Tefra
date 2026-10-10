@@ -23,13 +23,18 @@ void main() {
     if ((m.flags & 1u) != 0u) ao *= clamp(abs(v_tangent.w), 0.0, 1.0); // foliage: baked crown occlusion
     float rough = clamp(orm.g * m.roughness, 0.02, 1.0);
     float metal = clamp(orm.b * m.metallic, 0.0, 1.0);
-    vec3 tn = texture(TEX2D(m.normal_tex, SMP_ANISO_REPEAT), v_uv).xyz * 2.0 - 1.0;
+    vec4 nsamp = texture(TEX2D(m.normal_tex, SMP_ANISO_REPEAT), v_uv);
+    vec3 tn = nsamp.xyz * 2.0 - 1.0;
     tn.xy *= m.normal_scale;
+    if ((m.flags & 4u) != 0u) ao *= nsamp.a; // needles: depth AO baked into the normal map's alpha
     vec3 N = normalize(v_normal);
     if (!gl_FrontFacing) N = -N;
+    const vec3 Ng = N; // crown (spherical) normal
     vec3 T = normalize(v_tangent.xyz - N * dot(N, v_tangent.xyz));
     vec3 B = cross(N, T) * (v_tangent.w < 0.0 ? -1.0 : 1.0);
     N = normalize(T * tn.x + B * tn.y + N * max(tn.z, 1e-3));
+    // Foliage: keep part of the crown normal so clusters of cards still shade as volumes, not as flat leaves.
+    if ((m.flags & 1u) != 0u) N = normalize(mix(N, Ng, 0.35));
     // Geometric specular AA (Tokuyoshi & Kaplanyan 2019).
     vec3 dndx = dFdx(N), dndy = dFdy(N);
     float variance = 0.25 * (dot(dndx, dndx) + dot(dndy, dndy));

@@ -1,6 +1,8 @@
 #include "runner.h"
 #include "scenes.h"
 
+#include <cstdio>
+
 #include "tefra/core/fs.h"
 #include "tefra/core/json.h"
 #include "tefra/core/log.h"
@@ -209,6 +211,17 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             setup.settings.shadow_distance = max(setup.settings.shadow_distance, 300.0f);
         }
         if (cfg.no_taa) setup.settings.taa = false;
+        if (!cfg.camera.empty()) {
+            double x = 0, y = 0, z = 0;
+            float yaw = 0, pitch = 0;
+            if (std::sscanf(cfg.camera.c_str(), "%lf,%lf,%lf,%f,%f", &x, &y, &z, &yaw, &pitch) == 5) {
+                setup.camera.position = {x, y, z};
+                setup.camera.yaw = radians(yaw);
+                setup.camera.pitch = radians(pitch);
+            } else {
+                TEFRA_LOG_ERROR("invalid --camera '%s' (X,Y,Z,YAW,PITCH)", cfg.camera.c_str());
+            }
+        }
         renderer = std::make_unique<render::Renderer>(*device, *heap, kFramesInFlight);
         params.camera = setup.camera;
     }
