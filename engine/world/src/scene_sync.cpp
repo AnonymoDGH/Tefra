@@ -51,7 +51,17 @@ bool is_visible_part(const Instance& i, const Instance* workspace) {
 }
 } // namespace
 
-SceneSync::SceneSync(render::Scene& scene, DataModel& model) : scene_(scene), model_(model) {
+SceneSync::SceneSync(render::Scene& scene, DataModel& model) : scene_(scene), model_(&model) { attach_listener(); }
+
+void SceneSync::set_model(DataModel& model) {
+    model_->remove_listener(listener_);
+    model_ = &model;
+    attach_listener();
+    structure_dirty_ = true;
+    dirty_parts_.clear();
+}
+
+void SceneSync::attach_listener() {
     WorldListener l;
     l.added = [this](Instance& i) {
         if (i.is_a("BasePart")) structure_dirty_ = true;
@@ -74,10 +84,10 @@ SceneSync::SceneSync(render::Scene& scene, DataModel& model) : scene_(scene), mo
             structure_dirty_ = true;
         }
     };
-    listener_ = model_.add_listener(std::move(l));
+    listener_ = model_->add_listener(std::move(l));
 }
 
-SceneSync::~SceneSync() { model_.remove_listener(listener_); }
+SceneSync::~SceneSync() { model_->remove_listener(listener_); }
 
 u32 SceneSync::material_for(const Instance& part) {
     const vec3 c = part.get_vec3("Color", {0.64f, 0.64f, 0.64f});
@@ -137,7 +147,7 @@ void SceneSync::rebuild() {
     out.clear();
     parts_.clear();
     part_index_.clear();
-    const Instance* ws = model_.workspace();
+    const Instance* ws = model_->workspace();
     if (!ws) return;
     for (Instance* i : ws->descendants()) {
         if (!is_visible_part(*i, ws)) continue;

@@ -9,6 +9,8 @@ Todas permisivas y compatibles con Apache-2.0. Cada una conserva su licencia en 
 | Vulkan Memory Allocator | 3.4.0 | MIT | `third_party/vma` | Suballocation de memoria GPU |
 | GLFW | 3.5.1 | zlib | `third_party/glfw` | Ventana, entrada, gamepad |
 | doctest | 2.5.3 | MIT | `third_party/doctest` | Tests |
+| Dear ImGui (docking) | commit 778992f | MIT | `third_party/imgui` | Interfaz de Tefra Studio (backends GLFW + Vulkan vía volk) |
+| ImGuizmo | commit 105e4fd | MIT | `third_party/imguizmo` | Gizmos de mover/rotar/escalar en Studio |
 | stb_image / stb_image_write | commit 2c980bb (2026-08-01) | MIT o dominio público | `third_party/stb` | PNG (captura, golden images) |
 
 Herramientas de build (no se redistribuyen): glslang (BSD-3 / Apache-2.0), CMake, Ninja.

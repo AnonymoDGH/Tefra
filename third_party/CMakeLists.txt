@@ -58,7 +58,7 @@ if(TEFRA_WITH_WINDOW)
         imgui/backends/imgui_impl_glfw.cpp imgui/backends/imgui_impl_vulkan.cpp)
     target_include_directories(tefra_imgui SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/imgui
                                                          ${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends)
-    target_compile_definitions(tefra_imgui PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK)
+    target_compile_definitions(tefra_imgui PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK GLFW_INCLUDE_NONE)
     target_link_libraries(tefra_imgui PUBLIC tefra_volk glfw)
 
     # --- ImGuizmo (MIT): transform gizmos for Dear ImGui.

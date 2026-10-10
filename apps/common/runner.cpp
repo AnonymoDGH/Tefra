@@ -376,7 +376,7 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             to_present.new_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             to_present.src_stage = last_stage;
             to_present.src_access = last_access;
-            to_present.dst_stage = VK_PIPELINE_STAGE_2_NONE;
+            to_present.dst_stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; // before the present semaphore signal
             to_present.dst_access = VK_ACCESS_2_NONE;
             rhi::cmd_image_barrier(cmd, to_present);
             frames.end(swapchain->acquire_semaphore(fc.slot), VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,

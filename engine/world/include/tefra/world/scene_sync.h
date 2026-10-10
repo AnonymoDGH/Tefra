@@ -30,6 +30,11 @@ class SceneSync {
     SceneSync(const SceneSync&) = delete;
     SceneSync& operator=(const SceneSync&) = delete;
 
+    // Switches to another DataModel (e.g. the editor restored the place after play mode). Meshes and materials
+    // already in the render scene are reused.
+    void set_model(DataModel& model);
+    DataModel& model() const { return *model_; }
+
     // Applies pending changes (call once per frame before rendering). Returns true if the render scene changed.
     bool update();
     void mark_all_dirty() { structure_dirty_ = true; }
@@ -44,13 +49,14 @@ class SceneSync {
         Instance* inst;
         u32 render_index;
     };
+    void attach_listener();
     u32 material_for(const Instance& part);
     u32 mesh_for(const Instance& part);
     void rebuild();
     void write_transform(const Instance& part, u32 render_index);
 
     render::Scene& scene_;
-    DataModel& model_;
+    DataModel* model_;
     usize listener_ = 0;
     bool structure_dirty_ = true;
     bool materials_dirty_ = false;
