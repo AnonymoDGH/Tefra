@@ -179,6 +179,8 @@ ConiferMeshes make_conifer(u32 seed, f32 h, f32 r0) {
     const f32 crown_start = h * rng.range(0.28f, 0.40f);
     const f32 crown_r = h * 0.17f;
     out.crown_radius = crown_r;
+    out.crown_base = crown_start;
+    out.canopy_radius = 0.27f * (h - crown_start); // lowest whorl length, see the crown loop below
 
     const TrunkStyle st = make_trunk_style(seed, h);
     add_trunk(out.trunk_lod0, st, h, r0, 20, 0.9f, h * 0.97f, true);
@@ -360,6 +362,16 @@ u32 Vegetation::add_prototype(const VegetationPrototype& p) {
 
 void Vegetation::add_instance(u32 prototype, vec3 pos, f32 yaw, f32 scale, f32 random) {
     cpu_.push_back({vec4(pos, scale), {std::sin(yaw), std::cos(yaw), static_cast<f32>(prototype), random}});
+}
+
+void Vegetation::collect_canopy(vec2 c, f32 half, std::vector<CanopyInstance>& out) const {
+    for (const VegInstanceGPU& i : cpu_) {
+        const VegetationPrototype& p = protos_cpu_[static_cast<u32>(i.rot_proto.z)];
+        if (p.canopy_radius <= 0.0f) continue;
+        const f32 s = i.pos_scale.w, r = p.canopy_radius * s;
+        if (std::fabs(i.pos_scale.x - c.x) > half + r || std::fabs(i.pos_scale.z - c.y) > half + r) continue;
+        out.push_back({i.pos_scale.x, i.pos_scale.z, i.pos_scale.y + p.canopy_top * s, r, p.canopy_density});
+    }
 }
 
 void Vegetation::upload() {

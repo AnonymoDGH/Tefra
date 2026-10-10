@@ -222,6 +222,7 @@ void build_valley_scene(render::Scene& scene, render::Environment& env, const re
     setup.settings.cascades = 3;
     setup.settings.shadow_distance = 200.0f;
     setup.settings.ev100 = 11.3f; // calibration vs CC0 forest photos: +1.2 EV (docs/research/calibration)
+    setup.settings.canopy_occlusion = true;
     build_atmosphere_environment(atmo, env, setup.settings.sun_direction);
 
     // ---- Materials --------------------------------------------------------------------------------
@@ -280,6 +281,9 @@ void build_valley_scene(render::Scene& scene, render::Environment& env, const re
         p.center_y = cm.height * 0.5f;
         p.wind = 0.35f;
         p.shadow_distance = 160.0f;
+        p.canopy_radius = cm.canopy_radius;
+        p.canopy_top = cm.height * 0.98f;
+        p.canopy_density = 1.4f;
         tree_protos[v] = veg.add_prototype(p);
     }
 

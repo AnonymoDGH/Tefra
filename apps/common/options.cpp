@@ -59,6 +59,7 @@ bool parse_common_options(const CommandLine& cl, RunConfig& cfg) {
     cfg.no_bloom = cl.has("no-bloom");
     cfg.auto_exposure = cl.has("auto-exposure");
     cfg.no_film = cl.has("no-film");
+    cfg.no_canopy = cl.has("no-canopy");
     if (cfg.width == 0 || cfg.height == 0 || cfg.width > 8192 || cfg.height > 8192) {
         TEFRA_LOG_ERROR("invalid resolution %ux%u", cfg.width, cfg.height);
         return false;
@@ -87,7 +88,8 @@ void print_common_usage() {
                 "  --camera x,y,z,yaw,pitch  override the scene camera (degrees for yaw/pitch)\n"
                 "  --no-bloom              disable bloom\n"
                 "  --auto-exposure         enable auto exposure (EV compensation clamped to +-2 EV)\n"
-                "  --no-film               disable vignette, chromatic aberration and grain\n");
+                "  --no-film               disable vignette, chromatic aberration and grain\n"
+                "  --no-canopy             disable the canopy occlusion map (sky visibility under trees)\n");
 }
 
 } // namespace tefra::app

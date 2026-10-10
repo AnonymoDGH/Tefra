@@ -8,6 +8,7 @@
 #include "tefra/rhi/pipeline.h"
 #include "tefra/rhi/resources.h"
 
+#include <memory>
 #include <vector>
 
 namespace tefra::rhi {
@@ -24,6 +25,7 @@ class Atmosphere;
 class Terrain;
 class Vegetation;
 class Water;
+class CanopyMap;
 
 // Everything the renderer draws in a frame (optional parts may be null).
 struct RenderWorld {
@@ -66,6 +68,9 @@ struct RenderSettings {
     bool auto_exposure = false;
     // Lens and film: cos^4 vignette, lateral chromatic aberration (<= 1 px at the corners), luminance-dependent grain.
     bool film_effects = true;
+    // Sky visibility under the vegetation canopy (canopy.h): ambient light is cut where canopy lies above.
+    bool canopy_occlusion = false;
+    f32 canopy_strength = 0.85f; // fraction of the ambient light removed under a full canopy
 };
 
 struct OutputTarget {
@@ -119,6 +124,7 @@ class Renderer {
     VkPipeline p_veg_ = VK_NULL_HANDLE, p_veg_2s_ = VK_NULL_HANDLE, p_veg_shadow_ = VK_NULL_HANDLE,
                p_veg_cull_ = VK_NULL_HANDLE, p_water_ = VK_NULL_HANDLE;
     rhi::Buffer veg_cmd_template_;
+    std::unique_ptr<CanopyMap> canopy_;
     // TAA history (ping-pong), persistent across frames.
     rhi::Image history_[2];
     u32 history_bindless_[2] = {~0u, ~0u};

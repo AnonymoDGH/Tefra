@@ -47,6 +47,24 @@ vec3 apply_fog_volumetric(Frame f, vec3 color, vec3 dir, float dist, vec4 vol) {
     return color * f.exposure.x * T + vol.rgb + L * max(vol.a - T, 0.0);
 }
 
+// Canopy occlusion (canopy.h). G channel encodes the canopy top height: h = base + g * range (must match C++).
+const float kCanopyYBase = -100.0;
+const float kCanopyYRange = 800.0;
+// Fraction of the ambient light that reaches p (p is camera-relative). Cover above p's height, from the map.
+float canopy_visibility(Frame f, vec3 p) {
+    if (f.canopy_map == 0xFFFFFFFFu) return 1.0;
+    vec3 wp = p + f.camera_pos.xyz;
+    vec2 uv = (wp.xz - f.canopy.xy) / f.canopy.z;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return 1.0;
+    // The map fades out over its outer 10 % so the window edge is never visible.
+    float fade = (1.0 - smoothstep(0.9, 1.0, max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0));
+    vec2 g = textureLod(TEX2D(f.canopy_map, SMP_LINEAR_CLAMP), uv, 0.0).rg;
+    float top = g.g * kCanopyYRange + kCanopyYBase;
+    // Crowns cover everything below their top; the top 10 m of a crown thins out to nothing.
+    float above = smoothstep(0.0, 10.0, top - wp.y);
+    return 1.0 - f.canopy.w * fade * g.r * above;
+}
+
 vec3 sky_color(Frame f, vec3 dir) {
     if (f.atmo.skyview_lut == 0xFFFFFFFFu)
         return textureLod(TEX2D(f.env_background, SMP_LINEAR_REPEAT), equirect_uv(dir), 0.0).rgb * f.exposure.y;
@@ -140,7 +158,8 @@ void main() {
     vec3 irradiance = sh9_eval(f, N);
     vec3 kd = diff_col * (1.0 - fss - fms * ems);
     float spec_occ = clamp(pow(ndv + ao, exp2(-16.0 * a - 1.0)) - 1.0 + ao, 0.0, 1.0);
-    color += (prefiltered * fss * spec_occ + (fms * ems + kd) * irradiance / BRDF_PI * ao) * f.exposure.y;
+    float canopy = canopy_visibility(f, p);
+    color += (prefiltered * fss * spec_occ + (fms * ems + kd) * irradiance / BRDF_PI * ao) * f.exposure.y * canopy;
     if (use_vol) {
         const vec4 vol = volumetric_upsample(f, depth, v_uv);
         o_color = vec4(min(apply_fog_volumetric(f, color, -V, length(p), vol), vec3(60000.0)), 1.0);

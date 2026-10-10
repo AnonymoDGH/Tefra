@@ -53,6 +53,7 @@ struct RunConfig {
     bool no_bloom = false;
     bool auto_exposure = false; // on for this run (scene default is off)
     bool no_film = false;
+    bool no_canopy = false; // disable the canopy occlusion map (--no-canopy)
     render::TestPatternParams params = default_scene_params();
 };
 

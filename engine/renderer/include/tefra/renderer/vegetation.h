@@ -33,6 +33,10 @@ struct VegetationPrototype {
     f32 wind = 0.0f; // bending strength (0 = rigid)
     bool cast_shadows = true;
     f32 shadow_distance = 150.0f;
+    // Canopy for the sky-visibility map (canopy.h). canopy_radius = 0: no canopy.
+    f32 canopy_radius = 0.0f;  // m at scale 1: footprint of the crown seen from above
+    f32 canopy_top = 0.0f;     // m above the instance origin at scale 1
+    f32 canopy_density = 0.0f; // optical depth through the footprint (1.4 ~ 75 % cover)
 };
 
 struct VegInstanceGPU {
@@ -81,6 +85,13 @@ class Vegetation {
     const std::vector<DrawGPU>& draws() const { return draws_; }
     u32 visible_capacity() const { return visible_capacity_; }
 
+    // Canopy footprints (world xz, top height in m, radius, density) of instances whose prototype has a canopy and
+    // whose footprint overlaps the square of half-size `half` around `center_xz`. CPU side; used by CanopyMap.
+    struct CanopyInstance {
+        f32 x, z, top_y, radius, density;
+    };
+    void collect_canopy(vec2 center_xz, f32 half, std::vector<CanopyInstance>& out) const;
+
   private:
     const rhi::Device& dev_;
     const Scene& scene_;
@@ -95,6 +106,8 @@ class Vegetation {
 struct ConiferMeshes {
     MeshData trunk_lod0, crown_lod0, trunk_lod1, crown_lod1;
     f32 height = 0.0f, crown_radius = 0.0f;
+    f32 crown_base = 0.0f;    // m: height of the lowest whorl
+    f32 canopy_radius = 0.0f; // m: footprint radius of the lowest whorl (the widest part seen from above)
 };
 ConiferMeshes make_conifer(u32 seed, f32 height, f32 trunk_radius);
 // RGBA8 sRGB-encoded albedo + alpha for a branch card (needles), and a matching normal map.

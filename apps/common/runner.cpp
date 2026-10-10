@@ -221,6 +221,7 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
         if (cfg.no_bloom) setup.settings.bloom = false;
         if (cfg.auto_exposure) setup.settings.auto_exposure = true;
         if (cfg.no_film) setup.settings.film_effects = false;
+        if (cfg.no_canopy) setup.settings.canopy_occlusion = false;
         renderer = std::make_unique<render::Renderer>(*device, *heap, kFramesInFlight);
         params.camera = setup.camera;
     }

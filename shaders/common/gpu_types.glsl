@@ -22,10 +22,11 @@ struct Frame {
     vec4 sun_dir; vec4 sun_color; vec4 camera_pos; vec4 exposure; vec4 viewport;
     vec4 sh[9];
     uint env_cube; uint env_mips; uint brdf_lut; uint shadow_atlas;
-    uint env_background; uint pad0_; uint pad1_; uint pad2_;
+    uint env_background; uint canopy_map; uint pad1_; uint pad2_; // canopy_map: bindless 2D, ~0u = none
     mat4 prev_view_proj; // previous frame, expressed in the current camera-relative space
     vec4 jitter;         // xy current jitter (NDC), zw previous
     vec4 fog; // x density (1/m) at reference height, y height falloff (1/m), z reference height (m), w anisotropy
+    vec4 canopy; // canopy occlusion: xy world xz of the map's min corner (m), z size (m), w strength
     Atmosphere atmo;
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VertexBuffer { Vertex v[]; };
