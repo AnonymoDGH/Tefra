@@ -103,3 +103,22 @@ EV = log2(mediana(Y ref) / mediana(Y render)). Positivo = el render está más o
 | m2-valley-v5-low-taau | +1.52 | +1.53 | +1.46 | 61.6 | 64.2 |
 | m2-atmosphere-fog | +0.03 | +0.07 | +0.08 | 92.6 | 94.3 |
 | *referencia (mediana)* | 0 | 0 | 0 | 94.4 | 96.4 |
+
+## I. Subconjuntos de referencia (medianas por subconjunto) frente a renders v4 y v5
+
+| Métrica | pinar (misty_pines, phalzer) | arbolado en luz matinal (je_gray, spruit, misty_dawn) | bruma sin arbolado (kloofendal x2) | v4-taa | v5-low-taau |
+|---|---|---|---|---|---|
+| L* P50 | 59.3 | 55.7 | 77.9 | 39.2 | 39.2 |
+| L* P95 | 95.1 | 94.4 | 94.0 | 61.3 | 61.6 |
+| L* P99 | 98.5 | 96.4 | 95.2 | 64.1 | 64.2 |
+| DR P1-P99 (stops) | 5.78 | 5.54 | 4.20 | 3.49 | 3.43 |
+| contraste local mediana | 10.85 | 5.89 | 0.57 | 2.66 | 2.57 |
+| C* global | 12.8 | 12.4 | 4.5 | 5.3 | 5.4 |
+| b* sombras | 10.82 | 6.70 | 7.73 | 4.21 | 4.28 |
+| b* medios | 14.94 | 6.87 | 6.92 | 2.44 | 2.54 |
+| fracción textura muy baja | 0.046 | 0.277 | 0.545 | 0.335 | 0.379 |
+| pendiente espectral 4-256 | -2.27 | -2.25 | -2.38 | -2.73 | -2.88 |
+| detalle 32-256 (suma) | 0.2411 | 0.0394 | 0.0013 | 0.0716 | 0.0679 |
+| alta frec. 256-512 | 0.03385 | 0.00557 | 0.00034 | 0.00279 | 0.00146 |
+
+Pendiente espectral (en todos los renders y referencias): ref mediana -2.30, renders m2-valley-v1=-2.46, m2-valley-v2=-2.59, m2-valley-v3-water=-2.55, m2-valley-v4-taa=-2.73, m2-valley-v5-low-taau=-2.88, m2-atmosphere-fog=-2.95.

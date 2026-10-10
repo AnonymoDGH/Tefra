@@ -94,6 +94,33 @@ rl95 = np.median([v["L_p95"] for v in refs.values()])
 rl99 = np.median([v["L_p99"] for v in refs.values()])
 lines.append(f"| *referencia (mediana)* | 0 | 0 | 0 | {rl95:.1f} | {rl99:.1f} |")
 
+# I. Subconjuntos de referencia (la mezcla completa mezcla bruma muy brillante con pinar)
+SUB = {
+    "pinar (misty_pines, phalzer)": lambda n: n.startswith(("ref_misty_pines", "ref_phalzer")),
+    "arbolado en luz matinal (je_gray, spruit, misty_dawn)": lambda n: n.startswith(("ref_je_gray", "ref_spruit", "ref_misty_dawn")),
+    "bruma sin arbolado (kloofendal x2)": lambda n: n.startswith("ref_kloofendal"),
+}
+KEYS = [("L* P50", "L_p50", "{:.1f}"), ("L* P95", "L_p95", "{:.1f}"), ("L* P99", "L_p99", "{:.1f}"),
+        ("DR P1-P99 (stops)", "DR_stops_p01_p99", "{:.2f}"), ("contraste local mediana", "lc_std_median", "{:.2f}"),
+        ("C* global", "global_C", "{:.1f}"), ("b* sombras", "sh_b", "{:.2f}"), ("b* medios", "mid_b", "{:.2f}"),
+        ("fracción textura muy baja", "haze_frac_lowtex", "{:.3f}"), ("pendiente espectral 4-256", "spec_slope_4_256", "{:.2f}"),
+        ("detalle 32-256 (suma)", "detail_32_256", "{:.4f}"), ("alta frec. 256-512", "detail_256_512", "{:.5f}")]
+lines.append("\n## I. Subconjuntos de referencia (medianas por subconjunto) frente a renders v4 y v5\n")
+hdr = "| Métrica | " + " | ".join(SUB) + " | v4-taa | v5-low-taau |"
+lines.append(hdr)
+lines.append("|" + "---|" * (len(SUB) + 3))
+subs_vals = {k: [v for n, v in refs.items() if f(n)] for k, f in SUB.items()}
+for lab, key, fmt in KEYS:
+    cells = []
+    for k in SUB:
+        vals = np.array([v[key] for v in subs_vals[k]], dtype=float)
+        cells.append(fmt.format(np.nanmedian(vals)))
+    cells += [fmt.format(rends["m2-valley-v4-taa"][key]), fmt.format(rends["m2-valley-v5-low-taau"][key])]
+    lines.append(f"| {lab} | " + " | ".join(cells) + " |")
+lines.append("\nPendiente espectral (en todos los renders y referencias): ref mediana %.2f, renders %s." % (
+    np.nanmedian([v["spec_slope_4_256"] for v in refs.values()]),
+    ", ".join(f"{n}={rends[n]['spec_slope_4_256']:.2f}" for n in rnames)))
+
 out = "\n".join(lines) + "\n"
 open(os.path.join(HERE, "tables.md"), "w").write(out)
 print(out)
