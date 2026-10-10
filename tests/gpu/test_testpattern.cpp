@@ -93,6 +93,8 @@ TEST_CASE("strict baseline clamps limits to the reference hardware") {
 TEST_CASE("materials: deferred PBR + IBL + cascades, matches golden, zero validation errors") {
     app::RunConfig cfg = base_config();
     cfg.scene = "materials";
+    cfg.no_bloom = true; // the golden covers the PBR path; camera post has its own test below
+    cfg.no_film = true;
     cfg.capture_to_memory = true;
     const app::RunResult r = app::run(cfg);
     REQUIRE_MESSAGE(r.ok, r.error);
@@ -108,6 +110,19 @@ TEST_CASE("valley: terrain + atmosphere + GPU-driven vegetation + water render w
     cfg.width = 320;
     cfg.height = 180;
     cfg.frames = 3; // > frames in flight: exercises cross-frame hazards on cached transients
+    const app::RunResult r = app::run(cfg);
+    REQUIRE_MESSAGE(r.ok, r.error);
+    CHECK(r.validation_errors == 0);
+    CHECK(r.frames_rendered == 3);
+}
+
+TEST_CASE("valley: bloom, auto exposure and film effects run with zero validation errors") {
+    app::RunConfig cfg = base_config();
+    cfg.scene = "valley";
+    cfg.width = 320;
+    cfg.height = 180;
+    cfg.frames = 3; // > frames in flight: the exposure state is read back by the slot that wrote it
+    cfg.auto_exposure = true;
     const app::RunResult r = app::run(cfg);
     REQUIRE_MESSAGE(r.ok, r.error);
     CHECK(r.validation_errors == 0);

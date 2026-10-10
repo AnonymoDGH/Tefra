@@ -56,6 +56,9 @@ bool parse_common_options(const CommandLine& cl, RunConfig& cfg) {
         cfg.has_camera_yaw = true;
         cfg.camera_yaw_deg = static_cast<f32>(cl.get_float("yaw", 0.0));
     }
+    cfg.no_bloom = cl.has("no-bloom");
+    cfg.auto_exposure = cl.has("auto-exposure");
+    cfg.no_film = cl.has("no-film");
     if (cfg.width == 0 || cfg.height == 0 || cfg.width > 8192 || cfg.height > 8192) {
         TEFRA_LOG_ERROR("invalid resolution %ux%u", cfg.width, cfg.height);
         return false;
@@ -81,7 +84,10 @@ void print_common_usage() {
                 "  --pitch DEG             camera pitch (degrees, negative looks down) for scenes\n"
                 "  --yaw DEG               camera yaw (degrees) for scenes\n"
                 "  --no-volumetric         disable volumetric fog (keeps the analytic height fog)\n"
-                "  --camera x,y,z,yaw,pitch  override the scene camera (degrees for yaw/pitch)\n");
+                "  --camera x,y,z,yaw,pitch  override the scene camera (degrees for yaw/pitch)\n"
+                "  --no-bloom              disable bloom\n"
+                "  --auto-exposure         enable auto exposure (EV compensation clamped to +-2 EV)\n"
+                "  --no-film               disable vignette, chromatic aberration and grain\n");
 }
 
 } // namespace tefra::app

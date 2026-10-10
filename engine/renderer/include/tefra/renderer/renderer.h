@@ -58,6 +58,14 @@ struct RenderSettings {
     // tiling and low-frequency macro variation. Off = the M2 look (luminance-height blend, two-scale tiling).
     bool terrain_detail = true;
     f32 render_scale = 1.0f; // internal resolution / output resolution (TAAU when < 1; requires taa)
+    // Camera post (before the tonemap). Bloom: energy-preserving 6-level dual filter, mixed in at bloom_intensity.
+    bool bloom = true;
+    f32 bloom_intensity = 0.04f;
+    // Auto exposure: log-average luminance of the resolved HDR drives an EV compensation (clamped to +-2 EV),
+    // adapted over time and applied as a multiplier in the tonemap.
+    bool auto_exposure = false;
+    // Lens and film: cos^4 vignette, lateral chromatic aberration (<= 1 px at the corners), luminance-dependent grain.
+    bool film_effects = true;
 };
 
 struct OutputTarget {
@@ -93,6 +101,7 @@ class Renderer {
         rhi::Buffer terrain; // TerrainGPU at 0, patches at kTerrainPatchOffset
         u32 terrain_capacity = 0;
         rhi::Buffer veg_visible, veg_shadow_visible, veg_cmds, veg_shadow_cmds;
+        rhi::Buffer exposure; // ExposureState (auto exposure); per slot so it is fenced like the other buffers
         u32 veg_capacity = 0;
     };
     void create_pipelines(VkFormat output_format);
@@ -120,7 +129,10 @@ class Renderer {
     mat4 prev_view_proj_{};
     dvec3 prev_camera_{};
     bool has_prev_ = false;
-    VkPipeline p_taa_ = VK_NULL_HANDLE, p_gtao_ = VK_NULL_HANDLE, p_volumetric_ = VK_NULL_HANDLE;
+    VkPipeline p_taa_ = VK_NULL_HANDLE, p_gtao_ = VK_NULL_HANDLE;
+    VkPipeline p_bloom_down_ = VK_NULL_HANDLE, p_bloom_up_ = VK_NULL_HANDLE;
+    VkPipeline p_expo_first_ = VK_NULL_HANDLE, p_expo_reduce_ = VK_NULL_HANDLE, p_expo_adapt_ = VK_NULL_HANDLE;
+    VkPipeline p_volumetric_ = VK_NULL_HANDLE;
     rg::TextureHandle taa_handles_[2];
     const Vegetation* veg_template_owner_ = nullptr;
     VkFormat output_format_ = VK_FORMAT_UNDEFINED;

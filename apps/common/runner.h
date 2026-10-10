@@ -50,6 +50,9 @@ struct RunConfig {
     bool no_volumetric = false;  // disable volumetric fog (analytic height fog only)
     bool has_camera_yaw = false; // --yaw DEG overrides the scene camera
     f32 camera_yaw_deg = 0.0f;
+    bool no_bloom = false;
+    bool auto_exposure = false; // on for this run (scene default is off)
+    bool no_film = false;
     render::TestPatternParams params = default_scene_params();
 };
 

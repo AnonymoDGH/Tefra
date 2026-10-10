@@ -218,6 +218,9 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
         }
         if (cfg.no_volumetric) setup.settings.volumetric_fog = false;
         if (cfg.has_camera_yaw) setup.camera.yaw = radians(cfg.camera_yaw_deg);
+        if (cfg.no_bloom) setup.settings.bloom = false;
+        if (cfg.auto_exposure) setup.settings.auto_exposure = true;
+        if (cfg.no_film) setup.settings.film_effects = false;
         renderer = std::make_unique<render::Renderer>(*device, *heap, kFramesInFlight);
         params.camera = setup.camera;
     }
