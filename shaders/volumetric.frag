@@ -46,7 +46,7 @@ void main() {
         float vis = 0.0;
         if (sun_on) {
             const float view_depth = -(f.view * vec4(x, 1.0)).z;
-            vis = sun_shadow(f, x, vec3(0.0), view_depth, false);
+            vis = sun_shadow_tap(f, x, view_depth);
         }
         // Integral of sigma(s) * T(s) over the step equals T(start) - T(end) (exact for exponential density).
         inscatter += (amb + sun * (hg * vis)) * (t_prev - t_next);

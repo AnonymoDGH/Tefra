@@ -56,6 +56,9 @@ struct RunConfig {
     bool no_canopy = false; // disable the canopy occlusion map (--no-canopy)
     bool no_grass = false;
     bool grass_stats = false; // count the grass blades drawn (reported as grass_blades)
+    bool no_pcss = false;
+    bool no_contact_shadows = false;
+    bool debug_sun_shadow = false;
     render::TestPatternParams params = default_scene_params();
 };
 

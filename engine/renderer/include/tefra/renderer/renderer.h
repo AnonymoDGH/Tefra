@@ -38,9 +38,14 @@ struct RenderWorld {
 };
 
 struct RenderSettings {
-    u32 shadow_resolution = 1024; // per cascade
-    u32 cascades = 2;             // 1..4
-    f32 shadow_distance = 80.0f;  // m
+    u32 shadow_resolution = 1024;  // per cascade
+    u32 cascades = 2;              // 1..4
+    f32 shadow_distance = 80.0f;   // m
+    bool pcss_shadows = true;      // penumbra from blocker distance (sun 0.53 deg); false = fixed PCF
+    bool contact_shadows = true;   // short screen-space march towards the sun (grass, stones, trunk flares)
+    f32 penumbra_scale = 1.0f;     // artistic multiplier on the physical penumbra
+    f32 contact_length = 0.75f;    // m
+    bool debug_sun_shadow = false; // diagnostic: output the sun visibility term only
     f32 ev100 = 14.0f;
     vec3 sun_direction = normalize(vec3{0.35f, 0.17f, -0.92f}); // towards the sun
     vec3 sun_color{1.0f, 0.86f, 0.70f};                         // normalized to luminance 1 internally

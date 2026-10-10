@@ -66,11 +66,13 @@ struct FrameConstants {
     u32 shadow_atlas = 0;        // bindless 2D index
     u32 env_background = 0;      // bindless 2D index: full-resolution equirect for the visible sky
     u32 canopy_map = kNoTexture; // bindless 2D index of the canopy occlusion map (canopy.h)
-    u32 pad_[2] = {};
+    u32 shadow_flags = 0;        // bit0: PCSS penumbra, bit1: screen-space contact shadows, bit2: debug sun vis
+    u32 pad_ = 0;
     mat4 prev_view_proj; // previous frame, in the current camera-relative space
     vec4 jitter;         // xy current jitter (NDC), zw previous
     vec4 fog;            // x density (1/m) at reference height, y height falloff (1/m), z reference height, w g
     vec4 canopy;         // xy world xz of the canopy map's min corner, z size (m), w strength
+    vec4 shadow_soft;    // x penumbra scale, y contact shadow length (m)
     AtmosphereGPU atmo;
 };
 static_assert(sizeof(FrameConstants) % 16 == 0);

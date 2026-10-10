@@ -65,6 +65,31 @@ float canopy_visibility(Frame f, vec3 p) {
     return 1.0 - f.canopy.w * fade * g.r * above;
 }
 
+// Screen-space contact shadow: march from the surface towards the sun through the depth buffer. Catches thin
+// occluders below the shadow-map texel size (grass, stones, the trunk flare). Reverse-Z infinite projection:
+// view distance = proj[3][2] / depth. 1 = lit.
+float contact_shadow(Frame f, vec3 p, vec3 n, vec3 L, uint depth_idx, float noise) {
+    if ((f.shadow_flags & 2u) == 0u) return 1.0;
+    const int steps = 10;
+    const float thickness = 0.15; // m: a sample this far behind the visible surface counts as occluded
+    const float near_plane = f.proj[3][2];
+    const vec2 size = vec2(textureSize(TEX2D(depth_idx, SMP_NEAREST_CLAMP), 0));
+    vec3 o = p + n * (0.01 + 0.002 * length(p));
+    float occ = 0.0;
+    for (int i = 0; i < steps; ++i) {
+        float t = (float(i) + noise) / float(steps) * f.shadow_soft.y;
+        vec4 c = f.view_proj * vec4(o + L * t, 1.0);
+        if (c.w <= 0.0) break;
+        vec2 suv = c.xy / c.w * 0.5 + 0.5;
+        if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) break;
+        float sd = texelFetch(TEX2D(depth_idx, SMP_NEAREST_CLAMP), ivec2(suv * size), 0).r;
+        if (sd <= 0.0) continue; // sky
+        float gap = c.w - near_plane / sd; // > 0: the sample is behind the visible surface
+        if (gap > 0.01 + 0.002 * c.w && gap < thickness) occ += 1.0;
+    }
+    return 1.0 - 0.9 * clamp(occ / 3.0, 0.0, 1.0);
+}
+
 vec3 sky_color(Frame f, vec3 dir) {
     if (f.atmo.skyview_lut == 0xFFFFFFFFu)
         return textureLod(TEX2D(f.env_background, SMP_LINEAR_REPEAT), equirect_uv(dir), 0.0).rgb * f.exposure.y;
@@ -127,9 +152,15 @@ void main() {
     vec3 L = f.sun_dir.xyz;
     float ndl = dot(N, L);
     vec3 color = vec3(0.0);
+    float noise = frame_noise(gl_FragCoord.xy, f.exposure.w);
+    if ((f.shadow_flags & 4u) != 0u) { // diagnostic: sun visibility for every pixel (not only N.L > 0)
+        float vd = -(f.view * vec4(p, 1.0)).z;
+        o_color = vec4(vec3(sun_shadow(f, p, N, vd, noise) * contact_shadow(f, p, N, L, pc.depth, noise)), 1.0);
+        return;
+    }
     if (ndl > 0.0) {
         float view_depth = -(f.view * vec4(p, 1.0)).z;
-        float sh = sun_shadow(f, p, N, view_depth, true);
+        float sh = sun_shadow(f, p, N, view_depth, noise) * contact_shadow(f, p, N, L, pc.depth, noise);
         vec3 H = normalize(V + L);
         float ndh = max(dot(N, H), 0.0), vdh = max(dot(V, H), 0.0);
         vec3 F = F_Schlick(f0, vdh);
@@ -140,7 +171,7 @@ void main() {
     if (foliage && translucency > 0.0) {
         // Thin-leaf transmission: light through the needles towards the viewer (strongest against the sun).
         float view_depth = -(f.view * vec4(p, 1.0)).z;
-        float sh = sun_shadow(f, p, -N, view_depth, true);
+        float sh = sun_shadow(f, p, -N, view_depth, noise);
         float back = max(dot(-N, L), 0.0);
         float forward = pow(max(dot(-V, L), 0.0), 6.0);
         vec3 trans_col = albedo * vec3(1.1, 1.25, 0.6); // light through chlorophyll is yellow-green

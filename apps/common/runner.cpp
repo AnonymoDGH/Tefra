@@ -224,6 +224,9 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
         if (cfg.no_canopy) setup.settings.canopy_occlusion = false;
         if (cfg.no_grass) setup.settings.grass = false;
         setup.settings.grass_stats = cfg.grass_stats;
+        if (cfg.no_pcss) setup.settings.pcss_shadows = false;
+        if (cfg.no_contact_shadows) setup.settings.contact_shadows = false;
+        if (cfg.debug_sun_shadow) setup.settings.debug_sun_shadow = true;
         renderer = std::make_unique<render::Renderer>(*device, *heap, kFramesInFlight);
         params.camera = setup.camera;
     }

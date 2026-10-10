@@ -457,6 +457,8 @@ void Renderer::compute_cascades(const Camera& cam, f32 aspect, const RenderSetti
     }
     for (u32 c = n; c < kMaxCascades; ++c) fc.cascade_splits[static_cast<int>(c)] = 1e30f;
     fc.shadow_params = {1.0f / (res * f32(n)), 1.0f / res, f32(n), res};
+    fc.shadow_flags = (s.pcss_shadows ? 1u : 0u) | (s.contact_shadows ? 2u : 0u) | (s.debug_sun_shadow ? 4u : 0u);
+    fc.shadow_soft = vec4{s.penumbra_scale, s.contact_length, 0.0f, 0.0f};
 }
 
 void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTimer* timer, const RenderWorld& world,
