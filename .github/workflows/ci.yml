@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: linux-${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: gcc-debug, preset: linux-debug, cc: gcc, cxx: g++ }
+          - { name: clang-release, preset: linux-release, cc: clang, cxx: clang++ }
+          - { name: gcc-asan, preset: linux-asan, cc: gcc, cxx: g++ }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies (lavapipe, validation layers, glslang, X11/Wayland headers)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build glslang-tools mesa-vulkan-drivers vulkan-validationlayers \
+            libvulkan1 libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxkbcommon-dev \
+            libwayland-dev wayland-protocols
+      - name: Format check
+        if: matrix.name == 'gcc-debug'
+        run: clang-format --dry-run --Werror $(git ls-files 'engine/*.cpp' 'engine/*.h' 'apps/*.cpp' 'apps/*.h' 'tests/*.cpp')
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Test (unit + GPU on lavapipe with validation)
+        run: ctest --preset ${{ matrix.preset }}
+      - name: Upload captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures-${{ matrix.name }}
+          path: |
+            build/${{ matrix.preset }}/tests/*.png
+            build/${{ matrix.preset }}/tests/*.json
+          if-no-files-found: ignore
+
+  windows:
+    name: windows-mingw
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-glslang
+      - name: Configure
+        run: cmake --preset windows-mingw-release
+      - name: Build
+        run: cmake --build --preset windows-mingw-release
+      - name: Unit tests (no GPU on the runner)
+        run: ctest --preset windows-mingw-release -L unit
+      - name: Package
+        run: |
+          mkdir -p tefra-windows
+          cp build/windows-mingw-release/bin/*.exe tefra-windows/
+          cp -r build/windows-mingw-release/bin/shaders tefra-windows/
+          cp scripts/bench-windows.bat tefra-windows/
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: tefra-windows
+          path: tefra-windows

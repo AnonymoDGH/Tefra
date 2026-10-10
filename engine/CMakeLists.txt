@@ -1,0 +1,6 @@
+add_subdirectory(core)
+if(TEFRA_WITH_WINDOW)
+    add_subdirectory(platform)
+endif()
+add_subdirectory(rhi)
+add_subdirectory(renderer)
