@@ -83,6 +83,8 @@ jobs:
           mkdir -p tefra-windows
           cp build/windows-mingw-release/bin/*.exe tefra-windows/
           cp -r build/windows-mingw-release/bin/shaders tefra-windows/
+          # Studio / player resources (fonts, template thumbnails, built-in sounds).
+          cp -r build/windows-mingw-release/bin/resources tefra-windows/
           cp scripts/bench-windows.bat tefra-windows/
           mkdir -p tefra-windows/scripts
           cp scripts/fetch_assets.py tefra-windows/scripts/

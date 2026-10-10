@@ -13,11 +13,36 @@ Opciones de línea de comandos:
 
 | Opción | Efecto |
 |---|---|
+| (nada) | Abre la página de inicio |
 | `mi_lugar.tefra` | Abre ese lugar |
+| `--template ID` | Lugar nuevo sin guardar desde una plantilla (`baseplate`, `classic_baseplate`, `flat_terrain`, `obby`, `beach`, `valley`) |
 | `--demo` | Carga la escena de ejemplo |
+| `--capture out.png --frames N [--capture-viewport]` | Captura la ventana (o solo el viewport 3D) y sale |
 | `--play` | Pulsa Play al arrancar |
 | `--no-mcp` / `--mcp-port N` | Desactiva el servidor MCP o cambia su puerto |
 | `--validation` | Activa la validación Vulkan |
+
+## Página de inicio
+Al abrir Studio sin argumentos aparece la página de inicio, al estilo de Roblox Studio:
+- **New Experience** y **Templates**: crean una experiencia nueva desde una plantilla y la guardan sola en `Documentos/Tefra/Projects/<Nombre>/`.
+  - Plantillas: Baseplate, Classic Baseplate, Flat Terrain, **Obby** (juego completo con checkpoints, kill bricks, plataformas móviles, barra giratoria, HUD con cronómetro, botón Reset y sonidos), Beach y Valley.
+- **Home**: experiencias recientes con miniatura (se captura del viewport al guardar), nombre y fecha de edición.
+  - El menú **⋮** de cada tarjeta ofrece Open, Rename, Duplicate, Show in Folder, Archive y Delete.
+- **My Experiences**: todas, con búsqueda y orden por fecha o nombre.
+- **Archive**: experiencias archivadas (`Documentos/Tefra/Archive`), con Restore.
+- **Open File...** abre cualquier `.tefra`; **Import Roblox Place...** importa un `.rbxl`/`.rbxlx` propio (ADR-017).
+
+Cada proyecto es una carpeta: `<Nombre>.tefra`, `thumbnail.png` y `assets/` (los archivos que el lugar usa por ruta relativa). `File > Home` vuelve a la página de inicio. Si hay cambios sin guardar, Studio pregunta antes de cerrar o cambiar de lugar. La variable `TEFRA_HOME` cambia la carpeta raíz (instalaciones portátiles).
+
+## Exportar un juego
+`File > Export Game...` crea una carpeta autocontenida que se puede copiar a otro PC:
+- `<Juego>.exe`: el `tefra_player` renombrado;
+- `game.json` (título, ventana, pantalla completa) y `game.tefra`;
+- `shaders/`, `resources/`, los assets referenciados y, si el lugar tiene scripts, `managed/`.
+
+El juego exportado necesita una GPU con Vulkan 1.2. Si tiene scripts C#, también el runtime de .NET 8.
+
+En el player, Esc abre el menú (Resume, Reset Character, Leave Game). `tefra_player carpeta|lugar.tefra [--fullscreen]` también ejecuta un lugar directamente.
 
 ## Interfaz
 - **Explorer** (arriba a la derecha): el árbol del lugar.
@@ -34,7 +59,7 @@ Opciones de línea de comandos:
 - **Output**: log del motor, prints y errores de los scripts.
 - **Script editor**: doble clic en un Script.
 
-Atajos: Ctrl+Z / Ctrl+Y deshacer y rehacer, Ctrl+D duplicar, Ctrl+G agrupar, Supr borrar, Ctrl+S guardar, Ctrl+O abrir, F5 Play/Stop.
+Atajos: Ctrl+Z / Ctrl+Y deshacer y rehacer, Ctrl+D duplicar, Ctrl+G agrupar, Supr borrar, Ctrl+S guardar, Ctrl+Shift+S guardar como, Ctrl+O abrir, F5 Play/Stop.
 
 ## Modo Play
 Al pulsar Play:
