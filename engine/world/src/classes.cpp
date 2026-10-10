@@ -177,6 +177,8 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("Part1", Value::reference(0), "Child part.");
     b.prop("C0", Value::vector3({0, 0, 0}), "Joint position in Part0's space (m).");
     b.prop("C1", Value::vector3({0, 0, 0}), "Joint position in Part1's space (m).");
+    b.prop("C0Orientation", Value::vector3({0, 0, 0}), "Joint rotation in Part0's space (degrees, Orientation order).");
+    b.prop("C1Orientation", Value::vector3({0, 0, 0}), "Joint rotation in Part1's space (degrees, Orientation order).");
     b.cls("Camera", "Instance", "A viewpoint.", "Gameplay");
     b.group("Data").prop("FieldOfView", Value::number(70.0), "Vertical field of view (degrees).");
     b.prop("Position", Value::vector3({0, 5, 10}), "Camera position (m).");
