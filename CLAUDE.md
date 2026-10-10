@@ -4,6 +4,12 @@ Las sesiones no recuerdan nada: este archivo es la memoria. Actualízalo al fina
 
 ## Estado actual (2026-10-10)
 
+- **M3 en curso: Tefra Studio** (petición del usuario: hacer juegos de verdad). Spec: `docs/specs/2026-10-10-m3-studio.md` (ADR-011..016).
+  - Hecho (F1): `JsonValue` (core), `engine/world` (DataModel estilo Roblox con reflexión, clases integradas en `classes.cpp`, `.tefra` JSON, `SceneSync` → renderer + raycast).
+  - En paralelo (subagentes, brief `docs/research/M3_AGENT_BRIEF.md`): Studio ImGui (`apps/studio`), C# .NET 8 (`engine/scripting` + `managed/`), MCP (`engine/mcp`, `tefra_mcp`), Jolt (`engine/physics`), avatar R15 + Animator (`engine/anim`).
+  - Pendiente: integrar todo en Play, skinning glTF, plantillas, juego de ejemplo ("Obby"), exportar standalone.
+- Escena playa (`--scene coast`): océano Gerstner + surf guiado por la distancia a la orilla, refracción con absorción por canal, cáusticas, nubes, cocoteros procedurales. Capturas `docs/captures/coast-*`.
+
 - **M2 en curso (valle visible):** atmósfera Hillaire + niebla de altura, terreno procedural 2×2 km (clipmap, capas CC0), vegetación GPU-driven, agua, TAA/TAAU + CAS, GTAO. `tefra_bench --scene valley`.
 - **Noche de fotorrealismo (2026-10-10):** 9 subagentes en worktrees; informes en `docs/research/<tema>/REPORT.md`. Integrados los 9: terrain-detail (POM, height blend, stochastic), trunks (contrafuertes, raíces, musgo), volumetric-light (raymarch media res.), camera-post (bloom, auto-exposición, viñeta/CA/grano), canopy-occlusion (mapa CPU de cobertura), grass (briznas en vertex shader; densidad sigue al dosel), shadows (PCSS + contacto; código en `shaders/common/shadow.glsl`), foliage (atlas de agujas horneado; copa densificada en la integración, LOD0 < 4500 tris), gradación pre-AgX (calibración). Capturas finales: `docs/captures/m2-valley-v8-*.png` y `m2-before-after.png`.
 - Siguientes ideas visuales: impostores de copa, material propio de madera muerta, compactación GPU de hierba, velocidad de viento para el TAA, niebla menos lechosa, SSR en el agua. Cada técnica con flag en `RenderSettings` y `--no-*` en CLI. Brief para agentes: `docs/research/AGENT_BRIEF.md`.
@@ -24,7 +30,8 @@ Las sesiones no recuerdan nada: este archivo es la memoria. Actualízalo al fina
 - ADR-004: shaders GLSL → SPIR-V con glslangValidator en build (`#extension GL_GOOGLE_include_directive`).
 - ADR-005: Windows (MinGW) y Linux, ambos en CI.
 - ADR-006: licencia Apache-2.0.
-- ADR-007: sin editor hasta 0.1. Procedural + datos de texto + Blender, ImGui y herramientas CLI.
+- ADR-007: (sustituido por ADR-011) editor Tefra Studio con ImGui docking.
+- ADR-011..016 (M3): Studio ImGui; DataModel reflejado; C# .NET 8 vía hostfxr + Roslyn; Jolt; MCP Streamable HTTP en 127.0.0.1:44755/mcp; avatar R15 + animación esquelética.
 - ADR-008: **deferred con G-buffer fino** (16 B/px) + clustered forward para transparencias. TAAU de 540p a 720p en Low. El visibility buffer queda reservado para High.
 - ADR-009: metros, +Y arriba, −Z adelante, reverse-Z con far infinito y D32F, render relativo a cámara (posiciones double en CPU).
 - ADR-010: dependencias vendored en `third_party/` (ver THIRD_PARTY.md).
