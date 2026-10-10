@@ -41,6 +41,7 @@ struct RunConfig {
     f32 ev100 = -1.0f;           // < 0: scene default
     std::string tier = "native"; // native | low | medium | high
     bool no_taa = false;
+    bool no_canopy = false; // disable the canopy occlusion map (--no-canopy)
     render::TestPatternParams params = default_scene_params();
 };
 

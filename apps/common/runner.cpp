@@ -209,6 +209,7 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             setup.settings.shadow_distance = max(setup.settings.shadow_distance, 300.0f);
         }
         if (cfg.no_taa) setup.settings.taa = false;
+        if (cfg.no_canopy) setup.settings.canopy_occlusion = false;
         renderer = std::make_unique<render::Renderer>(*device, *heap, kFramesInFlight);
         params.camera = setup.camera;
     }

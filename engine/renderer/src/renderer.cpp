@@ -1,6 +1,7 @@
 #include "tefra/renderer/renderer.h"
 
 #include "tefra/renderer/atmosphere.h"
+#include "tefra/renderer/canopy.h"
 #include "tefra/renderer/environment.h"
 #include "tefra/renderer/scene.h"
 #include "tefra/renderer/terrain.h"
@@ -113,6 +114,7 @@ Renderer::Renderer(const rhi::Device& dev, rhi::BindlessHeap& heap, u32 frames_i
         shadow_format_ = VK_FORMAT_D16_UNORM;
     const VkDescriptorSetLayout sets[1] = {heap_.layout()};
     layout_ = rhi::create_pipeline_layout(dev_, sets, kPushBytes);
+    canopy_ = std::make_unique<CanopyMap>(dev_, heap_, frames_in_flight);
 }
 
 Renderer::~Renderer() {
@@ -398,6 +400,13 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     fc.brdf_lut = env.brdf_lut();
     fc.env_background = env.background();
     fc.fog = {s.fog_density, s.fog_falloff, s.fog_height, s.fog_anisotropy};
+    // Canopy occlusion map: built on the CPU from vegetation footprints, uploaded for this frame slot if stale.
+    if (s.canopy_occlusion && veg && canopy_ && canopy_->supported()) {
+        canopy_->update(*veg, camera.position);
+        const CanopyBinding cb = canopy_->sync(cmd, slot);
+        fc.canopy_map = cb.index;
+        fc.canopy = {cb.origin.x, cb.origin.y, cb.size, s.canopy_strength};
+    }
     if (atmo)
         fc.atmo = atmo->gpu(s.sun_direction, 0);
     else
