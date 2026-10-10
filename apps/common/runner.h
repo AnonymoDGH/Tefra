@@ -41,6 +41,11 @@ struct RunConfig {
     f32 ev100 = -1.0f;           // < 0: scene default
     std::string tier = "native"; // native | low | medium | high
     bool no_taa = false;
+    bool no_pcss = false;
+    f32 camera_yaw_deg = 0.0f, camera_pitch_deg = 0.0f; // overrides when *_set
+    bool camera_yaw_set = false, camera_pitch_set = false;
+    bool no_contact_shadows = false;
+    bool debug_sun_shadow = false;
     render::TestPatternParams params = default_scene_params();
 };
 

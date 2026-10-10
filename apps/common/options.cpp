@@ -35,6 +35,17 @@ bool parse_common_options(const CommandLine& cl, RunConfig& cfg) {
     cfg.ev100 = static_cast<f32>(cl.get_float("ev", static_cast<f64>(cfg.ev100)));
     cfg.animate = cl.has("animate");
     cfg.no_taa = cl.has("no-taa");
+    cfg.no_pcss = cl.has("no-pcss");
+    if (cl.get("camera-yaw")) {
+        cfg.camera_yaw_deg = static_cast<f32>(cl.get_float("camera-yaw", 0.0));
+        cfg.camera_yaw_set = true;
+    }
+    if (cl.get("camera-pitch")) {
+        cfg.camera_pitch_deg = static_cast<f32>(cl.get_float("camera-pitch", 0.0));
+        cfg.camera_pitch_set = true;
+    }
+    cfg.no_contact_shadows = cl.has("no-contact-shadows");
+    cfg.debug_sun_shadow = cl.has("debug-sun-shadow");
     if (cfg.width == 0 || cfg.height == 0 || cfg.width > 8192 || cfg.height > 8192) {
         TEFRA_LOG_ERROR("invalid resolution %ux%u", cfg.width, cfg.height);
         return false;
@@ -55,7 +66,11 @@ void print_common_usage() {
                 "  --gltf FILE --hdr FILE  glTF model and Radiance HDR environment\n"
                 "  --ev EV100              camera exposure\n"
                 "  --tier T                native | low | medium | high (low = 0.75 render scale + TAAU)\n"
-                "  --no-taa                disable temporal anti-aliasing\n");
+                "  --no-taa                disable temporal anti-aliasing\n"
+                "  --camera-yaw DEG --camera-pitch DEG  override the scene's camera direction\n"
+                "  --no-pcss               fixed PCF shadows instead of PCSS penumbrae\n"
+                "  --no-contact-shadows    disable screen-space contact shadows\n"
+                "  --debug-sun-shadow      show only the sun visibility term (diagnostic)\n");
 }
 
 } // namespace tefra::app
