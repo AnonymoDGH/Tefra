@@ -217,6 +217,7 @@ void build_valley_scene(render::Scene& scene, render::Environment& env, const re
     setup.settings.fog_density = 0.008f;
     setup.settings.fog_falloff = 0.035f;
     setup.settings.fog_height = terrain.height_at(0.0f, 0.0f);
+    setup.settings.volumetric_fog = true;
     setup.settings.cascades = 3;
     setup.settings.shadow_distance = 200.0f;
     setup.settings.ev100 = 12.5f;

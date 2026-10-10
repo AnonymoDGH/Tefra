@@ -6,46 +6,45 @@
 #include "common/cube.glsl"
 #include "common/atmosphere.glsl"
 #include "common/fog.glsl"
-layout(push_constant) uniform Push { FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; uint ao; } pc;
+#include "common/shadow.glsl"
+layout(push_constant) uniform Push { FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; uint ao; uint vol; } pc;
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
 
-// shadow_params: x,y = atlas texel size (uv), z = cascade count, w = cascade resolution (texels).
-float shadow_cascade(Frame f, vec3 p, vec3 n, int c) {
-    vec2 texel = f.shadow_params.xy;
-    mat4 m = f.cascade_view_proj[c];
-    float radius = 1.0 / length(vec3(m[0][0], m[1][0], m[2][0]));
-    float world_texel = 2.0 * radius / f.shadow_params.w;
-    vec3 po = p + n * (world_texel * 1.5);
-    vec4 s = m * vec4(po, 1.0);
-    vec3 uvz = vec3(s.xy * 0.5 + 0.5, s.z);
-    if (any(lessThan(uvz.xy, vec2(0.0))) || any(greaterThan(uvz.xy, vec2(1.0))) || uvz.z > 1.0) return 1.0;
-    vec4 a = f.cascade_atlas[c];
-    vec2 uv = uvz.xy * a.zw + a.xy;
-    vec2 lo = a.xy + texel * 1.5, hi = a.xy + a.zw - texel * 1.5;
-    float sum = 0.0;
-    for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x)
-            sum += texture(sampler2DShadow(g_textures[f.shadow_atlas], g_samplers[SMP_SHADOW]),
-                           vec3(clamp(uv + vec2(x, y) * texel, lo, hi), uvz.z));
-    return sum / 9.0;
+// Linear view distance from a reverse-Z depth value (infinite far plane: depth = near / distance).
+float linear_depth(Frame f, float d) { return d > 0.0 ? f.proj[3][2] / (d + f.proj[2][2]) : 1e6; }
+
+// Volumetric fog (half resolution, see volumetric.frag), upsampled with a depth-aware 2x2 filter. Returns rgb
+// in-scatter (pre-exposed) and a = transmittance up to min(dist, 150 m).
+vec4 volumetric_upsample(Frame f, float depth_c, vec2 uv) {
+    const ivec2 ext = ivec2(f.viewport.xy);
+    const ivec2 hsz = textureSize(TEX2D(pc.vol, SMP_NEAREST_CLAMP), 0);
+    const vec2 fp = uv * vec2(hsz) - 0.5;
+    const ivec2 base = ivec2(floor(fp));
+    const vec2 w = fract(fp);
+    const float lc = linear_depth(f, depth_c);
+    vec4 sum = vec4(0.0);
+    float wsum = 0.0;
+    for (int k = 0; k < 4; ++k) {
+        const ivec2 o = ivec2(k & 1, k >> 1);
+        const ivec2 q = clamp(base + o, ivec2(0), hsz - 1);
+        const float dn = texelFetch(TEX2D(pc.depth, SMP_NEAREST_CLAMP), clamp(q * 2 + 1, ivec2(0), ext - 1), 0).r;
+        const float ln = linear_depth(f, dn);
+        const float wb = (o.x == 0 ? 1.0 - w.x : w.x) * (o.y == 0 ? 1.0 - w.y : w.y);
+        const float wd = exp(-abs(ln - lc) / (0.05 * min(ln, lc) + 0.05));
+        const float wt = wb * wd + 1e-4 * wb;
+        sum += texelFetch(TEX2D(pc.vol, SMP_LINEAR_CLAMP), q, 0) * wt;
+        wsum += wt;
+    }
+    return sum / wsum;
 }
 
-float sun_shadow(Frame f, vec3 p, vec3 n, float view_depth) {
-    int count = int(f.shadow_params.z);
-    for (int c = 0; c < count; ++c) {
-        if (view_depth < f.cascade_splits[c]) {
-            float s = shadow_cascade(f, p, n, c);
-            float fade_start = f.cascade_splits[c] * 0.85;
-            if (view_depth > fade_start) {
-                float t = (view_depth - fade_start) / (f.cascade_splits[c] - fade_start);
-                float next = c + 1 < count ? shadow_cascade(f, p, n, c + 1) : 1.0;
-                s = mix(s, next, t);
-            }
-            return s;
-        }
-    }
-    return 1.0;
+// Fog with the volumetric in-scatter replacing the analytic integral up to 150 m; beyond that the uniform
+// in-scatter of the analytic fog covers the remainder. Input color is un-exposed; output is pre-exposed.
+vec3 apply_fog_volumetric(Frame f, vec3 color, vec3 dir, float dist, vec4 vol) {
+    const float T = fog_transmittance(f, dir, dist);
+    const vec3 L = fog_radiance(f, dir) * f.exposure.x;
+    return color * f.exposure.x * T + vol.rgb + L * max(vol.a - T, 0.0);
 }
 
 vec3 sky_color(Frame f, vec3 dir) {
@@ -74,10 +73,16 @@ void main() {
     vec4 hp = f.inv_view_proj * vec4(ndc, max(depth, 1e-7), 1.0);
     vec3 p = hp.xyz / hp.w;
     vec3 V = -normalize(p);
+    const bool use_vol = pc.vol != 0xFFFFFFFFu;
     if (depth <= 0.0) {
         vec3 dir = -V;
-        vec3 sky = apply_fog(f, sky_color(f, dir), dir, 1e5);
-        o_color = vec4(min(sky * f.exposure.x, vec3(60000.0)), 1.0); // pre-exposed
+        if (use_vol) {
+            const vec4 vol = volumetric_upsample(f, depth, v_uv);
+            o_color = vec4(min(apply_fog_volumetric(f, sky_color(f, dir), dir, 1e5, vol), vec3(60000.0)), 1.0);
+        } else {
+            vec3 sky = apply_fog(f, sky_color(f, dir), dir, 1e5);
+            o_color = vec4(min(sky * f.exposure.x, vec3(60000.0)), 1.0); // pre-exposed
+        }
         return;
     }
     vec4 g0 = texelFetch(TEX2D(pc.rt0, SMP_NEAREST_CLAMP), px, 0);
@@ -106,7 +111,7 @@ void main() {
     vec3 color = vec3(0.0);
     if (ndl > 0.0) {
         float view_depth = -(f.view * vec4(p, 1.0)).z;
-        float sh = sun_shadow(f, p, N, view_depth);
+        float sh = sun_shadow(f, p, N, view_depth, true);
         vec3 H = normalize(V + L);
         float ndh = max(dot(N, H), 0.0), vdh = max(dot(V, H), 0.0);
         vec3 F = F_Schlick(f0, vdh);
@@ -117,7 +122,7 @@ void main() {
     if (foliage && translucency > 0.0) {
         // Thin-leaf transmission: light through the needles towards the viewer (strongest against the sun).
         float view_depth = -(f.view * vec4(p, 1.0)).z;
-        float sh = sun_shadow(f, p, -N, view_depth);
+        float sh = sun_shadow(f, p, -N, view_depth, true);
         float back = max(dot(-N, L), 0.0);
         float forward = pow(max(dot(-V, L), 0.0), 6.0);
         vec3 trans_col = albedo * vec3(1.1, 1.25, 0.6); // light through chlorophyll is yellow-green
@@ -136,6 +141,11 @@ void main() {
     vec3 kd = diff_col * (1.0 - fss - fms * ems);
     float spec_occ = clamp(pow(ndv + ao, exp2(-16.0 * a - 1.0)) - 1.0 + ao, 0.0, 1.0);
     color += (prefiltered * fss * spec_occ + (fms * ems + kd) * irradiance / BRDF_PI * ao) * f.exposure.y;
+    if (use_vol) {
+        const vec4 vol = volumetric_upsample(f, depth, v_uv);
+        o_color = vec4(min(apply_fog_volumetric(f, color, -V, length(p), vol), vec3(60000.0)), 1.0);
+        return;
+    }
     color = apply_fog(f, color, -V, length(p));
     o_color = vec4(min(color * f.exposure.x, vec3(60000.0)), 1.0); // pre-exposed
 }

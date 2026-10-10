@@ -49,6 +49,8 @@ struct RenderSettings {
     f32 fog_falloff = 0.02f; // 1/m
     f32 fog_height = 0.0f;   // m (world y)
     f32 fog_anisotropy = 0.6f;
+    // Volumetric fog and sun shafts (half resolution, 16 steps to 150 m). Needs fog_density > 0 to have an effect.
+    bool volumetric_fog = false;
     bool taa = true;
     bool gtao = true;
     f32 gtao_radius = 1.2f;  // m
@@ -115,7 +117,7 @@ class Renderer {
     mat4 prev_view_proj_{};
     dvec3 prev_camera_{};
     bool has_prev_ = false;
-    VkPipeline p_taa_ = VK_NULL_HANDLE, p_gtao_ = VK_NULL_HANDLE;
+    VkPipeline p_taa_ = VK_NULL_HANDLE, p_gtao_ = VK_NULL_HANDLE, p_volumetric_ = VK_NULL_HANDLE;
     rg::TextureHandle taa_handles_[2];
     const Vegetation* veg_template_owner_ = nullptr;
     VkFormat output_format_ = VK_FORMAT_UNDEFINED;

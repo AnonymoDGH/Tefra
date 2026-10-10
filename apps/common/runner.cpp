@@ -209,6 +209,9 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             setup.settings.shadow_distance = max(setup.settings.shadow_distance, 300.0f);
         }
         if (cfg.no_taa) setup.settings.taa = false;
+        if (cfg.no_volumetric) setup.settings.volumetric_fog = false;
+        if (cfg.has_camera_yaw) setup.camera.yaw = radians(cfg.camera_yaw_deg);
+        if (cfg.has_camera_pitch) setup.camera.pitch = radians(cfg.camera_pitch_deg);
         renderer = std::make_unique<render::Renderer>(*device, *heap, kFramesInFlight);
         params.camera = setup.camera;
     }
