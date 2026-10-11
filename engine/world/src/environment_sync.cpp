@@ -53,12 +53,18 @@ struct LoadedModel {
     u32 mesh[2] = {~0u, ~0u};
     u32 material[2] = {0, 0};
     f32 radius = 1.0f, center_y = 0.0f;
+    std::vector<std::pair<u32, u32>> lod1; // (mesh, coarser LOD) when requested
 };
 
-LoadedModel load_model(render::Scene& scene, const std::string& path) {
+LoadedModel load_model(render::Scene& scene, const std::string& path, u32 max_triangles = 0, u32 lod1_triangles = 0) {
     LoadedModel m;
     const usize first = scene.instances().size();
-    if (!render::load_gltf(scene, path.c_str(), {}).ok) return m;
+    render::GltfLoadOptions opt;
+    opt.max_triangles = max_triangles;
+    opt.lod1_triangles = lod1_triangles;
+    const render::GltfLoadResult r = render::load_gltf(scene, path.c_str(), opt);
+    if (!r.ok) return m;
+    m.lod1 = r.lod1;
     f32 top = 0.0f;
     for (usize i = first; i < scene.instances().size() && i - first < 2; ++i) {
         m.mesh[i - first] = scene.instances()[i].mesh;
@@ -191,7 +197,7 @@ void build_valley_assets(render::Scene& scene, LandscapeAssets& assets, const st
     for (u32 k = 0; k < 4; ++k) {
         const std::string path = models + kUnder[k].name + "/" + kUnder[k].name + ".gltf";
         if (!file_exists(path.c_str())) continue;
-        const LoadedModel lm = load_model(scene, path);
+        const LoadedModel lm = load_model(scene, path, 20000); // scans: cap the triangle count
         if (lm.mesh[0] == ~0u) continue;
         render::VegetationPrototype p;
         p.lods[0].mesh[0] = lm.mesh[0];
@@ -390,14 +396,26 @@ void build_rock_assets(render::Scene& scene, LandscapeAssets& assets, const std:
     for (u32 k = 0; k < 3; ++k) {
         const std::string path = cache_dir + "/models/" + kRocks[k].name + "/" + kRocks[k].name + ".gltf";
         if (!file_exists(path.c_str())) continue;
-        const LoadedModel lm = load_model(scene, path);
+        // The CC0 scans have 0.7-1.3 M triangles: far too many for hundreds of instances (and three shadow cascades)
+        // on low-end GPUs. Near LOD 12k triangles, far LOD 1.5k.
+        const LoadedModel lm = load_model(scene, path, 12000, 1500);
         if (lm.mesh[0] == ~0u) continue;
+        auto coarse = [&](u32 mesh) {
+            for (const auto& [full, low] : lm.lod1)
+                if (full == mesh) return low;
+            return mesh;
+        };
         render::VegetationPrototype p;
         p.lods[0].mesh[0] = lm.mesh[0];
         p.lods[0].material[0] = lm.material[0];
         p.lods[0].mesh[1] = lm.mesh[1];
         p.lods[0].material[1] = lm.material[1];
-        p.lods[0].max_distance = kRocks[k].dist;
+        p.lods[0].max_distance = min(kRocks[k].dist, 60.0f);
+        p.lods[1].mesh[0] = coarse(lm.mesh[0]);
+        p.lods[1].material[0] = lm.material[0];
+        p.lods[1].mesh[1] = lm.mesh[1] == ~0u ? ~0u : coarse(lm.mesh[1]);
+        p.lods[1].material[1] = lm.material[1];
+        p.lods[1].max_distance = kRocks[k].dist;
         p.radius = lm.radius;
         p.center_y = lm.center_y;
         p.wind = 0.0f;

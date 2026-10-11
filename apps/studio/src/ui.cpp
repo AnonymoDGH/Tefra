@@ -279,6 +279,14 @@ void App::draw_menu_bar() {
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("View")) {
+        if (ImGui::BeginMenu("Graphics Quality")) {
+            for (int q = 0; q < 4; ++q) {
+                const auto qq = static_cast<render::Quality>(q);
+                if (ImGui::MenuItem(render::quality_name(qq), nullptr, quality_ == qq)) set_quality(qq, true);
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::Separator();
         ImGui::MenuItem("Snap to grid", nullptr, &snap_);
         ImGui::SliderFloat("Move snap", &move_snap_, 0.05f, 4.0f, "%.2f m");
         ImGui::SliderFloat("Rotate snap", &rotate_snap_, 1.0f, 90.0f, "%.0f deg");

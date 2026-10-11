@@ -43,6 +43,7 @@ jobs:
         with:
           msystem: UCRT64
           update: false
+          path-type: inherit # keeps dotnet (setup-dotnet) on PATH so the C# runtime (bin/managed) is built
           install: >-
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake
@@ -65,7 +66,8 @@ jobs:
           B=build/windows-mingw-release/bin
           cp $B/*.exe $D/
           cp -r $B/shaders $B/resources $D/
-          if [ -d $B/managed ]; then cp -r $B/managed $D/; fi
+          test -f $B/managed/Tefra.Engine.dll || { echo "managed/Tefra.Engine.dll missing: C# scripting would not work"; exit 1; }
+          cp -r $B/managed $D/
           mkdir -p $D/assets
           cp -r assets/cache $D/assets/
           cp scripts/bench-windows.bat $D/

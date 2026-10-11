@@ -36,7 +36,11 @@ uint oct_pack(vec3 n) {
     return packSnorm2x16(e);
 }
 
-Vertex skin_vertex(SkinPalette pal, Vertex v, SkinAttr sa) {
+// The palette is chosen with a flag rather than passed as a buffer reference: legacy AMD shader compilers (GCN 1.x,
+// Vulkan 1.2.170) crash on PhysicalStorageBuffer function parameters.
+mat4 palette_matrix(bool prev, uint joint) { return prev ? pc.palette_prev.m[joint] : pc.palette.m[joint]; }
+
+Vertex skin_vertex(bool prev, Vertex v, SkinAttr sa) {
     vec3 bind_n = oct_decode(v.normal);
     vec3 bind_t = oct_decode(v.tangent);
     vec4 bind_p = vec4(v.pos, 1.0);
@@ -46,7 +50,7 @@ Vertex skin_vertex(SkinPalette pal, Vertex v, SkinAttr sa) {
     for (int k = 0; k < 4; ++k) {
         float w = sa.weights[k];
         if (w <= 0.0) continue;
-        mat4 m = pal.m[sa.joints[k]];
+        mat4 m = palette_matrix(prev, sa.joints[k]);
         p += w * (m * bind_p);
         n += w * (mat3(m) * bind_n);
         t += w * (mat3(m) * bind_t);
@@ -66,6 +70,6 @@ void main() {
     if (i >= pc.count) return;
     Vertex v = pc.src.v[i];
     SkinAttr sa = pc.attrs.a[i];
-    pc.dst.v[i] = skin_vertex(pc.palette, v, sa);
-    pc.dst_prev.v[i] = skin_vertex(pc.palette_prev, v, sa);
+    pc.dst.v[i] = skin_vertex(false, v, sa);
+    pc.dst_prev.v[i] = skin_vertex(true, v, sa);
 }

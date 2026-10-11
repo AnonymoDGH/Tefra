@@ -53,10 +53,16 @@ void App::setup_play_systems() {
         log_write(level, "%.*s", static_cast<int>(msg.size()), msg.data());
     });
     std::string err;
-    scripts_available_ = scripts_->init(&err);
+    if (cfg_.player && !is_dir(path_join(exe_dir(), "managed"))) {
+        // Exported games without C# scripts ship no managed runtime.
+        scripts_available_ = false;
+        TEFRA_LOG_INFO("No C# scripts in this game");
+    } else {
+        scripts_available_ = scripts_->init(&err);
+    }
     if (scripts_available_)
         TEFRA_LOG_INFO("C# scripting ready (.NET)");
-    else
+    else if (!err.empty())
         TEFRA_LOG_WARN("C# scripting unavailable: %s (install the .NET 8 SDK to run scripts)", err.c_str());
 
     PlayHooks hooks;

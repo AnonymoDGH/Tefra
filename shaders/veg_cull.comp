@@ -8,10 +8,19 @@ layout(push_constant) uniform Push {
     IndexListBuffer visible; DrawCmdBuffer cmds; IndexListBuffer shadow_visible; DrawCmdBuffer shadow_cmds;
     uint count;
 } pc;
-void emit(DrawCmdBuffer cmds, IndexListBuffer vis, uint d0, uint d1, uint index) {
-    uint slot = atomicAdd(cmds.c[d0].instance_count, 1u);
-    vis.v[pc.draws.d[d0].visible_base + slot] = index;
-    if (d1 != 0xFFFFFFFFu) atomicAdd(cmds.c[d1].instance_count, 1u);
+// Appends instance `index` to draw d0 (and counts it in d1) of the main or the shadow lists. Buffer references are
+// read from the push constants here instead of being passed as function arguments: legacy AMD shader compilers
+// (GCN 1.x, Vulkan 1.2.170) crash on PhysicalStorageBuffer function parameters.
+void emit(bool shadow, uint d0, uint d1, uint index) {
+    if (shadow) {
+        uint slot = atomicAdd(pc.shadow_cmds.c[d0].instance_count, 1u);
+        pc.shadow_visible.v[pc.draws.d[d0].visible_base + slot] = index;
+        if (d1 != 0xFFFFFFFFu) atomicAdd(pc.shadow_cmds.c[d1].instance_count, 1u);
+    } else {
+        uint slot = atomicAdd(pc.cmds.c[d0].instance_count, 1u);
+        pc.visible.v[pc.draws.d[d0].visible_base + slot] = index;
+        if (d1 != 0xFFFFFFFFu) atomicAdd(pc.cmds.c[d1].instance_count, 1u);
+    }
 }
 void main() {
     uint i = gl_GlobalInvocationID.x;
@@ -24,11 +33,13 @@ void main() {
     vec3 c = inst.pos_scale.xyz + vec3(0.0, p.bounds.y * s, 0.0) - f.camera_pos.xyz;
     float r = p.bounds.w * s;
     float dist = length(c);
-    int lod = dist < p.lod_dist.x ? 0 : ((p.lod_dist.w > 1.5 && dist < p.lod_dist.y) ? 1 : -1);
+    // Quality presets scale every distance (draw, LOD switch and shadow casting).
+    float ls = f.veg_lod_scale > 0.0 ? f.veg_lod_scale : 1.0;
+    int lod = dist < p.lod_dist.x * ls ? 0 : ((p.lod_dist.w > 1.5 && dist < p.lod_dist.y * ls) ? 1 : -1);
     if (lod < 0) return;
     uint d0 = lod == 0 ? p.draw00 : p.draw10;
     uint d1 = lod == 0 ? p.draw01 : p.draw11;
-    if (p.casts != 0u && dist < p.lod_dist.z) emit(pc.shadow_cmds, pc.shadow_visible, d0, d1, i);
+    if (p.casts != 0u && dist < p.lod_dist.z * ls) emit(true, d0, d1, i);
     mat4 m = f.view_proj;
     vec4 r0 = vec4(m[0][0], m[1][0], m[2][0], m[3][0]), r1 = vec4(m[0][1], m[1][1], m[2][1], m[3][1]);
     vec4 r2 = vec4(m[0][2], m[1][2], m[2][2], m[3][2]), r3 = vec4(m[0][3], m[1][3], m[2][3], m[3][3]);
@@ -37,5 +48,5 @@ void main() {
         vec4 pl = planes[k] / length(planes[k].xyz);
         if (dot(pl.xyz, c) + pl.w < -r) return;
     }
-    emit(pc.cmds, pc.visible, d0, d1, i);
+    emit(false, d0, d1, i);
 }

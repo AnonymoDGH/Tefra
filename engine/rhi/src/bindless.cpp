@@ -1,6 +1,7 @@
 #include "tefra/rhi/bindless.h"
 #include "tefra/rhi/device.h"
 
+#include "tefra/core/log.h"
 #include "tefra/core/math.h"
 
 namespace tefra::rhi {
@@ -172,6 +173,7 @@ void BindlessHeap::flush(u32 slot) {
         w.applied_mask |= bit;
     }
     for (usize i = 0; i < writes.size(); ++i) writes[i].pImageInfo = &infos[i];
+    TEFRA_TRACE("bindless: %zu descriptor writes (slot %u)", writes.size(), slot);
     if (!writes.empty())
         vkUpdateDescriptorSets(dev_.device(), static_cast<u32>(writes.size()), writes.data(), 0, nullptr);
     const u32 all = (1u << frames_) - 1u;

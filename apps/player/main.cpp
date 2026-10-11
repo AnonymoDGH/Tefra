@@ -6,10 +6,12 @@
 #include "tefra/studio/app.h"
 
 #include "tefra/core/cli.h"
+#include "tefra/core/crash.h"
 #include "tefra/core/fs.h"
 #include "tefra/core/json_value.h"
 #include "tefra/core/log.h"
 
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -17,6 +19,11 @@ using namespace tefra;
 
 int main(int argc, char** argv) {
     CommandLine cl(argc, argv);
+    // Log file next to the user's settings (send it when reporting a problem) and a crash reporter.
+    const std::string log_dir = path_join(config_dir(), "logs");
+    make_dirs(log_dir.c_str());
+    log_set_file(path_join(log_dir, "tefra_player.log").c_str());
+    install_crash_handler();
     std::string dir = exe_dir(), place;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -49,6 +56,8 @@ int main(int argc, char** argv) {
         cfg.width = static_cast<u32>(game["width"].as_int(1280));
         cfg.height = static_cast<u32>(game["height"].as_int(720));
         cfg.fullscreen = game["fullscreen"].as_bool(false);
+        if (game["quality"].is_string() && game["quality"].as_string() != "auto")
+            cfg.quality = game["quality"].as_string();
         if (place.empty() && !game["place"].as_string().empty()) place = path_join(dir, game["place"].as_string());
     }
     if (place.empty()) place = path_join(dir, "game.tefra");
@@ -57,6 +66,10 @@ int main(int argc, char** argv) {
     cfg.height = static_cast<u32>(cl.get_int("height", static_cast<i64>(cfg.height)));
     cfg.fullscreen = cfg.fullscreen || cl.has("fullscreen");
     cfg.validation = cl.has("validation");
+    cfg.gpu_index = static_cast<i32>(cl.get_int("gpu", -1));
+    if (const char* q = cl.get("quality")) cfg.quality = q;
+    if (cfg.gpu_index < 0)
+        if (const char* g = std::getenv("TEFRA_GPU")) cfg.gpu_index = std::atoi(g);
     if (const char* c = cl.get("capture")) cfg.capture_path = c;
     cfg.frames = static_cast<u32>(cl.get_int("frames", cfg.capture_path.empty() ? 0 : 60));
     if (!file_exists(place.c_str())) {

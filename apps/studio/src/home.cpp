@@ -878,7 +878,7 @@ void App::draw_player(f32 dt) {
                                 false);
         ImDrawList* dl = ImGui::GetWindowDrawList();
         dl->AddRectFilled(origin, {origin.x + avail.x, origin.y + avail.y}, srgb(0, 0, 0, 140));
-        const ImVec2 size{360, 300};
+        const ImVec2 size{360, 360};
         const ImVec2 p{origin.x + (avail.x - size.x) * 0.5f, origin.y + (avail.y - size.y) * 0.5f};
         dl->AddRectFilled(p, {p.x + size.x, p.y + size.y}, srgb(30, 32, 36, 245), 16.0f);
         const ImVec2 ts = font_bold_->CalcTextSizeA(26.0f, FLT_MAX, 0.0f, cfg_.title.c_str());
@@ -898,7 +898,10 @@ void App::draw_player(f32 dt) {
             runtime_->respawn();
             pause_menu_ = false;
         }
-        if (button("Leave Game", 204, srgb(200, 60, 50))) quit_ = true;
+        const std::string gfx = std::string("Graphics: ") + render::quality_name(quality_);
+        if (button(gfx.c_str(), 204, srgb(80, 84, 94)))
+            set_quality(static_cast<render::Quality>((static_cast<int>(quality_) + 1) % 4), true);
+        if (button("Leave Game", 264, srgb(200, 60, 50))) quit_ = true;
     }
     ImGui::End();
 }

@@ -67,6 +67,7 @@ jobs:
         with:
           msystem: UCRT64
           update: false
+          path-type: inherit # keeps dotnet (setup-dotnet) on PATH so the C# runtime (bin/managed) is built
           install: >-
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake

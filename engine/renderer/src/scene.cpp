@@ -1,5 +1,7 @@
 #include "tefra/renderer/scene.h"
 
+#include "tefra/core/log.h"
+
 #include "tefra/rhi/bindless.h"
 #include "tefra/rhi/device.h"
 #include "tefra/rhi/upload.h"
@@ -118,6 +120,7 @@ u32 Scene::add_instance(const Instance& instance) {
 }
 
 void Scene::upload() {
+    TEFRA_TRACE("scene: upload");
     dev_.wait_idle();
     rhi::destroy_buffer(dev_, vbuf_);
     rhi::destroy_buffer(dev_, ibuf_);

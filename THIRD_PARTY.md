@@ -8,6 +8,7 @@ Todas permisivas y compatibles con Apache-2.0. Cada una conserva su licencia en 
 | volk | vulkan-sdk-1.4.341.0 | MIT | `third_party/volk` | Carga dinámica de Vulkan |
 | Vulkan Memory Allocator | 3.4.0 | MIT | `third_party/vma` | Suballocation de memoria GPU |
 | GLFW | 3.5.1 | zlib | `third_party/glfw` | Ventana, entrada, gamepad |
+| meshoptimizer | 0.22 (solo `simplifier.cpp` y `allocator.cpp`) | MIT | `third_party/meshoptimizer` | Simplificación de mallas: LODs de los escaneos pesados (rocas de la costa) |
 | doctest | 2.5.3 | MIT | `third_party/doctest` | Tests |
 | Dear ImGui (docking) | commit 778992f | MIT | `third_party/imgui` | Interfaz de Tefra Studio (backends GLFW + Vulkan vía volk) |
 | ImGuizmo | commit 105e4fd | MIT | `third_party/imguizmo` | Gizmos de mover/rotar/escalar en Studio |

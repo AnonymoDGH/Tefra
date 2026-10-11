@@ -1,6 +1,8 @@
 #include "tefra/rhi/frame.h"
 #include "tefra/rhi/device.h"
+#include "tefra/rhi/pipeline.h"
 
+#include "tefra/core/log.h"
 #include "tefra/core/time.h"
 
 namespace tefra::rhi {
@@ -35,6 +37,7 @@ FrameLoop::~FrameLoop() {
 }
 
 FrameContext& FrameLoop::begin() {
+    framebuffer_cache_next_frame();
     const u32 slot = static_cast<u32>(frame_number_ % count_);
     const u64 t0 = time_now_ns();
     if (slot_value_[slot] > 0) {
@@ -57,6 +60,7 @@ FrameContext& FrameLoop::begin() {
 }
 
 void FrameLoop::end(VkSemaphore wait_binary, VkPipelineStageFlags2 wait_stage, VkSemaphore signal_binary) {
+    TEFRA_TRACE("frame: submit");
     TEFRA_VK_CHECK(vkEndCommandBuffer(ctx_.cmd));
     ++timeline_value_;
     slot_value_[ctx_.slot] = timeline_value_;
@@ -92,6 +96,7 @@ void FrameLoop::wait_all() {
     wi.pSemaphores = &timeline_;
     wi.pValues = &timeline_value_;
     TEFRA_VK_CHECK(vkWaitSemaphores(dev_.device(), &wi, UINT64_MAX));
+    framebuffer_cache_clear();
 }
 
 } // namespace tefra::rhi

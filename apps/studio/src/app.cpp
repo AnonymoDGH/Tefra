@@ -2,6 +2,7 @@
 
 #include "tefra/core/fs.h"
 #include "tefra/core/image.h"
+#include "tefra/core/json_value.h"
 #include "tefra/core/log.h"
 #include "tefra/core/time.h"
 #include "tefra/mcp/server.h"
@@ -26,6 +27,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
+#include <cctype>
 #include <cmath>
 
 namespace tefra::studio {
@@ -128,6 +130,7 @@ bool App::init(std::string* error) {
     rhi::DeviceDesc dd;
     dd.app_name = cfg_.player ? "tefra_player" : "tefra_studio";
     dd.validation = cfg_.validation;
+    dd.gpu_index = cfg_.gpu_index;
     dd.instance_extensions = platform::Window::required_instance_extensions();
     device_ = rhi::Device::create(dd);
     if (!device_) {
@@ -186,6 +189,7 @@ bool App::init(std::string* error) {
     settings_.film_effects = false;
     settings_.grass = false;
     settings_.cloud_coverage = 0.3f;
+    init_quality();
     TEFRA_LOG_INFO("Tefra Studio ready (%s)", device_->adapter().name.c_str());
     if (cfg_.play_at_start) session_.play();
     return true;
@@ -388,6 +392,60 @@ void App::sync_world() {
     sync_->update();
 }
 
+namespace {
+bool quality_from_name(const std::string& n, render::Quality& out) {
+    std::string l = n;
+    for (char& c : l) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (l == "low")
+        out = render::Quality::Low;
+    else if (l == "medium")
+        out = render::Quality::Medium;
+    else if (l == "high")
+        out = render::Quality::High;
+    else if (l == "ultra")
+        out = render::Quality::Ultra;
+    else
+        return false;
+    return true;
+}
+} // namespace
+
+// Graphics quality: --quality / game.json, else the user's last choice (settings.json), else from the GPU: integrated
+// or
+// <= 2.5 GB discrete -> Low, <= 4.5 GB -> Medium, larger -> High.
+void App::init_quality() {
+    render::Quality q = render::Quality::Low;
+    const rhi::AdapterInfo& a = device_->adapter();
+    if (a.type == "integrated" || a.software || a.device_local_mb <= 2560)
+        q = render::Quality::Low;
+    else if (a.device_local_mb <= 4608)
+        q = render::Quality::Medium;
+    else
+        q = render::Quality::High;
+    const char* source = "auto";
+    std::vector<u8> data;
+    JsonValue cfg;
+    if (file_read_all(path_join(config_dir(), "settings.json").c_str(), data) &&
+        JsonValue::parse(std::string_view(reinterpret_cast<const char*>(data.data()), data.size()), cfg) &&
+        quality_from_name(cfg["quality"].as_string(), q))
+        source = "saved";
+    if (quality_from_name(cfg_.quality, q)) source = "requested";
+    quality_ = q;
+    TEFRA_LOG_INFO("Graphics quality: %s (%s; %s, %llu MB)", render::quality_name(q), source, a.type.c_str(),
+                   static_cast<unsigned long long>(a.device_local_mb));
+}
+
+void App::set_quality(render::Quality q, bool remember) {
+    quality_ = q;
+    TEFRA_LOG_INFO("Graphics quality: %s", render::quality_name(q));
+    if (!remember) return;
+    make_dirs(config_dir().c_str());
+    JsonValue cfg = JsonValue::object();
+    cfg.set("quality", JsonValue(std::string(render::quality_name(q))));
+    const std::string text = cfg.dump(true);
+    file_write_all(path_join(config_dir(), "settings.json").c_str(), text.data(), text.size());
+}
+
 void App::request_viewport_capture(std::string path, std::function<void(bool)> done) {
     pending_capture_path_ = std::move(path);
     pending_capture_done_ = std::move(done);
@@ -412,9 +470,12 @@ void App::frame(f32 dt, bool capture_window) {
     ImGui::Render();
 
     // ---- Simulation and world sync ----
+    TEFRA_TRACE("studio: ui built, simulation");
     session_.step(dt);
     for (auto& cb : frame_callbacks_) cb(dt);
+    TEFRA_TRACE("studio: sync world");
     sync_world();
+    TEFRA_TRACE("studio: gpu frame");
 
     // ---- GPU frame ----
     rhi::FrameContext& fc = frames_->begin();
@@ -460,7 +521,9 @@ void App::frame(f32 dt, bool capture_window) {
         rw.scene = scene_.get();
         rw.env = env_.get();
         rw.atmosphere = atmosphere_.get();
-        renderer_->render(cmd, fc.slot, frame_index_, nullptr, rw, camera_, f32(time_), settings_, out);
+        render::RenderSettings rs = settings_;
+        render::limit_quality(rs, quality_);
+        renderer_->render(cmd, fc.slot, frame_index_, nullptr, rw, camera_, f32(time_), rs, out);
 
         VkImageLayout vp_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         VkPipelineStageFlags2 vp_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -484,6 +547,7 @@ void App::frame(f32 dt, bool capture_window) {
         rhi::cmd_image_barrier(cmd, to_read);
     }
 
+    TEFRA_TRACE("studio: ui pass");
     // UI -> swapchain.
     VkClearValue clear{};
     clear.color = {{0.02f, 0.02f, 0.025f, 1.0f}};

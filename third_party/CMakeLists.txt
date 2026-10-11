@@ -131,3 +131,7 @@ if(UNIX AND NOT APPLE)
         target_link_libraries(tefra_miniaudio PUBLIC ${TEFRA_MATH_LIB})
     endif()
 endif()
+
+# --- meshoptimizer (MIT, v0.22): mesh simplification for LODs of heavy scanned assets (only the simplifier) --------
+add_library(tefra_meshopt STATIC meshoptimizer/simplifier.cpp meshoptimizer/allocator.cpp)
+target_include_directories(tefra_meshopt SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/meshoptimizer)

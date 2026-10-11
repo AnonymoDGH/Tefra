@@ -568,6 +568,8 @@ bool DataModel::from_json(const JsonValue& doc, std::string* error) {
 
 bool DataModel::save(const char* path) const {
     const std::string text = to_json().dump(true);
+    const std::string dir = path_parent(path);
+    if (!dir.empty()) make_dirs(dir.c_str()); // the project folder may have been removed or never created
     return file_write_all(path, text.data(), text.size());
 }
 
