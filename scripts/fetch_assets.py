@@ -7,6 +7,7 @@ Usage: python3 scripts/fetch_assets.py [--res 1k|2k]
 """
 import argparse
 import json
+import time
 import os
 import sys
 import urllib.request
@@ -41,9 +42,22 @@ CHARACTERS = {
 HEADERS = {"User-Agent": "tefra-engine-asset-fetch/0.1"}
 
 
+def fetch(url, attempts=5):
+    """GET with retries: CDNs answer 502/503/timeouts now and then."""
+    for k in range(attempts):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS), timeout=60) as r:
+                return r.read()
+        except Exception as e:  # noqa: BLE001 - retry any transient network error
+            if k == attempts - 1:
+                raise
+            wait = 2 ** (k + 1)
+            print(f"   retry in {wait}s after {e}")
+            time.sleep(wait)
+
+
 def get_json(url):
-    with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS)) as r:
-        return json.load(r)
+    return json.loads(fetch(url))
 
 
 def download(url, path):
@@ -51,8 +65,9 @@ def download(url, path):
         return
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".part"
-    with urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS)) as r, open(tmp, "wb") as f:
-        f.write(r.read())
+    data = fetch(url)
+    with open(tmp, "wb") as f:
+        f.write(data)
     os.replace(tmp, path)
     print("  ", os.path.relpath(path))
 
