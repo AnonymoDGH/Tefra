@@ -17,6 +17,9 @@ void log_write(LogLevel level, const char* fmt, ...) TEFRA_PRINTF(2, 3);
 using LogSinkFn = void (*)(void* user, LogLevel level, f64 seconds, const char* text);
 void log_set_sink(LogSinkFn fn, void* user);
 
+// Diagnostic trace (TEFRA_TRACE_PASSES=1): step-by-step frame log to find where a crashing driver dies.
+bool trace_enabled();
+
 } // namespace tefra
 
 #define TEFRA_LOG_TRACE(...) ::tefra::log_write(::tefra::LogLevel::Trace, __VA_ARGS__)
@@ -24,3 +27,7 @@ void log_set_sink(LogSinkFn fn, void* user);
 #define TEFRA_LOG_INFO(...) ::tefra::log_write(::tefra::LogLevel::Info, __VA_ARGS__)
 #define TEFRA_LOG_WARN(...) ::tefra::log_write(::tefra::LogLevel::Warn, __VA_ARGS__)
 #define TEFRA_LOG_ERROR(...) ::tefra::log_write(::tefra::LogLevel::Error, __VA_ARGS__)
+#define TEFRA_TRACE(...)                                                                                               \
+    do {                                                                                                               \
+        if (::tefra::trace_enabled()) ::tefra::log_write(::tefra::LogLevel::Info, "trace: " __VA_ARGS__);              \
+    } while (0)

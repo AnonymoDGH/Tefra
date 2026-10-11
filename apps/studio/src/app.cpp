@@ -413,9 +413,12 @@ void App::frame(f32 dt, bool capture_window) {
     ImGui::Render();
 
     // ---- Simulation and world sync ----
+    TEFRA_TRACE("studio: ui built, simulation");
     session_.step(dt);
     for (auto& cb : frame_callbacks_) cb(dt);
+    TEFRA_TRACE("studio: sync world");
     sync_world();
+    TEFRA_TRACE("studio: gpu frame");
 
     // ---- GPU frame ----
     rhi::FrameContext& fc = frames_->begin();
@@ -485,6 +488,7 @@ void App::frame(f32 dt, bool capture_window) {
         rhi::cmd_image_barrier(cmd, to_read);
     }
 
+    TEFRA_TRACE("studio: ui pass");
     // UI -> swapchain.
     VkClearValue clear{};
     clear.color = {{0.02f, 0.02f, 0.025f, 1.0f}};

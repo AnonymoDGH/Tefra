@@ -531,6 +531,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                          max(1u, static_cast<u32>(std::lround(f32(out_ext.height) * scale)))};
     const f32 aspect = f32(ext.width) / f32(ext.height);
 
+    TEFRA_TRACE("render: per-frame constants");
     // ---- Per-frame constants ---------------------------------------------------------------------
     FrameConstants fc{};
     fc.view = camera.view_rotation();
@@ -600,6 +601,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     else
         fc.atmo.skyview_lut = 0xFFFFFFFFu;
 
+    TEFRA_TRACE("render: instances");
     // ---- Instances (camera-relative) and culling ---------------------------------------------------
     const auto& instances = scene.instances();
     if (fb.instance_capacity < instances.size() || !fb.instances.buffer) {
@@ -650,6 +652,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     vmaFlushAllocation(dev_.allocator(), fb.instances.allocation, 0, VK_WHOLE_SIZE);
     instance_history_ = std::move(history);
 
+    TEFRA_TRACE("render: skinning");
     // ---- Skinned meshes: palettes (current and previous) and posed vertices (current and previous) ----------------
     std::vector<u32> skin_draw_of(instances.size(), ~0u); // instance -> index into skin_draws
     std::vector<SkinDraw> skin_draws;
@@ -710,6 +713,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         }
     }
 
+    TEFRA_TRACE("render: terrain");
     // ---- Terrain patches ---------------------------------------------------------------------------
     constexpr VkDeviceSize kTerrainPatchOffset = 256;
     u32 patch_count = 0, shadow_patch_count = 0;
@@ -768,6 +772,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         vkCmdDrawIndexed(c, grid_count, shadow_pass ? shadow_patch_count : patch_count, 0, 0, 0);
     };
 
+    TEFRA_TRACE("render: grass");
     // ---- Grass: visible cells (CPU: disc around the camera and frustum), blades are generated on the GPU ----------
     const bool has_grass = terrain && s.grass;
     u32 grass_near = 0, grass_far = 0; // cell list: near cells first, then far cells
@@ -817,6 +822,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     }
     const u32 grass_blades_per_cell = static_cast<u32>(grass.grid[3]);
 
+    TEFRA_TRACE("render: vegetation");
     // ---- Vegetation (GPU culling + indirect draws) --------------------------------------------------
     struct DrawCmd {
         u32 index_count, instance_count, first_index;
@@ -896,6 +902,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         }
     };
 
+    TEFRA_TRACE("render: frame graph");
     // ---- Frame graph -----------------------------------------------------------------------------
     graph_.begin(slot, timer);
     const u32 sres = s.shadow_resolution;
@@ -1249,6 +1256,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             });
     }
 
+    TEFRA_TRACE("render: taa");
     // ---- TAA ---------------------------------------------------------------------------------------
     rg::TextureHandle resolved = hdr;
     if (s.taa) {
@@ -1323,6 +1331,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         taa_handles_[1] = hist_next;
     }
 
+    TEFRA_TRACE("render: exposure");
     // ---- Auto exposure: mean log2 luminance reduced to 1x1 (4x4 per level), then adapted by a compute pass -------
     // The adapted EV compensation lives in this slot's buffer and is read by the tonemap of this frame.
     // Always a valid address (the buffer exists per slot): the tonemap must never dereference a null pointer.
@@ -1380,6 +1389,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             });
     }
 
+    TEFRA_TRACE("render: bloom");
     // ---- Bloom: 6-level dual filter (13-tap down with Karis on the first level, tent up), no threshold --------
     rg::TextureHandle bloom;
     if (s.bloom) {

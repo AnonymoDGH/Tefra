@@ -1,5 +1,6 @@
 #include "tefra/core/log.h"
 #include "tefra/core/time.h"
+#include <cstdlib>
 
 #include <cstdarg>
 #include <cstdio>
@@ -63,6 +64,14 @@ void log_write(LogLevel level, const char* fmt, ...) {
         std::fflush(g_file);
     }
     if (g_sink) g_sink(g_sink_user, level, t, msg);
+}
+
+bool trace_enabled() {
+    static const bool on = [] {
+        const char* e = std::getenv("TEFRA_TRACE_PASSES");
+        return e && e[0] == '1';
+    }();
+    return on;
 }
 
 } // namespace tefra

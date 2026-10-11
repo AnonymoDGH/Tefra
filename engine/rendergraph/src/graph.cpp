@@ -403,6 +403,7 @@ void Graph::set_pass_exec(u32 pass, ExecFn fn, void* data, DtorFn dtor) {
 }
 
 void Graph::execute(VkCommandBuffer cmd) {
+    TEFRA_TRACE("render graph: execute (%zu passes)", impl_->passes.size());
     GraphImpl& g = *impl_;
     g.stat_barriers = 0;
     g.stat_passes = 0;

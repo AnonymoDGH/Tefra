@@ -2,6 +2,7 @@
 #include "tefra/rhi/device.h"
 #include "tefra/rhi/pipeline.h"
 
+#include "tefra/core/log.h"
 #include "tefra/core/time.h"
 
 namespace tefra::rhi {
@@ -59,6 +60,7 @@ FrameContext& FrameLoop::begin() {
 }
 
 void FrameLoop::end(VkSemaphore wait_binary, VkPipelineStageFlags2 wait_stage, VkSemaphore signal_binary) {
+    TEFRA_TRACE("frame: submit");
     TEFRA_VK_CHECK(vkEndCommandBuffer(ctx_.cmd));
     ++timeline_value_;
     slot_value_[ctx_.slot] = timeline_value_;
