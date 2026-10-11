@@ -118,3 +118,16 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 target_link_libraries(Jolt PUBLIC Threads::Threads)
 set_target_properties(Jolt PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${PHYSICS_REPO_ROOT}")
+
+# --- miniaudio (MIT-0 or public domain) + stb_vorbis (public domain or MIT) ----------
+# One translation unit: stb_vorbis first, then miniaudio (WAV, FLAC, MP3, Vorbis decoders; WASAPI / DirectSound /
+# ALSA / PulseAudio loaded at run time, so no system libraries are linked on Windows).
+add_library(tefra_miniaudio STATIC miniaudio/miniaudio_impl.c)
+target_include_directories(tefra_miniaudio SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/miniaudio)
+if(UNIX AND NOT APPLE)
+    find_library(TEFRA_MATH_LIB m)
+    target_link_libraries(tefra_miniaudio PUBLIC ${CMAKE_DL_LIBS} Threads::Threads)
+    if(TEFRA_MATH_LIB)
+        target_link_libraries(tefra_miniaudio PUBLIC ${TEFRA_MATH_LIB})
+    endif()
+endif()

@@ -107,6 +107,8 @@ void register_builtin_classes(ClassRegistry& r) {
     b.cls("SoundService", "Instance", "Global sound settings.").service();
     b.group("Data").prop("Volume", Value::number(1.0), "Master volume (0-1).");
     b.prop("RolloffScale", Value::number(1.0), "Scales the distance attenuation of every 3D sound.");
+    b.prop("CharacterSounds", Value::boolean(true),
+           "Plays jump, landing, footstep and death sounds for the local character.");
 
     // ---- Containers ----------------------------------------------------------------------------------------
     b.cls("Folder", "Instance", "Groups instances without any behaviour.", "Containers");
