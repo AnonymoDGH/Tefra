@@ -209,6 +209,7 @@ Renderer::~Renderer() {
     for (auto& f : frames_) {
         rhi::destroy_buffer(dev_, f.constants);
         rhi::destroy_buffer(dev_, f.exposure);
+        rhi::destroy_buffer(dev_, f.particles);
         rhi::destroy_buffer(dev_, f.instances);
         rhi::destroy_buffer(dev_, f.terrain);
         for (rhi::Buffer* b : {&f.veg_visible, &f.veg_shadow_visible, &f.veg_cmds, &f.veg_shadow_cmds})
@@ -226,7 +227,7 @@ Renderer::~Renderer() {
          {p_gbuffer_,        p_gbuffer_2s_,  p_shadow_,   p_lighting_,   p_tonemap_,     p_skyview_,    p_terrain_,
           p_terrain_shadow_, p_veg_,         p_veg_2s_,   p_veg_shadow_, p_veg_cull_,    p_water_,      p_taa_,
           p_gtao_,           p_bloom_down_,  p_bloom_up_, p_expo_first_, p_expo_reduce_, p_expo_adapt_, p_volumetric_,
-          p_grass_,          p_grass_count_, p_ocean_,    p_ocean_copy_, p_skin_})
+          p_grass_,          p_grass_count_, p_ocean_,    p_ocean_copy_, p_skin_,        p_particles_})
         if (p) vkDestroyPipeline(dev_.device(), p, nullptr);
     vkDestroyPipelineLayout(dev_.device(), layout_, nullptr);
 }
@@ -237,7 +238,7 @@ void Renderer::create_pipelines(VkFormat output_format) {
                           &p_veg_shadow_, &p_veg_cull_,   &p_water_,          &p_taa_,         &p_gtao_,
                           &p_bloom_down_, &p_bloom_up_,   &p_expo_first_,     &p_expo_reduce_, &p_expo_adapt_,
                           &p_volumetric_, &p_grass_,      &p_grass_count_,    &p_ocean_,       &p_ocean_copy_,
-                          &p_skin_}) {
+                          &p_skin_,       &p_particles_}) {
         if (*p) vkDestroyPipeline(dev_.device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -262,6 +263,8 @@ void Renderer::create_pipelines(VkFormat output_format) {
     VkShaderModule skin_cs = rhi::load_shader(dev_, "skin.comp");
     VkShaderModule water_vs = rhi::load_shader(dev_, "water.vert");
     VkShaderModule water_fs = rhi::load_shader(dev_, "water.frag");
+    VkShaderModule particle_vs = rhi::load_shader(dev_, "particle.vert");
+    VkShaderModule particle_fs = rhi::load_shader(dev_, "particle.frag");
     VkShaderModule taa_fs = rhi::load_shader(dev_, "taa.frag");
     VkShaderModule gtao_fs = rhi::load_shader(dev_, "gtao.frag");
     VkShaderModule volumetric_fs = rhi::load_shader(dev_, "volumetric.frag");
@@ -351,6 +354,13 @@ void Renderer::create_pipelines(VkFormat output_format) {
     w.premultiplied_blend = true;
     w.name = "water";
     p_water_ = rhi::create_graphics_pipeline(dev_, w);
+    auto rp_p = compat_pass(dev_, {hdr_format_, VK_FORMAT_R8_UNORM}, kDepth);
+    w.vs = particle_vs;
+    w.fs = particle_fs;
+    w.render_pass = rp_p.pass;
+    w.color_count = 2;
+    w.name = "particles";
+    p_particles_ = rhi::create_graphics_pipeline(dev_, w);
 
     auto rp_a = compat_pass(dev_, {VK_FORMAT_R16G16B16A16_SFLOAT}, VK_FORMAT_UNDEFINED);
     rhi::GraphicsPipelineDesc ta;
@@ -429,14 +439,14 @@ void Renderer::create_pipelines(VkFormat output_format) {
     p_ocean_ = rhi::create_graphics_pipeline(dev_, oc);
     for (VkShaderModule m : {ocean_vs, ocean_fs, ocean_copy_fs}) vkDestroyShaderModule(dev_.device(), m, nullptr);
 
-    for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k, &rp_w, &rp_a, &rp_o, &rp_b, &rp_e, &rp_v})
+    for (auto* rp : {&rp_g, &rp_s, &rp_l, &rp_t, &rp_k, &rp_w, &rp_p, &rp_a, &rp_o, &rp_b, &rp_e, &rp_v})
         rhi::destroy_render_pass(dev_, *rp);
-    for (VkShaderModule m : {mesh_vs,       gbuf_fs,        shadow_vs,       fs_vs,         light_fs,
-                             tone_fs,       sky_fs,         terrain_vs,      terrain_fs,    terrain_shadow_vs,
-                             veg_vs,        veg_shadow_vs,  shadow_alpha_fs, veg_cull_cs,   water_vs,
-                             water_fs,      taa_fs,         gtao_fs,         bloom_down_fs, bloom_up_fs,
-                             expo_first_fs, expo_reduce_fs, expo_adapt_cs,   volumetric_fs, grass_vs,
-                             grass_fs,      grass_count_cs, skin_cs})
+    for (VkShaderModule m : {mesh_vs,       gbuf_fs,       shadow_vs,       fs_vs,          light_fs,
+                             tone_fs,       sky_fs,        terrain_vs,      terrain_fs,     terrain_shadow_vs,
+                             veg_vs,        veg_shadow_vs, shadow_alpha_fs, veg_cull_cs,    water_vs,
+                             water_fs,      particle_vs,   particle_fs,     taa_fs,         gtao_fs,
+                             bloom_down_fs, bloom_up_fs,   expo_first_fs,   expo_reduce_fs, expo_adapt_cs,
+                             volumetric_fs, grass_vs,      grass_fs,        grass_count_cs, skin_cs})
         vkDestroyShaderModule(dev_.device(), m, nullptr);
 }
 
@@ -1257,6 +1267,43 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             });
     }
 
+    rg::TextureHandle particle_mask{};
+    bool has_particle_mask = false;
+    if (world.particles && world.particle_count > 0) {
+        has_particle_mask = true;
+        const u32 n = min<u32>(world.particle_count, 200000u);
+        if (fb.particle_capacity < n || !fb.particles.buffer) {
+            rhi::destroy_buffer(dev_, fb.particles);
+            fb.particle_capacity = max<u32>(1024u, n * 2u);
+            fb.particles =
+                rhi::create_buffer(dev_, sizeof(ParticleGPU) * fb.particle_capacity,
+                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                   rhi::MemoryUsage::Upload, "particles");
+        }
+        std::memcpy(fb.particles.mapped, world.particles, sizeof(ParticleGPU) * n);
+        vmaFlushAllocation(dev_.allocator(), fb.particles.allocation, 0, VK_WHOLE_SIZE);
+        const VkDeviceAddress parts = fb.particles.address;
+        graph_.add_pass(
+            "particles", rg::PassType::Raster,
+            [&](rg::PassBuilder& b) {
+                particle_mask = b.create({VK_FORMAT_R8_UNORM, ext.width, ext.height, "particle_mask"});
+                b.color(hdr, rg::Load::Load);
+                b.color(particle_mask, rg::Load::Clear);
+                b.depth(depth, rg::Load::Load, 0.0f, false);
+                b.read(depth, rg::Access::Sampled);
+            },
+            [=, this](const rg::PassContext& ctx) {
+                struct ParticlePush {
+                    VkDeviceAddress frame, parts;
+                    u32 depth;
+                } pp{frame_addr, parts, ctx.sampled(depth)};
+                vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_particles_);
+                vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(pp), &pp);
+                vkCmdDraw(ctx.cmd, n * 6u, 1, 0, 0);
+            });
+    }
+
     TEFRA_TRACE("render: taa");
     // ---- TAA ---------------------------------------------------------------------------------------
     rg::TextureHandle resolved = hdr;
@@ -1304,6 +1351,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                 b.read(hdr, rg::Access::Sampled);
                 b.read(depth, rg::Access::Sampled);
                 b.read(rt3, rg::Access::Sampled);
+                if (has_particle_mask) b.read(particle_mask, rg::Access::Sampled);
                 if (valid) b.read(hist_prev, rg::Access::Sampled);
                 b.color(hist_next, rg::Load::DontCare);
             },
@@ -1311,7 +1359,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                 struct TaaPush {
                     VkDeviceAddress frame;
                     u32 current, history, depth, valid;
-                    u32 velocity, pad; // GLSL std430 aligns the vec4 to 16 bytes
+                    u32 velocity, reactive; // GLSL std430 aligns the vec4 to 16 bytes
                     vec4 sizes;
                 } tp{frame_addr,
                      ctx.sampled(hdr),
@@ -1319,7 +1367,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                      ctx.sampled(depth),
                      valid,
                      ctx.sampled(rt3),
-                     0u,
+                     has_particle_mask ? ctx.sampled(particle_mask) : 0xFFFFFFFFu,
                      {f32(ext.width), f32(ext.height), f32(out_ext.width), f32(out_ext.height)}};
                 static_assert(offsetof(TaaPush, sizes) == 32);
                 vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);

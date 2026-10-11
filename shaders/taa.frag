@@ -4,7 +4,7 @@
 #include "common/bindless.glsl"
 // Temporal anti-aliasing: depth reprojection (static world), Catmull-Rom history, variance clipping in YCoCg,
 // luminance-weighted blend (Karis 2014, Salvi 2016).
-layout(push_constant) uniform Push { FrameBuffer frame; uint current; uint history; uint depth; uint valid; uint velocity; uint pad; vec4 sizes; } pc;
+layout(push_constant) uniform Push { FrameBuffer frame; uint current; uint history; uint depth; uint valid; uint velocity; uint reactive; vec4 sizes; } pc;
 // sizes: xy = input (render) size, zw = output size. Input may be smaller than output (TAAU).
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
@@ -81,6 +81,11 @@ void main() {
     float alpha = pc.sizes.x < pc.sizes.z ? 0.08 : 0.1;
     float wc = alpha / (1.0 + luma(cur)), wh = (1.0 - alpha) / (1.0 + luma(h));
     vec3 res = (cur * wc + h * wh) / (wc + wh);
+    // Reactive mask (particles): fast, bright effects without motion vectors take mostly the current frame.
+    if (pc.reactive != 0xFFFFFFFFu) {
+        float r = texelFetch(TEX2D(pc.reactive, SMP_NEAREST_CLAMP), clamp(px, ivec2(0), ivec2(pc.sizes.xy) - 1), 0).r;
+        res = mix(res, cur, r * 0.9);
+    }
     // Detail restoration (calibration report: TAA/TAAU removed ~5x high-frequency energy). Contrast-adaptive
     // unsharp mask against the neighbourhood mean, limited by the local range so it cannot ring.
     vec3 mean_rgb = from_ycocg(mean);

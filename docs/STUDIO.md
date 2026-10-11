@@ -126,6 +126,16 @@ public class Hud : TefraScript   // LocalScript dentro de un ScreenGui de Starte
 - Un script destruido (o deshabilitado, o con error) deja de correr: sus manejadores de eventos y sus `Task.Wait` pendientes tampoco se ejecutan.
 - Limitación: un script con `namespace X;` (con ámbito de archivo) no compila; usa `namespace X { ... }`.
 
+## Efectos (ParticleEmitter)
+Un `ParticleEmitter` bajo una Part emite partículas de verdad (billboards en GPU, ordenadas, *soft particles*, máscara reactiva para el TAA). Se ven también en modo edición.
+- `Texture`: `builtin:fire`, `smoke`, `spark`, `star`, `snow`, `ring`, `circle`.
+- Emisión: `Rate`, `Lifetime`, `Speed`, `SpreadAngle`, `Variation`, `Shape` (Box/Sphere/Disc/Point), `EmissionDirection`.
+- Aspecto: `Size`→`SizeEnd`, `Color`→`ColorEnd`, `Transparency`→`TransparencyEnd`, `LightEmission` (1 = aditivo), `Brightness`, `Stretch`.
+- Movimiento: `Acceleration`, `Drag`, `RotSpeed`, `LockedToPart`, `TimeScale`.
+- Desde C#: `emitter.Emit(30)` lanza una ráfaga. Límite total según la calidad (Low 4000 … Ultra 40000).
+
+Eventos de `Humanoid` por personaje: `Jumping`, `FreeFalling`, `Landed`, `StateChanged(old, new)`, `Died`, `HealthChanged`.
+
 ## IA (MCP)
 Studio sirve MCP en `http://127.0.0.1:44755/mcp`. Con Claude Code:
 ```sh

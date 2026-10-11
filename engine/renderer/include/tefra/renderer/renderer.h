@@ -37,6 +37,9 @@ struct RenderWorld {
     const Vegetation* vegetation = nullptr;
     const Water* water = nullptr;
     const Ocean* ocean = nullptr;
+    // Camera-facing particles, sorted back to front (world::ParticleSystem). Drawn after the water, before TAA.
+    const ParticleGPU* particles = nullptr;
+    u32 particle_count = 0;
 };
 
 struct RenderSettings {
@@ -146,6 +149,8 @@ class Renderer {
         rhi::Buffer terrain; // TerrainGPU at 0, patches at kTerrainPatchOffset
         u32 terrain_capacity = 0;
         rhi::Buffer veg_visible, veg_shadow_visible, veg_cmds, veg_shadow_cmds;
+        rhi::Buffer particles;
+        u32 particle_capacity = 0;
         rhi::Buffer exposure; // ExposureState (auto exposure); per slot so it is fenced like the other buffers
         u32 veg_capacity = 0;
         rhi::Buffer grass_cells;    // visible cell list (host-written each frame)
@@ -170,7 +175,7 @@ class Renderer {
     VkPipeline p_lighting_ = VK_NULL_HANDLE, p_tonemap_ = VK_NULL_HANDLE;
     VkPipeline p_skyview_ = VK_NULL_HANDLE, p_terrain_ = VK_NULL_HANDLE, p_terrain_shadow_ = VK_NULL_HANDLE;
     VkPipeline p_veg_ = VK_NULL_HANDLE, p_veg_2s_ = VK_NULL_HANDLE, p_veg_shadow_ = VK_NULL_HANDLE,
-               p_veg_cull_ = VK_NULL_HANDLE, p_water_ = VK_NULL_HANDLE;
+               p_veg_cull_ = VK_NULL_HANDLE, p_water_ = VK_NULL_HANDLE, p_particles_ = VK_NULL_HANDLE;
     rhi::Buffer veg_cmd_template_;
     std::unique_ptr<CanopyMap> canopy_;
     VkPipeline p_grass_ = VK_NULL_HANDLE, p_grass_count_ = VK_NULL_HANDLE;

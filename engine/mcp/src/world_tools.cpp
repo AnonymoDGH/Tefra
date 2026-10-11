@@ -461,6 +461,15 @@ SCRIPTS: Script / LocalScript / ModuleScript hold C# (.NET 8) compiled when Play
   Players.LocalPlayer, BasePart.Touched, Humanoid.Health/Died, UserInputService, Sound.Play, RunService.Heartbeat,
   Task.Wait, TextLabel.Text... Scripts do not run in edit mode: generate edit-time content with create_instances.
 
+EFFECTS: ParticleEmitter under a part (real GPU particles, visible in edit mode too). Texture = builtin:fire /
+  smoke / spark / star / snow / ring / circle; Rate, Lifetime, Speed, SpreadAngle, Size->SizeEnd, Color->ColorEnd,
+  Transparency->TransparencyEnd, LightEmission (1 = additive glow), Acceleration (e.g. [0,-20,0] for sparks),
+  Drag, RotSpeed, Stretch, Shape (Box/Sphere/Disc/Point), EmissionDirection. Bursts from C#: emitter.Emit(30).
+  Do not fake particles with small parts.
+CHARACTERS: Humanoid events per character: Jumping, FreeFalling, Landed, StateChanged(old, new), Died,
+  HealthChanged. Hook every player's Humanoid (player.CharacterAdded for each of Players.GetPlayers()), not only player 0.
+  Checkpoints: SpawnLocation pads whose Touched sets player.RespawnLocation (see the obby template).
+
 UI: ScreenGui under StarterGui with Frame / TextLabel / TextButton / ImageLabel (Position/Size = scale + offset).
 AUDIO: Sound (SoundId = file path or builtin:click/jump/checkpoint/win/coin/wind_loop...).
 PLAY: play / stop / get_output (script errors) / capture_viewport (see the result) / set_camera.)");

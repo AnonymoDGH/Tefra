@@ -311,6 +311,34 @@ namespace Tefra
             remove => RemoveSignal("HealthChanged", value);
         }
 
+        /// <summary>Fires when this character starts a jump (each character has its own).</summary>
+        public event Action Jumping
+        {
+            add => AddSignal("Jumping", value);
+            remove => RemoveSignal("Jumping", value);
+        }
+
+        /// <summary>Fires when this character starts falling.</summary>
+        public event Action FreeFalling
+        {
+            add => AddSignal("FreeFalling", value);
+            remove => RemoveSignal("FreeFalling", value);
+        }
+
+        /// <summary>Fires when this character touches the ground after a jump or a fall.</summary>
+        public event Action Landed
+        {
+            add => AddSignal("Landed", value);
+            remove => RemoveSignal("Landed", value);
+        }
+
+        /// <summary>Fires on every state change with (old state, new state).</summary>
+        public event Action<HumanoidState, HumanoidState> StateChanged
+        {
+            add => AddSignal("StateChanged", value);
+            remove => RemoveSignal("StateChanged", value);
+        }
+
         /// <summary>Removes health (never below zero). Use it for hits; it fires HealthChanged and, at zero, Died.</summary>
         public void TakeDamage(float amount)
         {
@@ -698,6 +726,88 @@ namespace Tefra
         }
     }
 
+    /// <summary>Emits camera-facing particles from its parent part (smoke, fire, sparks, dust, magic).</summary>
+    public class ParticleEmitter : Instance
+    {
+        private static readonly PropRef EnabledP = new PropRef("ParticleEmitter", "Enabled");
+        private static readonly PropRef RateP = new PropRef("ParticleEmitter", "Rate");
+        private static readonly PropRef LifetimeP = new PropRef("ParticleEmitter", "Lifetime");
+        private static readonly PropRef SpeedP = new PropRef("ParticleEmitter", "Speed");
+        private static readonly PropRef SpreadAngleP = new PropRef("ParticleEmitter", "SpreadAngle");
+        private static readonly PropRef VariationP = new PropRef("ParticleEmitter", "Variation");
+        private static readonly PropRef TextureP = new PropRef("ParticleEmitter", "Texture");
+        private static readonly PropRef ColorP = new PropRef("ParticleEmitter", "Color");
+        private static readonly PropRef ColorEndP = new PropRef("ParticleEmitter", "ColorEnd");
+        private static readonly PropRef SizeP = new PropRef("ParticleEmitter", "Size");
+        private static readonly PropRef SizeEndP = new PropRef("ParticleEmitter", "SizeEnd");
+        private static readonly PropRef TransparencyP = new PropRef("ParticleEmitter", "Transparency");
+        private static readonly PropRef TransparencyEndP = new PropRef("ParticleEmitter", "TransparencyEnd");
+        private static readonly PropRef LightEmissionP = new PropRef("ParticleEmitter", "LightEmission");
+        private static readonly PropRef BrightnessP = new PropRef("ParticleEmitter", "Brightness");
+        private static readonly PropRef StretchP = new PropRef("ParticleEmitter", "Stretch");
+        private static readonly PropRef AccelerationP = new PropRef("ParticleEmitter", "Acceleration");
+        private static readonly PropRef DragP = new PropRef("ParticleEmitter", "Drag");
+        private static readonly PropRef RotSpeedP = new PropRef("ParticleEmitter", "RotSpeed");
+        private static readonly PropRef LockedToPartP = new PropRef("ParticleEmitter", "LockedToPart");
+        private static readonly PropRef TimeScaleP = new PropRef("ParticleEmitter", "TimeScale");
+        private static readonly PropRef EmissionDirectionP = new PropRef("ParticleEmitter", "EmissionDirection");
+        private static readonly PropRef ShapeP = new PropRef("ParticleEmitter", "Shape");
+        private static readonly PropRef EmitCountP = new PropRef("ParticleEmitter", "EmitCount");
+
+        internal ParticleEmitter(ulong id) : base(id) { }
+
+        /// <summary>Emits Rate particles per second while true.</summary>
+        public bool Enabled { get => GetBool(EnabledP); set => SetBool(EnabledP, value); }
+        /// <summary>Particles per second.</summary>
+        public float Rate { get => GetFloat(RateP); set => SetFloat(RateP, value); }
+        /// <summary>Seconds each particle lives.</summary>
+        public float Lifetime { get => GetFloat(LifetimeP); set => SetFloat(LifetimeP, value); }
+        /// <summary>Initial speed (m/s) along EmissionDirection.</summary>
+        public float Speed { get => GetFloat(SpeedP); set => SetFloat(SpeedP, value); }
+        /// <summary>Random deviation from EmissionDirection (degrees).</summary>
+        public float SpreadAngle { get => GetFloat(SpreadAngleP); set => SetFloat(SpreadAngleP, value); }
+        /// <summary>Random +- fraction applied to lifetime, speed and size.</summary>
+        public float Variation { get => GetFloat(VariationP); set => SetFloat(VariationP, value); }
+        /// <summary>builtin:circle / smoke / spark / star / fire / snow / ring.</summary>
+        public string Texture { get => GetString(TextureP); set => SetString(TextureP, value); }
+        /// <summary>Colour at birth.</summary>
+        public Color3 Color { get => GetColor3(ColorP); set => SetColor3(ColorP, value); }
+        /// <summary>Colour at death.</summary>
+        public Color3 ColorEnd { get => GetColor3(ColorEndP); set => SetColor3(ColorEndP, value); }
+        /// <summary>Size at birth (m).</summary>
+        public float Size { get => GetFloat(SizeP); set => SetFloat(SizeP, value); }
+        /// <summary>Size at death (m).</summary>
+        public float SizeEnd { get => GetFloat(SizeEndP); set => SetFloat(SizeEndP, value); }
+        /// <summary>Transparency at birth.</summary>
+        public float Transparency { get => GetFloat(TransparencyP); set => SetFloat(TransparencyP, value); }
+        /// <summary>Transparency at death.</summary>
+        public float TransparencyEnd { get => GetFloat(TransparencyEndP); set => SetFloat(TransparencyEndP, value); }
+        /// <summary>0 = blended, 1 = additive glow.</summary>
+        public float LightEmission { get => GetFloat(LightEmissionP); set => SetFloat(LightEmissionP, value); }
+        /// <summary>Glow strength of emissive particles.</summary>
+        public float Brightness { get => GetFloat(BrightnessP); set => SetFloat(BrightnessP, value); }
+        /// <summary>Stretch along the velocity (sparks, rain).</summary>
+        public float Stretch { get => GetFloat(StretchP); set => SetFloat(StretchP, value); }
+        /// <summary>World acceleration (m/s^2).</summary>
+        public Vector3 Acceleration { get => GetVector3(AccelerationP); set => SetVector3(AccelerationP, value); }
+        /// <summary>Velocity decay per second.</summary>
+        public float Drag { get => GetFloat(DragP); set => SetFloat(DragP, value); }
+        /// <summary>Spin (degrees per second).</summary>
+        public float RotSpeed { get => GetFloat(RotSpeedP); set => SetFloat(RotSpeedP, value); }
+        /// <summary>Particles follow the parent part.</summary>
+        public bool LockedToPart { get => GetBool(LockedToPartP); set => SetBool(LockedToPartP, value); }
+        /// <summary>Simulation speed (0 freezes).</summary>
+        public float TimeScale { get => GetFloat(TimeScaleP); set => SetFloat(TimeScaleP, value); }
+        public NormalId EmissionDirection { get => (NormalId)GetInt(EmissionDirectionP); set => SetEnum(EmissionDirectionP, (int)value); }
+        public ParticleEmitterShape Shape { get => (ParticleEmitterShape)GetInt(ShapeP); set => SetEnum(ShapeP, (int)value); }
+
+        /// <summary>Emits a burst of count particles now (in addition to Rate).</summary>
+        public void Emit(int count = 16)
+        {
+            if (count > 0) SetInt(EmitCountP, GetInt(EmitCountP) + count);
+        }
+    }
+
     // Factory table: the most derived wrapper for each class name. Classes without a wrapper use Instance.
 
     public enum HorizontalAlignment { Left, Center, Right }
@@ -709,6 +819,10 @@ namespace Tefra
     public enum SortOrder { LayoutOrder, Name }
 
     public enum HumanoidDisplayDistanceType { Viewer, Subject, None }
+
+    public enum NormalId { Top, Bottom, Front, Back, Left, Right }
+
+    public enum ParticleEmitterShape { Box, Sphere, Disc, Point }
 
     /// <summary>A UI layer drawn over the world, positioned at an Adornee (or the parent part).</summary>
     public class BillboardGui : GuiBase
@@ -888,6 +1002,7 @@ namespace Tefra
                 ["ImageButton"] = id => new ImageButton(id),
                 ["SoundService"] = id => new SoundService(id),
                 ["Sound"] = id => new Sound(id),
+                ["ParticleEmitter"] = id => new ParticleEmitter(id),
             };
     }
 }

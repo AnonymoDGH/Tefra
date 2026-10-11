@@ -20,6 +20,7 @@
 #include "tefra/runtime/game_runtime.h"
 #include "tefra/scripting/script_host.h"
 #include "tefra/ui/game_gui.h"
+#include "tefra/world/particles.h"
 #include "tefra/world/scene_sync.h"
 
 #include <GLFW/glfw3.h>
@@ -74,6 +75,7 @@ App::App(const StudioConfig& cfg) : cfg_(cfg) {
 App::~App() {
     if (session_.play_state() != PlayState::Edit) session_.stop();
     sync_.reset(); // before the retired models go away
+    particles_.reset();
     mcp_.reset();
     if (device_) device_->wait_idle();
     if (oneshot_pool_) vkDestroyCommandPool(device_->device(), oneshot_pool_, nullptr);
@@ -383,6 +385,7 @@ void App::sync_world() {
         else
             sync_->set_model(session_.model());
         synced_generation_ = session_.generation();
+        if (particles_) particles_->clear();
         session_.release_retired();
         open_scripts_.clear();
         update_lighting(true);
@@ -522,6 +525,16 @@ void App::frame(f32 dt, bool capture_window) {
         rw.scene = scene_.get();
         rw.env = env_.get();
         rw.atmosphere = atmosphere_.get();
+        // Particles: simulated in edit mode too (paused while play is paused), capped by the quality preset.
+        if (!particles_) particles_ = std::make_unique<world::ParticleSystem>();
+        const f64 pdt = particles_time_ < 0.0 ? 0.0 : time_ - particles_time_;
+        particles_time_ = time_;
+        static constexpr u32 kParticleCap[] = {4000, 10000, 20000, 40000};
+        particles_->update(session_.model(), session_.play_state() == PlayState::Paused ? 0.0f : f32(pdt),
+                           vec3(f32(camera_.position.x), f32(camera_.position.y), f32(camera_.position.z)),
+                           kParticleCap[static_cast<u32>(quality_) & 3u]);
+        rw.particles = particles_->gpu().data();
+        rw.particle_count = particles_->count();
         render::RenderSettings rs = settings_;
         render::limit_quality(rs, quality_);
         renderer_->render(cmd, fc.slot, frame_index_, nullptr, rw, camera_, f32(time_), rs, out);

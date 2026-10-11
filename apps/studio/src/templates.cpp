@@ -280,6 +280,7 @@ public class Finish : TefraScript
             var win = hud?.FindFirstChild("Win") as Frame;
             if (win != null) win.Visible = true;
             (pad.FindFirstChildOfClass("Sound") as Sound)?.Play();
+            (pad.FindFirstChild("Confetti") as ParticleEmitter)?.Emit(250);
             Debug.Log("Obby completed!");
         };
     }
@@ -425,6 +426,35 @@ void build_obby(DataModel& dm) {
     platform(dm, fin, "FinishPlatform", {0, 8.4f, -218}, {12, 1, 12}, gold);
     Instance* pad = part(dm, fin, "FinishPad", {0, 8.6f, -218}, {6, 0.4f, 6}, gold, "Neon");
     script(dm, pad, "Script", "Finish", kFinish);
+    {
+        Instance* glow = dm.create("ParticleEmitter", pad, "Sparkles");
+        glow->set("Texture", Value::string("builtin:star"));
+        glow->set("Rate", Value::number(14.0));
+        glow->set("Lifetime", Value::number(2.2));
+        glow->set("Speed", Value::number(1.6));
+        glow->set("SpreadAngle", Value::number(25.0));
+        glow->set("Size", Value::number(0.45));
+        glow->set("SizeEnd", Value::number(0.0));
+        glow->set("Color", Value::color3({1.0f, 0.86f, 0.35f}));
+        glow->set("ColorEnd", Value::color3({1.0f, 0.62f, 0.2f}));
+        glow->set("TransparencyEnd", Value::number(0.3));
+        glow->set("LightEmission", Value::number(1.0));
+        glow->set("RotSpeed", Value::number(60.0));
+        Instance* confetti = dm.create("ParticleEmitter", pad, "Confetti");
+        confetti->set("Enabled", Value::boolean(false));
+        confetti->set("Texture", Value::string("builtin:snow"));
+        confetti->set("Lifetime", Value::number(3.0));
+        confetti->set("Speed", Value::number(14.0));
+        confetti->set("SpreadAngle", Value::number(40.0));
+        confetti->set("Size", Value::number(0.25));
+        confetti->set("SizeEnd", Value::number(0.2));
+        confetti->set("Color", Value::color3({0.3f, 0.8f, 1.0f}));
+        confetti->set("ColorEnd", Value::color3({1.0f, 0.35f, 0.6f}));
+        confetti->set("TransparencyEnd", Value::number(0.4));
+        confetti->set("Acceleration", Value::vector3({0, -9.0f, 0}));
+        confetti->set("Drag", Value::number(1.2));
+        confetti->set("Variation", Value::number(0.5));
+    }
     sound(dm, pad, "Fanfare", "builtin:win", 0.8f);
     for (int i = 0; i < 2; ++i) part(dm, fin, "Pillar", {i ? 5.0f : -5.0f, 12.4f, -223}, {1, 8, 1}, white, "Marble");
     part(dm, fin, "Arch", {0, 16.9f, -223}, {11, 1, 1}, gold, "Neon");

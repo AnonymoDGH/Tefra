@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <optional>
@@ -321,6 +322,60 @@ bool is_same_name_class(std::string_view c) {
            c == "StarterPlayerScripts" || c == "StarterCharacterScripts";
 }
 
+// Roblox ParticleEmitter: ranges become a mean plus Variation, sequences their first and last keys. Textures are
+// Roblox asset ids, so the look is picked from the emitter's name (fire, smoke, spark, star, snow) or a soft circle.
+void apply_particles(const InstanceData& d, Instance& inst, f64 scale) {
+    auto range = [&](const char* prop, const char* dst, f64 mul) -> f64 {
+        const Value* v = d.find(prop);
+        if (!v || v->type != Type::NumberRange) return 0.0;
+        const f64 lo = v->f[0], hi = v->f[1], mid = 0.5 * (lo + hi);
+        inst.set(dst, WValue::number(mid * mul));
+        return mid > 1e-6 ? (hi - lo) * 0.5 / mid : 0.0;
+    };
+    auto seq = [&](const char* prop, const char* first, const char* last, f64 mul) {
+        const Value* v = d.find(prop);
+        if (!v || v->type != Type::NumberSequence || v->seq.size() < 3) return;
+        inst.set(first, WValue::number(v->seq[1] * mul));
+        inst.set(last, WValue::number(v->seq[v->seq.size() - 2] * mul));
+    };
+    f64 var = 0.0;
+    var = max(var, range("Lifetime", "Lifetime", 1.0));
+    var = max(var, range("Speed", "Speed", scale));
+    inst.set("Variation", WValue::number(min(var, 1.0)));
+    range("RotSpeed", "RotSpeed", 1.0);
+    seq("Size", "Size", "SizeEnd", scale);
+    seq("Transparency", "Transparency", "TransparencyEnd", 1.0);
+    if (const Value* c = d.find("Color"); c && c->type == Type::ColorSequence && c->seq.size() >= 5) {
+        const usize n = c->seq.size();
+        inst.set("Color", WValue::color3({c->seq[1], c->seq[2], c->seq[3]}));
+        inst.set("ColorEnd", WValue::color3({c->seq[n - 4], c->seq[n - 3], c->seq[n - 2]}));
+    }
+    if (const Value* sp = d.find("SpreadAngle")) inst.set("SpreadAngle", WValue::number(max(sp->f[0], sp->f[1])));
+    if (auto v = num_of(d, "Rate")) inst.set("Rate", WValue::number(*v));
+    if (auto v = num_of(d, "LightEmission")) inst.set("LightEmission", WValue::number(*v));
+    if (auto v = num_of(d, "Brightness")) inst.set("Brightness", WValue::number(*v));
+    if (auto v = num_of(d, "Drag")) inst.set("Drag", WValue::number(*v));
+    if (auto v = num_of(d, "TimeScale")) inst.set("TimeScale", WValue::number(*v));
+    if (auto v = bool_of(d, "Enabled")) inst.set("Enabled", WValue::boolean(*v));
+    if (auto v = bool_of(d, "LockedToPart")) inst.set("LockedToPart", WValue::boolean(*v));
+    if (auto v = vec3_of(d, "Acceleration")) inst.set("Acceleration", WValue::vector3(*v * f32(scale)));
+    if (auto v = int_of(d, "EmissionDirection")) inst.set("EmissionDirection", WValue::enumeration(u32(*v) % 6));
+    std::string lower = d.name();
+    for (char& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    const char* look = "builtin:circle";
+    if (lower.find("fire") != std::string::npos || lower.find("flame") != std::string::npos)
+        look = "builtin:fire";
+    else if (lower.find("smoke") != std::string::npos || lower.find("dust") != std::string::npos)
+        look = "builtin:smoke";
+    else if (lower.find("spark") != std::string::npos)
+        look = "builtin:spark";
+    else if (lower.find("star") != std::string::npos || lower.find("magic") != std::string::npos)
+        look = "builtin:star";
+    else if (lower.find("snow") != std::string::npos)
+        look = "builtin:snow";
+    inst.set("Texture", WValue::string(look));
+}
+
 JsonValue num_json(f64 x) {
     if (std::isnan(x)) return JsonValue("NAN");
     if (std::isinf(x)) return JsonValue(x > 0 ? "INF" : "-INF");
@@ -498,6 +553,9 @@ Instance* Converter::convert(u32 idx, Instance* parent) {
             if (auto v = num_of(d, "RollOffMinDistance")) inst->set("RollOffMinDistance", WValue::number(*v * s_));
             if (auto v = num_of(d, "RollOffMaxDistance")) inst->set("RollOffMaxDistance", WValue::number(*v * s_));
         }
+    } else if (cls == "ParticleEmitter") {
+        inst = dm_.create_internal(cls, parent, name);
+        apply_particles(d, *inst, s_);
     } else if (cls == "Motor6D") {
         inst = dm_.create_internal(cls, parent, name);
         defer_ref(inst, "Part0", d.find("Part0"));

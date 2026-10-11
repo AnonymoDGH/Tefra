@@ -11,6 +11,7 @@ Las sesiones no recuerdan nada: este archivo es la memoria. Actualízalo al fina
   - `engine/ui` (GUI en juego), `engine/audio` (miniaudio), skinning glTF y LocalScript/ModuleScript/eventos.
   - Terreno Plains con hierba de pradera y viento.
 - **Materiales de Part procedurales** (`shaders/common/surface.glsl`, flag bit4 + `pad[1]` = Material): patrones world-space con bump por gradiente de superficie y antialias por `fwidth`. Captura `docs/captures/part-materials.png`.
+- **ParticleEmitter** (`engine/world/particles.cpp` CPU + `shaders/particle.*`, pase tras el agua con máscara reactiva para el TAA); eventos Humanoid Jumping/FreeFalling/Landed/StateChanged (`physics/character.cpp`).
 - **MCP para agentes:** `engine_guide`, `create_instances` (lote), `terrain_height`, `raycast`, `new_place_from_template`, `import_model`, `import_roblox`, `save_project`. MeshId relativo al proyecto (`SceneSync::set_asset_root`).
 - **Release:** `.github/workflows/release.yml` publica el instalador Inno Setup (`installer/tefra.iss`) y un zip portable. Se dispara con un commit cuyo mensaje lleva `[release]`, porque el proxy no deja empujar tags. Primer release: v0.1.0-alpha.1.
 - Subagentes: usar `model: 'haiku'` (petición del usuario, por el límite de uso).

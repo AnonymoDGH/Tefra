@@ -340,6 +340,13 @@ namespace Tefra
                         case "HealthChanged":
                             ((Action<float>)d)((float)number);
                             break;
+                        case "StateChanged":
+                        {
+                            HumanoidState next;
+                            if (!Enum.TryParse(text, out next)) next = HumanoidState.Idle;
+                            ((Action<HumanoidState, HumanoidState>)d)((HumanoidState)(int)number, next);
+                            break;
+                        }
                         case "Touched":
                         case "TouchEnded":
                         case "CharacterAdded":

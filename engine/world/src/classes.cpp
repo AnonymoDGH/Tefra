@@ -59,6 +59,8 @@ void register_builtin_classes(ClassRegistry& r) {
     const EnumInfo* script_ctx = r.add_enum("RunContext", {"Server", "Client"});
     const EnumInfo* humanoid_state = r.add_enum("HumanoidState", {"Idle", "Walking", "Running", "Jumping", "Freefall",
                                                                   "Landed", "Dead", "Seated", "Climbing", "Swimming"});
+    const EnumInfo* normal_id = r.add_enum("NormalId", {"Top", "Bottom", "Front", "Back", "Left", "Right"});
+    const EnumInfo* particle_shape = r.add_enum("ParticleEmitterShape", {"Box", "Sphere", "Disc", "Point"});
     const EnumInfo* rig = r.add_enum("RigType", {"R15", "Custom"});
     const EnumInfo* text_x = r.add_enum("TextXAlignment", {"Left", "Center", "Right"});
     const EnumInfo* text_y = r.add_enum("TextYAlignment", {"Top", "Center", "Bottom"});
@@ -300,6 +302,40 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("RollOffMaxDistance", Value::number(120.0), "Silent beyond this distance (m).");
     b.prop("TimePosition", Value::number(0.0), "Current position (s).", kPropNotSerialized);
     b.prop("TimeLength", Value::number(0.0), "Length of the file (s).", kPropReadOnly | kPropNotSerialized);
+
+    // ---- Effects ---------------------------------------------------------------------------------------------
+    b.cls("ParticleEmitter", "Instance",
+          "Emits camera-facing particles (smoke, fire, sparks, dust, magic) from its parent part or attachment.",
+          "Effects");
+    b.group("Emission").prop("Enabled", Value::boolean(true), "Emits Rate particles per second while true.");
+    b.prop("Rate", Value::number(20.0), "Particles per second.");
+    b.prop("Lifetime", Value::number(2.0), "Seconds each particle lives.");
+    b.prop("Speed", Value::number(5.0), "Initial speed (m/s) along EmissionDirection.");
+    b.prop("SpreadAngle", Value::number(15.0), "Random deviation from EmissionDirection (degrees, 180 = all around).");
+    b.prop("Variation", Value::number(0.3), "Random +- fraction applied to lifetime, speed and size (0-1).");
+    b.prop("EmissionDirection", Value::enumeration(0), "Face of the parent part the particles leave from.", 0,
+           normal_id);
+    b.prop("Shape", Value::enumeration(0), "Volume particles spawn in: the parent's box, sphere, a disc, or a point.",
+           0, particle_shape);
+    b.group("Appearance")
+        .prop("Texture", Value::string("builtin:circle"),
+              "builtin:circle / smoke / spark / star / fire / snow / ring.");
+    b.prop("Color", Value::color3({1, 1, 1}), "Colour at birth.");
+    b.prop("ColorEnd", Value::color3({1, 1, 1}), "Colour at death (blended over the lifetime).");
+    b.prop("Size", Value::number(1.0), "Size at birth (m).");
+    b.prop("SizeEnd", Value::number(1.0), "Size at death (m).");
+    b.prop("Transparency", Value::number(0.0), "Transparency at birth (0 opaque, 1 invisible).");
+    b.prop("TransparencyEnd", Value::number(1.0), "Transparency at death.");
+    b.prop("LightEmission", Value::number(0.0), "0 = blended, 1 = additive glow (fire, sparks, magic).");
+    b.prop("Brightness", Value::number(1.0), "Glow strength of emissive particles (LightEmission > 0).");
+    b.prop("Stretch", Value::number(0.0), "Stretches particles along their velocity (sparks, rain).");
+    b.group("Motion").prop("Acceleration", Value::vector3({0, 0, 0}), "World acceleration (m/s^2), e.g. gravity.");
+    b.prop("Drag", Value::number(0.0), "Velocity decay per second.");
+    b.prop("RotSpeed", Value::number(0.0), "Spin (degrees per second, random sign).");
+    b.prop("LockedToPart", Value::boolean(false), "Particles follow the parent part as it moves.");
+    b.prop("TimeScale", Value::number(1.0), "Simulation speed (0 freezes).");
+    b.prop("EmitCount", Value::integer(0), "Pending burst (Emit(n) adds to it; consumed by the engine).",
+           kPropHidden | kPropNotSerialized);
 
     // ---- Characters ------------------------------------------------------------------------------------------
     b.cls("Humanoid", "Instance", "Makes a Model a character: health, walking, jumping, animation state.",
