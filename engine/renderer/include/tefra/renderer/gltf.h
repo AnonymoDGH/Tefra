@@ -15,6 +15,7 @@ struct GltfLoadOptions {
 struct GltfLoadResult {
     bool ok = false;
     u32 meshes = 0, materials = 0, textures = 0, instances = 0;
+    u32 skins = 0; // skinned primitives get Scene skins (Instance::skin); their palettes start at the rest pose
     u64 triangles = 0;
 };
 

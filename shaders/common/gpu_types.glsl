@@ -10,7 +10,7 @@ struct Material {
     uint base_color_tex; uint normal_tex; uint orm_tex; uint emissive_tex;
     uint flags; float translucency; uint pad0; uint pad1;
 };
-struct Instance { vec4 model_rows[3]; vec4 normal_rows[3]; uint material; uint p0; uint p1; uint p2; };
+struct Instance { vec4 model_rows[3]; vec4 normal_rows[3]; vec4 prev_rows[3]; uint material; uint flags; uint p1; uint p2; };
 struct Atmosphere {
     vec4 rayleigh; vec4 mie; vec4 ozone; vec4 radii; vec4 ground; vec4 sun;
     uint transmittance_lut; uint multiscatter_lut; uint skyview_lut; uint pad;

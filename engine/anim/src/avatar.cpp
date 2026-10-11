@@ -1,5 +1,7 @@
 #include "tefra/anim/avatar.h"
 
+#include "tefra/anim/skeleton.h"
+
 #include <vector>
 
 namespace tefra::anim {
@@ -172,6 +174,50 @@ world::Instance* build_r15_avatar(world::DataModel& dm, world::Instance* parent,
     humanoid->set("DisplayName", Value::string(desc.name));
     humanoid->set("HipHeight", Value::number(root_centre.y));
     humanoid->set("RigType", Value::enumeration(0)); // R15
+    dm.create("Animator", humanoid, "Animator");
+    model->set("PrimaryPart", Value::reference(hrp->id()));
+    return model;
+}
+
+world::Instance* build_skinned_avatar(world::DataModel& dm, world::Instance* parent, const SkinnedAvatarDesc& desc) {
+    using world::Value;
+    SkeletonAsset asset;
+    if (desc.mesh_path.empty() || !load_skeleton_asset(desc.mesh_path.c_str(), asset) || !asset.ok) return nullptr;
+    const f32 scale = clamp(desc.scale, 0.01f, 100.0f);
+    const f32 height = max(0.05f, (asset.bounds_max.y - asset.bounds_min.y) * scale);
+    const f32 hip = height * 0.5f;
+    const vec3 root_size{height * 0.30f, height * 0.50f, height * 0.25f};
+    // Same convention as the controller: the root centre is HipHeight + Size.y / 2 above the feet.
+    const f32 root_centre = hip + root_size.y * 0.5f;
+    const vec3 root_pos = desc.origin + vec3{0.0f, root_centre, 0.0f};
+    const vec3 yaw{0.0f, desc.yaw_deg, 0.0f};
+
+    world::Instance* model = dm.create("Model", parent, desc.name);
+    if (!model) return nullptr;
+    world::Instance* hrp = dm.create("Part", model, "HumanoidRootPart");
+    if (!hrp) return nullptr;
+    hrp->set("Size", Value::vector3(root_size));
+    hrp->set("Position", Value::vector3(root_pos));
+    hrp->set("Orientation", Value::vector3(yaw));
+    hrp->set("Transparency", Value::number(1.0));
+    hrp->set("CanCollide", Value::boolean(false));
+    hrp->set("Anchored", Value::boolean(false));
+
+    // glTF models face +Z; the mesh is turned around so that it faces the same way as the R15 avatar (-Z).
+    world::Instance* body = dm.create("MeshPart", model, "Body");
+    if (!body) return nullptr;
+    body->set("MeshId", Value::string(desc.mesh_path));
+    body->set("Size", Value::vector3({scale, scale, scale}));
+    body->set("Position", Value::vector3(root_pos - vec3{0.0f, root_centre, 0.0f}));
+    body->set("Orientation", Value::vector3({0.0f, desc.yaw_deg + 180.0f, 0.0f}));
+    body->set("CanCollide", Value::boolean(false));
+    body->set("Anchored", Value::boolean(false));
+
+    world::Instance* humanoid = dm.create("Humanoid", model, "Humanoid");
+    if (!humanoid) return nullptr;
+    humanoid->set("DisplayName", Value::string(desc.name));
+    humanoid->set("HipHeight", Value::number(hip));
+    humanoid->set("RigType", Value::enumeration(1)); // Custom
     dm.create("Animator", humanoid, "Animator");
     model->set("PrimaryPart", Value::reference(hrp->id()));
     return model;

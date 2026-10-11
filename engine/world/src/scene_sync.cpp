@@ -154,25 +154,38 @@ void SceneSync::rebuild() {
         if (i->is_a("MeshPart")) {
             const std::string& path = i->get_string("MeshId");
             if (path.empty() || !file_exists(path.c_str())) continue;
-            auto it = gltf_cache_.find(path);
-            if (it == gltf_cache_.end()) {
+            std::vector<GltfPrim> prims;
+            if (auto sk = skinned_parts_.find(i->id()); sk != skinned_parts_.end() && sk->second.path == path) {
+                prims = sk->second.prims;
+            } else if (auto it = gltf_cache_.find(path); it != gltf_cache_.end()) {
+                prims = it->second;
+            } else {
                 const usize first = out.size();
                 render::GltfLoadOptions opt;
-                if (!render::load_gltf(scene_, path.c_str(), opt).ok) {
+                const render::GltfLoadResult res = render::load_gltf(scene_, path.c_str(), opt);
+                if (!res.ok) {
                     TEFRA_LOG_WARN("MeshPart %s: cannot load %s", i->full_name().c_str(), path.c_str());
                     gltf_cache_[path] = {};
                     continue;
                 }
-                std::vector<std::pair<u32, u32>> prims;
-                for (usize k = first; k < out.size(); ++k) prims.push_back({out[k].mesh, out[k].material});
+                for (usize k = first; k < out.size(); ++k) prims.push_back({out[k].mesh, out[k].material, out[k].skin});
                 out.resize(first);
-                it = gltf_cache_.emplace(path, std::move(prims)).first;
                 materials_dirty_ = true;
+                if (res.skins > 0) {
+                    // Skinned: this part keeps its own skins, so the file is loaded again for every skinned MeshPart.
+                    SkinnedPart& sp = skinned_parts_[i->id()];
+                    sp.path = path;
+                    sp.prims = prims;
+                    sp.seen_version = 0;
+                } else {
+                    gltf_cache_[path] = prims;
+                }
             }
-            for (const auto& [mesh, mat] : it->second) {
+            for (const GltfPrim& p : prims) {
                 render::Instance r;
-                r.mesh = mesh;
-                r.material = mat;
+                r.mesh = p.mesh;
+                r.material = p.material;
+                r.skin = p.skin;
                 r.cast_shadows = i->get_bool("CastShadow", true);
                 out.push_back(r);
                 parts_.push_back({i, static_cast<u32>(out.size() - 1)});
@@ -195,6 +208,23 @@ void SceneSync::rebuild() {
 
 bool SceneSync::update() {
     bool changed = false;
+    // Skinned MeshParts: upload the palette the animator wrote for them (DataModel::skin_pose), once per version.
+    for (auto it = skinned_parts_.begin(); it != skinned_parts_.end();) {
+        if (!model_->find(it->first)) {
+            it = skinned_parts_.erase(it);
+            continue;
+        }
+        if (const DataModel::SkinPose* pose = model_->skin_pose(it->first);
+            pose && pose->version != it->second.seen_version) {
+            it->second.seen_version = pose->version;
+            for (const GltfPrim& p : it->second.prims)
+                if (p.skin != 0xFFFFFFFFu && scene_.skins()[p.skin].joint_count == pose->palette.size()) {
+                    scene_.set_skin_palette(p.skin, pose->palette);
+                    changed = true;
+                }
+        }
+        ++it;
+    }
     if (structure_dirty_) {
         rebuild();
         structure_dirty_ = false;

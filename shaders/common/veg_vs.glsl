@@ -11,6 +11,13 @@ layout(location = 3) out vec2 v_uv;
 layout(location = 4) flat out uint v_material;
 #ifndef SHADOW_PASS
 layout(location = 5) flat out float v_rand; // per-instance random: bark tint and moss
+#ifndef SHADOW_PASS
+// The G-buffer fragment shader reads these for motion vectors. Vegetation does not move in the G-buffer pass
+// (wind is not part of the velocity yet), so its velocity is zero.
+layout(location = 6) out vec4 v_cur_clip;
+layout(location = 7) out vec4 v_prev_clip;
+layout(location = 8) flat out uint v_dynamic;
+#endif
 #endif
 void main() {
     Frame f = pc.frame.f;
@@ -41,5 +48,8 @@ void main() {
     gl_Position = f.cascade_view_proj[pc.cascade] * vec4(v_pos, 1.0);
 #else
     gl_Position = f.view_proj * vec4(v_pos, 1.0);
+    v_cur_clip = gl_Position;
+    v_prev_clip = gl_Position;
+    v_dynamic = 0u;
 #endif
 }

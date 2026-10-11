@@ -39,10 +39,12 @@ constexpr u32 kNoTexture = 0xFFFFFFFFu;
 struct InstanceGPU {
     vec4 model_rows[3];  // camera-relative 3x4 model matrix, row-major rows
     vec4 normal_rows[3]; // inverse-transpose 3x3 (rows), w unused
+    vec4 prev_rows[3];   // previous frame's model matrix, camera-relative to this frame (motion vectors)
     u32 material = 0;
-    u32 pad[3] = {};
+    u32 flags = 0; // bit0: skinned (posed vertices; velocity from prev_rows and the previous palette)
+    u32 pad[2] = {};
 };
-static_assert(sizeof(InstanceGPU) == 112);
+static_assert(sizeof(InstanceGPU) == 160);
 
 constexpr u32 kMaxCascades = 4;
 

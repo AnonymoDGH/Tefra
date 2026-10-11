@@ -151,7 +151,21 @@ void GameRuntime::spawn_character() {
     } else {
         desc.origin = {0, 0.5f, 0};
     }
-    Instance* model = anim::build_r15_avatar(model_, model_.workspace(), desc);
+    // StarterPlayer.CharacterMesh: an imported rigged character replaces the default R15 avatar.
+    Instance* model = nullptr;
+    const Instance* starter = model_.service("StarterPlayer");
+    const std::string mesh = starter ? starter->get_string("CharacterMesh") : std::string();
+    if (!mesh.empty()) {
+        anim::SkinnedAvatarDesc sd;
+        sd.name = cfg_.player_name;
+        sd.mesh_path = resolve_asset(mesh);
+        sd.scale = starter->get_float("CharacterMeshScale", 1.0f);
+        sd.origin = desc.origin;
+        sd.yaw_deg = desc.yaw_deg;
+        model = anim::build_skinned_avatar(model_, model_.workspace(), sd);
+        if (!model) TEFRA_LOG_WARN("runtime: cannot build the character from %s, using the R15 avatar", mesh.c_str());
+    }
+    if (!model) model = anim::build_r15_avatar(model_, model_.workspace(), desc);
     if (!model) return;
     character_id_ = model->id();
     if (player) player->set("Character", Value::reference(model->id()), true);

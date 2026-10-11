@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Downloads the CC0 demo assets from Poly Haven into assets/cache/ (not versioned).
 
-Every asset is CC0 (https://polyhaven.com/license). Provenance is written to assets/cache/PROVENANCE.md.
+Every Poly Haven asset is CC0 (https://polyhaven.com/license); the rigged characters are Khronos samples under
+CC-BY 4.0 (see CHARACTERS). Provenance is written to assets/cache/PROVENANCE.md.
 Usage: python3 scripts/fetch_assets.py [--res 1k|2k]
 """
 import argparse
@@ -22,6 +23,16 @@ TERRAIN_LAYERS += COAST_LAYERS
 # Bark: brown conifer bark (valley trunks) and palm trunk bark (palm scene).
 TEXTURES = TERRAIN_LAYERS + ["bark_brown_01", "palm_tree_bark"]
 API = "https://api.polyhaven.com"
+# Rigged characters from the Khronos glTF-Sample-Assets repository (skinning and animation tests, spec M3b). NOT CC0:
+# the notices are written to PROVENANCE.md and must be kept with any redistribution (CC-BY 4.0 attribution).
+KHRONOS_RAW = "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models"
+CHARACTERS = {
+    "fox": (f"{KHRONOS_RAW}/Fox/glTF-Binary/Fox.glb",
+            "Fox (Khronos glTF-Sample-Assets, Models/Fox): model CC0 1.0 by PixelMannen; rig and animations "
+            "(Survey, Walk, Run) CC-BY 4.0 by tomkranis; glTF conversion CC-BY 4.0 by @AsoboStudio and @scurest."),
+    "cesium_man": (f"{KHRONOS_RAW}/CesiumMan/glTF-Binary/CesiumMan.glb",
+                   "CesiumMan (Khronos glTF-Sample-Assets, Models/CesiumMan): CC-BY 4.0 by Cesium."),
+}
 
 
 HEADERS = {"User-Agent": "tefra-engine-asset-fetch/0.1"}
@@ -72,6 +83,9 @@ def main():
             url = files[kind][args.res]["jpg"]["url"]
             download(url, os.path.join(root, "textures", t, f"{t}_{name}.jpg"))
         lines.append(f"- textures/{t}: https://polyhaven.com/a/{t} ({args.res})\n")
+    for name, (url, notice) in CHARACTERS.items():
+        download(url, os.path.join(root, "models", "characters", f"{name}.glb"))
+        lines.append(f"- models/characters/{name}.glb: {notice}\n")
     with open(os.path.join(root, "PROVENANCE.md"), "w") as f:
         f.writelines(lines)
     return 0

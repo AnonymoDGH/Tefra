@@ -16,11 +16,16 @@ class BindlessHeap;
 
 namespace tefra::render {
 
+constexpr u32 kNoSkin = 0xFFFFFFFFu;
+
 struct MeshRange {
     u32 first_index = 0;
     u32 index_count = 0;
     i32 vertex_offset = 0;
+    u32 vertex_count = 0;
     Bounds bounds{};
+    bool skinned = false; // has SkinAttr entries (skin_offset indexes Scene::skin_attributes())
+    u32 skin_offset = 0;
 };
 
 struct Instance {
@@ -30,6 +35,16 @@ struct Instance {
     u32 mesh = 0;
     u32 material = 0;
     bool cast_shadows = true;
+    u32 skin = kNoSkin; // index into Scene::skins(): the mesh is drawn from the skinned copy of its vertices
+};
+
+// A skeleton's palette (joint matrices in the mesh's own space: joint_global * inverse_bind). The renderer keeps the
+// previous frame's palette too; set_skin_palette() rotates them.
+struct SkinState {
+    u32 joint_count = 0;
+    std::vector<mat4> palette;
+    std::vector<mat4> prev_palette;
+    bool has_palette = false;
 };
 
 class Scene {
@@ -44,6 +59,14 @@ class Scene {
     // Takes ownership of an uploaded texture; returns its bindless index.
     u32 add_texture(rhi::Image&& image);
     u32 add_instance(const Instance& instance);
+    // Adds a skin with joint_count joints; its palette starts as identity. Instances refer to it with Instance::skin.
+    u32 add_skin(u32 joint_count);
+    // Sets the current palette (size must equal the joint count). The previous current palette becomes the previous
+    // one.
+    void set_skin_palette(u32 skin, const std::vector<mat4>& palette);
+    const std::vector<SkinState>& skins() const { return skins_; }
+    const std::vector<SkinAttr>& skin_attributes() const { return skin_attrs_; }
+    const rhi::Buffer& skin_buffer() const { return sbuf_; }
 
     // Uploads geometry and materials. Call once after adding content (and again after changes).
     void upload();
@@ -55,6 +78,7 @@ class Scene {
     const rhi::Buffer& vertex_buffer() const { return vbuf_; }
     const rhi::Buffer& index_buffer() const { return ibuf_; }
     const rhi::Buffer& material_buffer() const { return mbuf_; }
+    const rhi::Buffer& skin_attribute_buffer() const { return sbuf_; }
     u32 error_texture() const { return error_tex_; }
     u32 flat_normal_texture() const { return flat_normal_tex_; }
     u32 white_texture() const { return white_tex_; }
@@ -68,9 +92,11 @@ class Scene {
     std::vector<MeshRange> meshes_;
     std::vector<MaterialGPU> materials_;
     std::vector<Instance> instances_;
+    std::vector<SkinAttr> skin_attrs_;
+    std::vector<SkinState> skins_;
     std::vector<rhi::Image> textures_;
     std::vector<u32> texture_indices_;
-    rhi::Buffer vbuf_, ibuf_, mbuf_;
+    rhi::Buffer vbuf_, ibuf_, mbuf_, sbuf_;
     u32 error_tex_ = 0, flat_normal_tex_ = 0, white_tex_ = 0;
 };
 

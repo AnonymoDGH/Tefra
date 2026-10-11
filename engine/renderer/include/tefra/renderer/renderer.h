@@ -141,6 +141,11 @@ class Renderer {
         rhi::Buffer grass_cells;    // visible cell list (host-written each frame)
         rhi::Buffer grass_counter;  // blade counter (GPU), copied to grass_readback by the count pass
         rhi::Buffer grass_readback; // host-visible copy of the counter
+        rhi::Buffer skin_palettes;  // joint matrices: current palettes, then the previous ones (mat4 each)
+        rhi::Buffer skin_out;       // posed vertices of this frame (Vertex layout)
+        rhi::Buffer skin_prev;      // posed vertices with the previous palette (motion vectors)
+        u32 skin_joint_capacity = 0;
+        u32 skin_vertex_capacity = 0;
     };
     void create_pipelines(VkFormat output_format);
     void compute_cascades(const Camera& camera, f32 aspect, const RenderSettings& s, FrameConstants& fc,
@@ -159,6 +164,14 @@ class Renderer {
     rhi::Buffer veg_cmd_template_;
     std::unique_ptr<CanopyMap> canopy_;
     VkPipeline p_grass_ = VK_NULL_HANDLE, p_grass_count_ = VK_NULL_HANDLE;
+    VkPipeline p_skin_ = VK_NULL_HANDLE;
+    // Previous frame's instance transforms (skinned instances need them for motion vectors).
+    struct XformHistory {
+        dvec3 position{};
+        quat rotation{};
+        vec3 scale{1.0f};
+    };
+    std::vector<XformHistory> instance_history_;
     u32 grass_blades_ = 0;
     // TAA history (ping-pong), persistent across frames.
     rhi::Image history_[2];

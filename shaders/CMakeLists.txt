@@ -35,4 +35,5 @@ tefra_compile_shaders(
         ${CMAKE_CURRENT_SOURCE_DIR}/bloom_up.frag
         ${CMAKE_CURRENT_SOURCE_DIR}/exposure_first.frag
         ${CMAKE_CURRENT_SOURCE_DIR}/exposure_reduce.frag
-        ${CMAKE_CURRENT_SOURCE_DIR}/exposure_adapt.comp)
+        ${CMAKE_CURRENT_SOURCE_DIR}/exposure_adapt.comp
+        ${CMAKE_CURRENT_SOURCE_DIR}/skin.comp)
