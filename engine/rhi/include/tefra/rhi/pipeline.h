@@ -40,6 +40,14 @@ RenderPassObjects create_render_pass(const Device& dev, const RenderPassDesc& de
                                      const char* name = nullptr);
 void destroy_render_pass(const Device& dev, RenderPassObjects& rp);
 
+// Imageless framebuffers (Vulkan 1.2 core) are the default. Some legacy drivers (AMD GCN 1.x on Windows,
+// Vulkan 1.2.1xx) crash on them; then a classic framebuffer is created per (render pass, views) on first use and
+// cached, entries unused for a few frames are destroyed. Device creation decides; TEFRA_IMAGELESS=0/1 overrides.
+void set_imageless_framebuffers(bool enabled);
+bool imageless_framebuffers();
+void framebuffer_cache_next_frame(); // FrameLoop::begin: ages and purges cached framebuffers
+void framebuffer_cache_clear();      // after a full GPU wait (views may be recreated with recycled handles)
+
 // Begins the pass with concrete views (colors then depth) and sets a full viewport/scissor.
 void cmd_begin_render_pass(VkCommandBuffer cmd, const RenderPassObjects& rp, std::span<const VkImageView> views,
                            std::span<const VkClearValue> clears);

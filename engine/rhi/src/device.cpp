@@ -1,4 +1,5 @@
 #include "tefra/rhi/device.h"
+#include "tefra/rhi/pipeline.h"
 
 #include "tefra/core/log.h"
 #include "tefra/core/math.h"
@@ -369,6 +370,14 @@ bool Device::init(const DeviceDesc& desc) {
     }
     TEFRA_LOG_INFO("GPU %u: %s (%s, Vulkan %s, %s %s)", adapter_.index, adapter_.name.c_str(), adapter_.type.c_str(),
                    adapter_.api_version.c_str(), adapter_.driver_name.c_str(), adapter_.driver_info.c_str());
+    // Legacy AMD drivers (GCN 1.x on Windows stop at Vulkan 1.2.1xx) crash inside vkCmdBeginRenderPass2 with
+    // imageless framebuffers: use classic framebuffers there. TEFRA_IMAGELESS=0/1 forces either path.
+    {
+        bool imageless = !(q.props.vendorID == 0x1002 && VK_API_VERSION_MINOR(q.props.apiVersion) < 3);
+        if (const char* e = std::getenv("TEFRA_IMAGELESS")) imageless = e[0] == '1';
+        set_imageless_framebuffers(imageless);
+        if (!imageless) TEFRA_LOG_INFO("Framebuffers: classic (imageless disabled for this driver)");
+    }
 
     // ---- Queue ------------------------------------------------------------------------------------
     u32 qf_count = 0;

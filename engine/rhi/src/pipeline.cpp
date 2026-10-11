@@ -4,10 +4,54 @@
 #include "tefra/core/fs.h"
 #include "tefra/core/log.h"
 
+#include <mutex>
 #include <string>
 #include <vector>
 
 namespace tefra::rhi {
+
+namespace {
+struct FbEntry {
+    VkRenderPass pass = VK_NULL_HANDLE;
+    VkImageView views[9] = {};
+    u32 count = 0;
+    VkExtent2D extent{};
+    VkFramebuffer fb = VK_NULL_HANDLE;
+    u64 last_frame = 0;
+};
+struct FbCache {
+    std::mutex m;
+    VkDevice device = VK_NULL_HANDLE;
+    bool imageless = true;
+    u64 frame = 0;
+    std::vector<FbEntry> entries;
+};
+FbCache g_fb;
+constexpr u64 kFbMaxAge = 4; // frames; > frames in flight
+} // namespace
+
+void set_imageless_framebuffers(bool enabled) { g_fb.imageless = enabled; }
+bool imageless_framebuffers() { return g_fb.imageless; }
+
+void framebuffer_cache_next_frame() {
+    std::lock_guard<std::mutex> lock(g_fb.m);
+    ++g_fb.frame;
+    for (usize i = 0; i < g_fb.entries.size();) {
+        if (g_fb.frame - g_fb.entries[i].last_frame > kFbMaxAge) {
+            vkDestroyFramebuffer(g_fb.device, g_fb.entries[i].fb, nullptr);
+            g_fb.entries[i] = g_fb.entries.back();
+            g_fb.entries.pop_back();
+        } else {
+            ++i;
+        }
+    }
+}
+
+void framebuffer_cache_clear() {
+    std::lock_guard<std::mutex> lock(g_fb.m);
+    for (const FbEntry& e : g_fb.entries) vkDestroyFramebuffer(g_fb.device, e.fb, nullptr);
+    g_fb.entries.clear();
+}
 
 VkShaderModule load_shader(const Device& dev, const char* name) {
     const std::string path = path_join(path_join(exe_dir(), "shaders"), std::string(name) + ".spv");
@@ -82,6 +126,11 @@ RenderPassObjects create_render_pass(const Device& dev, const RenderPassDesc& de
     rci.subpassCount = 1;
     rci.pSubpasses = &sub;
     TEFRA_VK_CHECK(vkCreateRenderPass2(dev.device(), &rci, nullptr, &rp.pass));
+    g_fb.device = dev.device();
+    if (!g_fb.imageless) {
+        if (name) dev.set_name(VK_OBJECT_TYPE_RENDER_PASS, reinterpret_cast<u64>(rp.pass), name);
+        return rp; // framebuffers are created per view set in cmd_begin_render_pass
+    }
 
     VkFramebufferAttachmentsCreateInfo faci{VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENTS_CREATE_INFO};
     faci.attachmentImageInfoCount = static_cast<u32>(fb_infos.size());
@@ -103,6 +152,18 @@ RenderPassObjects create_render_pass(const Device& dev, const RenderPassDesc& de
 }
 
 void destroy_render_pass(const Device& dev, RenderPassObjects& rp) {
+    if (rp.pass) {
+        std::lock_guard<std::mutex> lock(g_fb.m);
+        for (usize i = 0; i < g_fb.entries.size();) {
+            if (g_fb.entries[i].pass == rp.pass) {
+                vkDestroyFramebuffer(dev.device(), g_fb.entries[i].fb, nullptr);
+                g_fb.entries[i] = g_fb.entries.back();
+                g_fb.entries.pop_back();
+            } else {
+                ++i;
+            }
+        }
+    }
     if (rp.framebuffer) vkDestroyFramebuffer(dev.device(), rp.framebuffer, nullptr);
     if (rp.pass) vkDestroyRenderPass(dev.device(), rp.pass, nullptr);
     rp = {};
@@ -114,9 +175,47 @@ void cmd_begin_render_pass(VkCommandBuffer cmd, const RenderPassObjects& rp, std
     abi.attachmentCount = static_cast<u32>(views.size());
     abi.pAttachments = views.data();
     VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-    bi.pNext = &abi;
     bi.renderPass = rp.pass;
-    bi.framebuffer = rp.framebuffer;
+    if (rp.framebuffer) {
+        bi.pNext = &abi;
+        bi.framebuffer = rp.framebuffer;
+    } else {
+        // Classic framebuffer for this exact set of views (cached).
+        std::lock_guard<std::mutex> lock(g_fb.m);
+        const u32 n = static_cast<u32>(views.size());
+        TEFRA_VERIFY(n <= 9);
+        FbEntry* hit = nullptr;
+        for (FbEntry& e : g_fb.entries) {
+            if (e.pass != rp.pass || e.count != n || e.extent.width != rp.extent.width ||
+                e.extent.height != rp.extent.height)
+                continue;
+            bool same = true;
+            for (u32 i = 0; i < n && same; ++i) same = e.views[i] == views[i];
+            if (same) {
+                hit = &e;
+                break;
+            }
+        }
+        if (!hit) {
+            FbEntry e;
+            e.pass = rp.pass;
+            e.count = n;
+            e.extent = rp.extent;
+            for (u32 i = 0; i < n; ++i) e.views[i] = views[i];
+            VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+            fci.renderPass = rp.pass;
+            fci.attachmentCount = n;
+            fci.pAttachments = views.data();
+            fci.width = rp.extent.width;
+            fci.height = rp.extent.height;
+            fci.layers = 1;
+            TEFRA_VK_CHECK(vkCreateFramebuffer(g_fb.device, &fci, nullptr, &e.fb));
+            g_fb.entries.push_back(e);
+            hit = &g_fb.entries.back();
+        }
+        hit->last_frame = g_fb.frame;
+        bi.framebuffer = hit->fb;
+    }
     bi.renderArea = {{0, 0}, rp.extent};
     bi.clearValueCount = static_cast<u32>(clears.size());
     bi.pClearValues = clears.data();

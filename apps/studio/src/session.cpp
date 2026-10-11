@@ -4,6 +4,8 @@
 #include "tefra/core/log.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <cstring>
 
 namespace tefra::studio {
 
@@ -54,7 +56,7 @@ bool Session::save(const std::string& path) {
     const std::string p = path.empty() ? path_ : path;
     if (p.empty() || state_ != PlayState::Edit) return false;
     if (!model_->save(p.c_str())) {
-        TEFRA_LOG_ERROR("Cannot save %s", p.c_str());
+        TEFRA_LOG_ERROR("Cannot save %s (%s)", p.c_str(), std::strerror(errno));
         return false;
     }
     path_ = p;

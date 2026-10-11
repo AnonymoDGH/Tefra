@@ -9,6 +9,7 @@
 
 #include "tefra/core/log.h"
 
+#include <cstdlib>
 #include <cstring>
 
 namespace tefra::rg {
@@ -467,6 +468,12 @@ void Graph::execute(VkCommandBuffer cmd) {
             g.transition(merged[k].tex, merged[k].req, merged[k].discard);
             g.textures[merged[k].tex].touched = true;
         }
+        // TEFRA_TRACE_PASSES=1 logs every pass before it is recorded (finds the pass a crashing driver dies in).
+        static const bool trace = [] {
+            const char* e = std::getenv("TEFRA_TRACE_PASSES");
+            return e && e[0] == '1';
+        }();
+        if (trace) TEFRA_LOG_INFO("render graph: recording pass '%s'", p.name);
         const u32 scope = g.timer ? g.timer->begin(cmd, p.name) : ~0u;
         if (!g.timer) rhi::cmd_begin_label(cmd, p.name);
         g.flush_barriers(cmd);

@@ -1,0 +1,83 @@
+{
+  "schema": "tefra-bench/1",
+  "engine": {
+    "version": "0.0.1",
+    "git": "2bfb17657080",
+    "build": "Release",
+    "compiler": "GCC 13.3.0"
+  },
+  "system": {
+    "os": "Ubuntu 24.04.5 LTS / Linux 6.18.44-fc-v114",
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+    "threads": 4,
+    "ram_mb": 16093
+  },
+  "device": {
+    "index": 0,
+    "name": "llvmpipe (LLVM 20.1.2, 256 bits)",
+    "vendor_id": 65541,
+    "device_id": 0,
+    "type": "cpu",
+    "api": "1.4.318",
+    "driver": "llvmpipe Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)",
+    "software": true
+  },
+  "config": {
+    "scene": "testpattern",
+    "tier": "native",
+    "width": 640,
+    "height": 360,
+    "frames": 12,
+    "warmup": 2,
+    "present": "headless",
+    "strict_baseline": true
+  },
+  "frame_ms": {
+    "mean": 2.86175,
+    "p50": 1.95941,
+    "p95": 10.2491,
+    "p99": 10.2491,
+    "max": 10.2491,
+    "samples": 9
+  },
+  "cpu_ms": {
+    "mean": 1.8684,
+    "p50": 1.83519,
+    "p95": 2.18473,
+    "p99": 2.18473,
+    "max": 2.18473,
+    "samples": 10
+  },
+  "gpu_ms": {
+    "total": {
+      "mean": 1.62649,
+      "p50": 1.64211,
+      "p95": 1.93776,
+      "p99": 1.93776,
+      "max": 1.93776,
+      "samples": 8
+    },
+    "passes": {
+      "testpattern": {
+        "mean": 1.62649,
+        "p50": 1.64211,
+        "p95": 1.93776,
+        "p99": 1.93776,
+        "max": 1.93776,
+        "samples": 8
+      }
+    }
+  },
+  "memory": {
+    "cpu_rss_mb": 315.391,
+    "gpu_used_mb": 0.878906,
+    "gpu_budget_mb": 16093.2
+  },
+  "draw_calls": 1,
+  "grass_blades": 0,
+  "validation": {
+    "enabled": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}
