@@ -197,7 +197,8 @@ void build_valley_scene(render::Scene& scene, render::Environment& env, const re
     build_atmosphere_environment(atmo, env, setup.settings.sun_direction);
 
     // Materials, prototypes and scatter: the same code the game runtime uses (world::populate_valley).
-    const vec2 start = world::populate_valley(scene, terrain, veg, "assets/cache");
+    world::LandscapeAssets assets;
+    const vec2 start = world::populate_valley(scene, terrain, veg, assets, "assets/cache");
     // Stand on the valley floor beside the river, looking downstream.
     const f32 z = start.y, x = start.x;
     setup.camera.position = {static_cast<f64>(x), static_cast<f64>(terrain.height_at(x, z) + 1.7f),
@@ -276,7 +277,8 @@ void build_coast_scene(render::Scene& scene, render::Environment& env, const ren
     setup.settings.cloud_coverage = 0.38f;
     build_atmosphere_environment(atmo, env, setup.settings.sun_direction);
 
-    const vec2 spot = world::populate_coast(scene, terrain, veg, "assets/cache");
+    world::LandscapeAssets assets;
+    const vec2 spot = world::populate_coast(scene, terrain, veg, assets, "assets/cache");
     // Stand on the beach, ~20 m from the water, looking out to sea (-Z).
     const f32 cx = spot.x, cz = spot.y;
     setup.camera.position = {f64(cx), f64(terrain.height_at(cx, cz) + 1.7f), f64(cz)};

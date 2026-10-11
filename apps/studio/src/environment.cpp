@@ -16,6 +16,10 @@ namespace tefra::studio {
 
 namespace {
 
+// Frames a changed Terrain or Ocean property must stay put before the landscape is rebuilt: a dragged value changes
+// every frame, and rebuilding per frame would stall the editor.
+constexpr u32 kSettleFrames = 8;
+
 // The editor's own values for the fields a landscape changes (App::init), used again when the place has no Terrain.
 void restore_editor_settings(render::RenderSettings& s) {
     const render::RenderSettings def{};
@@ -34,7 +38,8 @@ void restore_editor_settings(render::RenderSettings& s) {
 void App::sync_environment() {
     if (!environment_) environment_ = std::make_shared<world::EnvironmentSync>(*device_, *heap_, *scene_, *renderer_);
     world::EnvironmentSync& env = *std::static_pointer_cast<world::EnvironmentSync>(environment_);
-    const bool rebuilt = env.update(session_.model()); // rebuilds only when a Terrain or Ocean property changed
+    const bool rebuilt =
+        env.update(session_.model(), kSettleFrames); // rebuilds only when a Terrain or Ocean property changed
     if (!env.has_terrain()) {
         restore_editor_settings(settings_);
         return;

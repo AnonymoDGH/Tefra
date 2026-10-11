@@ -6,12 +6,13 @@
 // scenes, so a place with a Terrain looks like the bench scene it was copied from.
 //
 // Cost: the first generation of a field takes 1-4 s (TerrainField::acquire caches the last two). EnvironmentSync
-// rebuilds only when a Terrain or Ocean property changes; it waits for the GPU to be idle first. Rebuilding adds
-// meshes and materials to the Scene (the Scene has no removal yet), so every rebuild leaks a few MB of GPU memory
-// until a restart: tracked in docs/research/m3b-landscape/REPORT.md.
+// rebuilds only when a Terrain or Ocean property changes, and only after it has settled (see update()); it waits for
+// the GPU to be idle first. The meshes, textures and materials of the trees, palms and rocks are created once
+// (LandscapeAssets) and reused by every rebuild, so a rebuild adds nothing to the Scene.
 
 #include "tefra/core/math.h"
 #include "tefra/renderer/terrain_field.h"
+#include "tefra/renderer/vegetation.h"
 #include "tefra/world/datamodel.h"
 
 #include <memory>
@@ -47,14 +48,33 @@ f32 terrain_height(const Instance& terrain, f32 x, f32 z);
 
 // ---- Building blocks shared with tefra_bench (apps/common/scenes.cpp) --------------------------------------------
 
+// Scene resources of the landscape prototypes (materials, textures, meshes), built on first use and then reused:
+// the prototypes refer to them by index, and the Scene has no removal.
+struct LandscapeAssets {
+    struct Proto {
+        render::VegetationPrototype proto;
+        bool valid = false; // false when the model file is missing
+    };
+    bool valley_built = false, palms_built = false, rocks_built = false;
+    Proto valley[7]; // conifers [0..2], undergrowth [3..6] (fern, grass, rock, stump)
+    Proto palms[3];
+    Proto rocks[3]; // coast_rocks_05, sand_rocks_small_01, coast_land_rocks_02
+};
+
+// Builds the valley / palm / rock resources into assets (no-op when already built). cache_dir holds the CC0 assets
+// (textures/, models/); missing files are skipped.
+void build_valley_assets(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir = "assets/cache");
+void build_palm_assets(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir = "assets/cache");
+void build_rock_assets(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir = "assets/cache");
+
 // Valley materials, conifer and undergrowth prototypes and the forest scatter. Returns the start point (x, z) beside
-// the river. cache_dir holds the CC0 assets (textures/, models/); missing files are skipped.
+// the river.
 vec2 populate_valley(render::Scene& scene, const render::Terrain& terrain, render::Vegetation& veg,
-                     const std::string& cache_dir = "assets/cache");
+                     LandscapeAssets& assets, const std::string& cache_dir = "assets/cache");
 // Coast: palms on the back beach, reef / pebble / boulder rocks, the scatter. Returns the x, z of a beach spot
 // ~20 m from the water (the camera of the bench scene stands there).
 vec2 populate_coast(render::Scene& scene, const render::Terrain& terrain, render::Vegetation& veg,
-                    const std::string& cache_dir = "assets/cache");
+                    LandscapeAssets& assets, const std::string& cache_dir = "assets/cache");
 // Three procedural palm prototypes (bark and frond materials). palms[] receives the prototype indices.
 void add_palm_prototypes(render::Scene& scene, render::Vegetation& veg, u32 palms[3],
                          const std::string& cache_dir = "assets/cache");
@@ -70,15 +90,17 @@ class EnvironmentSync {
     EnvironmentSync& operator=(const EnvironmentSync&) = delete;
 
     // Call once per frame on the main thread. Rebuilds what changed in the model and returns true when anything was
-    // rebuilt (the caller may refresh lighting that depends on the landscape).
-    bool update(const DataModel& model);
+    // rebuilt (the caller may refresh lighting that depends on the landscape). While a landscape exists, an edit is
+    // applied once it has stayed the same for settle_frames consecutive calls (1 or 0: at once), so a value dragged
+    // every frame rebuilds once; the first build and a removal are applied at once.
+    bool update(const DataModel& model, u32 settle_frames = 1);
     // Detaches the landscape from the renderer and frees its GPU objects (before the device or heap go away).
     void clear();
 
     bool has_terrain() const;
     bool has_ocean() const;
     render::TerrainKind kind() const; // Valley / Coast; Valley when there is no terrain
-    f32 sea_level() const;            // 0 without a terrain
+    f32 sea_level() const;            // Terrain.SeaLevel as applied; 0 without a terrain
     // Height (m) of the landscape at (x, z); 0 without a terrain.
     f32 height_at(f32 x, f32 z) const;
     // The shared CPU field (null without a terrain).

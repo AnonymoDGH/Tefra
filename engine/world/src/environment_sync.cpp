@@ -90,10 +90,31 @@ f32 hash01(u32 a, u32 b, u32 c) {
     return static_cast<f32>(hash_u32(a * 73856093u ^ b * 19349663u ^ c * 83492791u) >> 8) / 16777216.0f;
 }
 
+// Undergrowth models (Poly Haven CC0): name, draw distance (m), scatter spacing (m).
+struct UnderSpec {
+    const char* name;
+    f32 dist;
+    f32 spacing;
+};
+constexpr UnderSpec kUnder[4] = {{"fern_02", 70.0f, 2.2f},
+                                 {"grass_medium_02", 45.0f, 1.1f},
+                                 {"rock_moss_set_01", 160.0f, 9.0f},
+                                 {"tree_stump_01", 160.0f, 21.0f}};
+
+// Shore rocks (Poly Haven CC0): name, draw distance (m). Reef rocks at the waterline, pebble clusters on the sand,
+// big boulders at the foot of the headlands.
+struct RockSpec {
+    const char* name;
+    f32 dist;
+};
+constexpr RockSpec kRocks[3] = {
+    {"coast_rocks_05", 450.0f}, {"sand_rocks_small_01", 140.0f}, {"coast_land_rocks_02", 900.0f}};
+
 } // namespace
 
-vec2 populate_valley(render::Scene& scene, const render::Terrain& terrain, render::Vegetation& veg,
-                     const std::string& cache_dir) {
+void build_valley_assets(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir) {
+    if (assets.valley_built) return;
+    assets.valley_built = true;
     // ---- Materials --------------------------------------------------------------------------------
     const std::string tex = cache_dir + "/textures/";
     render::MaterialGPU bark = plain(scene, {1, 1, 1}, 1.0f, 0.0f);
@@ -138,7 +159,6 @@ vec2 populate_valley(render::Scene& scene, const render::Terrain& terrain, rende
         f32 h, r;
     };
     const Variant variants[3] = {{11, 30.0f, 0.55f}, {23, 24.0f, 0.42f}, {37, 36.0f, 0.68f}};
-    u32 tree_protos[3];
     for (int v = 0; v < 3; ++v) {
         const render::ConiferMeshes cm = render::make_conifer(variants[v].seed, variants[v].h, variants[v].r);
         TEFRA_LOG_INFO("Conifer %d: LOD0 %u triangles (trunk %u, crown %u)", v,
@@ -163,23 +183,13 @@ vec2 populate_valley(render::Scene& scene, const render::Terrain& terrain, rende
         p.canopy_radius = cm.canopy_radius;
         p.canopy_top = cm.height * 0.98f;
         p.canopy_density = 1.4f;
-        tree_protos[v] = veg.add_prototype(p);
+        assets.valley[v] = {p, true};
     }
 
     // ---- Undergrowth prototypes (Poly Haven CC0) ------------------------------------------------------
     const std::string models = cache_dir + "/models/";
-    struct Under {
-        const char* name;
-        f32 dist;
-        f32 spacing;
-        u32 proto = ~0u;
-    };
-    Under under[4] = {{"fern_02", 70.0f, 2.2f},
-                      {"grass_medium_02", 45.0f, 1.1f},
-                      {"rock_moss_set_01", 160.0f, 9.0f},
-                      {"tree_stump_01", 160.0f, 21.0f}};
-    for (Under& u : under) {
-        const std::string path = models + u.name + "/" + u.name + ".gltf";
+    for (u32 k = 0; k < 4; ++k) {
+        const std::string path = models + kUnder[k].name + "/" + kUnder[k].name + ".gltf";
         if (!file_exists(path.c_str())) continue;
         const LoadedModel lm = load_model(scene, path);
         if (lm.mesh[0] == ~0u) continue;
@@ -188,18 +198,26 @@ vec2 populate_valley(render::Scene& scene, const render::Terrain& terrain, rende
         p.lods[0].material[0] = lm.material[0];
         p.lods[0].mesh[1] = lm.mesh[1];
         p.lods[0].material[1] = lm.material[1];
-        p.lods[0].max_distance = u.dist;
+        p.lods[0].max_distance = kUnder[k].dist;
         p.radius = lm.radius;
         p.center_y = lm.center_y;
-        p.wind = (std::string(u.name).find("grass") != std::string::npos ||
-                  std::string(u.name).find("fern") != std::string::npos)
-                     ? 1.0f
-                     : 0.0f;
-        p.cast_shadows = std::string(u.name).find("grass") == std::string::npos;
+        const std::string name = kUnder[k].name;
+        p.wind = (name.find("grass") != std::string::npos || name.find("fern") != std::string::npos) ? 1.0f : 0.0f;
+        p.cast_shadows = name.find("grass") == std::string::npos;
         p.shadow_distance = 40.0f;
-        u.proto = veg.add_prototype(p);
+        assets.valley[3 + k] = {p, true};
     }
     scene.upload();
+}
+
+vec2 populate_valley(render::Scene& scene, const render::Terrain& terrain, render::Vegetation& veg,
+                     LandscapeAssets& assets, const std::string& cache_dir) {
+    build_valley_assets(scene, assets, cache_dir);
+    u32 tree_protos[3];
+    for (u32 v = 0; v < 3; ++v) tree_protos[v] = veg.add_prototype(assets.valley[v].proto);
+    u32 under_protos[4];
+    for (u32 k = 0; k < 4; ++k)
+        under_protos[k] = assets.valley[3 + k].valid ? veg.add_prototype(assets.valley[3 + k].proto) : ~0u;
 
     // ---- Scatter ---------------------------------------------------------------------------------
     const f32 half = terrain.world_size() * 0.5f - 4.0f;
@@ -228,8 +246,8 @@ vec2 populate_valley(render::Scene& scene, const render::Terrain& terrain, rende
     const f32 cz0 = -120.0f, cx0 = -terrain.river_distance(0.0f, cz0) + 18.0f;
     u32 small = 0;
     for (u32 k = 0; k < 4; ++k) {
-        if (under[k].proto == ~0u) continue;
-        const f32 sp = under[k].spacing, R = k < 2 ? 220.0f : 500.0f;
+        if (under_protos[k] == ~0u) continue;
+        const f32 sp = kUnder[k].spacing, R = k < 2 ? 220.0f : 500.0f;
         for (f32 z = cz0 - R; z < cz0 + R; z += sp)
             for (f32 x = cx0 - R; x < cx0 + R; x += sp) {
                 const u32 ix = static_cast<u32>(i32((x - cx0 + R) / sp)),
@@ -241,7 +259,7 @@ vec2 populate_valley(render::Scene& scene, const render::Terrain& terrain, rende
                 if (hash01(ix, iz, 31 + k) > (k < 2 ? 0.55f : 0.5f)) continue;
                 const f32 h = terrain.height_at(px, pz);
                 const f32 scale = (k == 3 ? 0.8f : 0.7f) + 0.6f * hash01(ix, iz, 41 + k);
-                veg.add_instance(under[k].proto, {px, h - 0.05f, pz}, hash01(ix, iz, 51 + k) * kTwoPi, scale,
+                veg.add_instance(under_protos[k], {px, h - 0.05f, pz}, hash01(ix, iz, 51 + k) * kTwoPi, scale,
                                  hash01(ix, iz, 61 + k));
                 ++small;
             }
@@ -252,8 +270,9 @@ vec2 populate_valley(render::Scene& scene, const render::Terrain& terrain, rende
     return vec2{cx0, cz0};
 }
 
-void add_palm_prototypes(render::Scene& scene, render::Vegetation& veg, u32 palm_protos[3],
-                         const std::string& cache_dir) {
+void build_palm_assets(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir) {
+    if (assets.palms_built) return;
+    assets.palms_built = true;
     const std::string tex = cache_dir + "/textures/";
     render::MaterialGPU bark = plain(scene, {1, 1, 1}, 0.9f, 0.0f);
     bark.base_color = {0.62f, 0.58f, 0.54f, 1.0f};
@@ -321,24 +340,15 @@ void add_palm_prototypes(render::Scene& scene, render::Vegetation& veg, u32 palm
         p.canopy_radius = pm.canopy_radius;
         p.canopy_top = pm.height;
         p.canopy_density = 0.9f;
-        palm_protos[v] = veg.add_prototype(p);
+        assets.palms[v] = {p, true};
     }
 }
 
-vec2 populate_coast(render::Scene& scene, const render::Terrain& terrain, render::Vegetation& veg,
-                    const std::string& cache_dir) {
-    u32 palms[3];
-    add_palm_prototypes(scene, veg, palms, cache_dir);
-    // Shore rocks (Poly Haven CC0): reef rocks at the waterline, pebble clusters on the sand, big boulders at the
-    // foot of the headlands.
-    struct Rock {
-        const char* name;
-        f32 dist;
-        u32 proto = ~0u;
-    };
-    Rock rocks[3] = {{"coast_rocks_05", 450.0f}, {"sand_rocks_small_01", 140.0f}, {"coast_land_rocks_02", 900.0f}};
-    for (Rock& r : rocks) {
-        const std::string path = std::string(cache_dir + "/models/") + r.name + "/" + r.name + ".gltf";
+void build_rock_assets(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir) {
+    if (assets.rocks_built) return;
+    assets.rocks_built = true;
+    for (u32 k = 0; k < 3; ++k) {
+        const std::string path = cache_dir + "/models/" + kRocks[k].name + "/" + kRocks[k].name + ".gltf";
         if (!file_exists(path.c_str())) continue;
         const LoadedModel lm = load_model(scene, path);
         if (lm.mesh[0] == ~0u) continue;
@@ -347,14 +357,31 @@ vec2 populate_coast(render::Scene& scene, const render::Terrain& terrain, render
         p.lods[0].material[0] = lm.material[0];
         p.lods[0].mesh[1] = lm.mesh[1];
         p.lods[0].material[1] = lm.material[1];
-        p.lods[0].max_distance = r.dist;
+        p.lods[0].max_distance = kRocks[k].dist;
         p.radius = lm.radius;
         p.center_y = lm.center_y;
         p.wind = 0.0f;
         p.shadow_distance = 150.0f;
-        r.proto = veg.add_prototype(p);
+        assets.rocks[k] = {p, true};
     }
     scene.upload();
+}
+
+void add_palm_prototypes(render::Scene& scene, render::Vegetation& veg, u32 palm_protos[3],
+                         const std::string& cache_dir) {
+    LandscapeAssets assets;
+    build_palm_assets(scene, assets, cache_dir);
+    for (u32 v = 0; v < 3; ++v) palm_protos[v] = veg.add_prototype(assets.palms[v].proto);
+}
+
+vec2 populate_coast(render::Scene& scene, const render::Terrain& terrain, render::Vegetation& veg,
+                    LandscapeAssets& assets, const std::string& cache_dir) {
+    build_palm_assets(scene, assets, cache_dir);
+    build_rock_assets(scene, assets, cache_dir);
+    u32 palms[3];
+    for (u32 v = 0; v < 3; ++v) palms[v] = veg.add_prototype(assets.palms[v].proto);
+    u32 rock_protos[3];
+    for (u32 k = 0; k < 3; ++k) rock_protos[k] = assets.rocks[k].valid ? veg.add_prototype(assets.rocks[k].proto) : ~0u;
 
     const f32 half = terrain.world_size() * 0.5f - 10.0f;
     auto seaward = [&](f32 x, f32 z) {
@@ -384,7 +411,7 @@ vec2 populate_coast(render::Scene& scene, const render::Terrain& terrain, render
     // Rocks.
     const f32 rsp[3] = {7.0f, 9.0f, 22.0f};
     for (u32 k = 0; k < 3; ++k) {
-        if (rocks[k].proto == ~0u) continue;
+        if (rock_protos[k] == ~0u) continue;
         for (f32 z = -800.0f; z < 300.0f; z += rsp[k])
             for (f32 x = -half; x < half; x += rsp[k]) {
                 const u32 ix = static_cast<u32>(i32((x + half) / rsp[k])),
@@ -401,7 +428,7 @@ vec2 populate_coast(render::Scene& scene, const render::Terrain& terrain, render
                     prob = 0.6f * headland;
                 if (hash01(ix, iz, 31 + k) > prob) continue;
                 const f32 scale = (k == 2 ? 0.8f : 0.6f) + (k == 2 ? 0.7f : 1.0f) * hash01(ix, iz, 41 + k);
-                veg.add_instance(rocks[k].proto, {px, terrain.height_at(px, pz) - 0.25f * scale, pz},
+                veg.add_instance(rock_protos[k], {px, terrain.height_at(px, pz) - 0.25f * scale, pz},
                                  hash01(ix, iz, 51 + k) * kTwoPi, scale, hash01(ix, iz, 61 + k));
                 ++n_rocks;
             }
@@ -499,12 +526,18 @@ struct EnvironmentSync::Impl {
     rhi::BindlessHeap& heap;
     render::Scene& scene;
     render::Renderer& renderer;
+    LandscapeAssets assets; // kept across rebuilds: a rebuild adds nothing to the Scene
     std::unique_ptr<render::Terrain> terrain;
     std::unique_ptr<render::Vegetation> vegetation;
     std::unique_ptr<render::Water> water;
     std::unique_ptr<render::Ocean> ocean;
     TerrainSig terrain_sig;
     OceanSig ocean_sig;
+    // Settling: a changed signature is applied only after it stayed the same for the requested number of frames.
+    bool has_pending = false;
+    TerrainSig pending_terrain;
+    OceanSig pending_ocean;
+    u32 pending_frames = 0;
     u64 revision = 0;
 
     void publish() {
@@ -536,7 +569,7 @@ void EnvironmentSync::clear() {
     s.ocean_sig = OceanSig{};
 }
 
-bool EnvironmentSync::update(const DataModel& model) {
+bool EnvironmentSync::update(const DataModel& model, u32 settle_frames) {
     Impl& s = *impl_;
     const Instance* t = find_terrain(model);
     TerrainSig ts;
@@ -559,7 +592,24 @@ bool EnvironmentSync::update(const DataModel& model) {
         const vec3 w = o->get_vec3("WindDirection", vec3{0.18f, 0.0f, 1.0f});
         os.wind = vec2{w.x, w.z};
     }
-    if (ts == s.terrain_sig && os == s.ocean_sig) return false;
+    if (ts == s.terrain_sig && os == s.ocean_sig) {
+        s.has_pending = false;
+        return false;
+    }
+    if (settle_frames > 1 && s.terrain_sig.present && ts.present) {
+        // A landscape property dragged every frame keeps changing: wait until it rests (one rebuild per gesture). The
+        // first build and removals are applied at once.
+        if (!s.has_pending || ts != s.pending_terrain || os != s.pending_ocean) {
+            s.has_pending = true;
+            s.pending_terrain = ts;
+            s.pending_ocean = os;
+            s.pending_frames = 1;
+        } else {
+            ++s.pending_frames;
+        }
+        if (s.pending_frames < settle_frames) return false;
+    }
+    s.has_pending = false;
 
     if (ts != s.terrain_sig) {
         // Terrain (and the water that depends on it): rebuild everything.
@@ -578,9 +628,9 @@ bool EnvironmentSync::update(const DataModel& model) {
             if (ts.vegetation) {
                 s.vegetation = std::make_unique<render::Vegetation>(s.dev, s.scene);
                 if (td.kind == render::TerrainKind::Coast)
-                    populate_coast(s.scene, *s.terrain, *s.vegetation);
+                    populate_coast(s.scene, *s.terrain, *s.vegetation, s.assets);
                 else
-                    populate_valley(s.scene, *s.terrain, *s.vegetation);
+                    populate_valley(s.scene, *s.terrain, *s.vegetation, s.assets);
             }
             if (td.kind == render::TerrainKind::Valley) s.water = std::make_unique<render::Water>(s.dev, *s.terrain);
             ++s.revision;
@@ -614,7 +664,8 @@ render::TerrainKind EnvironmentSync::kind() const {
     return impl_->terrain ? impl_->terrain->kind() : render::TerrainKind::Valley;
 }
 
-f32 EnvironmentSync::sea_level() const { return impl_->terrain ? impl_->terrain->sea_level() : 0.0f; }
+// The sea of the Terrain property (the shared field of a valley keeps the level it was generated with).
+f32 EnvironmentSync::sea_level() const { return impl_->terrain ? impl_->terrain_sig.sea : 0.0f; }
 
 f32 EnvironmentSync::height_at(f32 x, f32 z) const { return impl_->terrain ? impl_->terrain->height_at(x, z) : 0.0f; }
 
