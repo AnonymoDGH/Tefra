@@ -285,7 +285,7 @@ void App::init_imgui() {
     ii.Device = device_->device();
     ii.QueueFamily = device_->queue_family();
     ii.Queue = device_->queue();
-    ii.DescriptorPoolSize = 64;
+    ii.DescriptorPoolSize = 1024; // thumbnails, in-game UI images, the viewport
     ii.MinImageCount = 2;
     ii.ImageCount = max(2u, swapchain_->image_count());
     ii.PipelineInfoMain.RenderPass = ui_pass_;

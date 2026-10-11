@@ -31,7 +31,7 @@ if(TEFRA_WITH_WINDOW)
         studio/src/app.cpp studio/src/ui.cpp studio/src/play.cpp studio/src/home.cpp studio/src/export.cpp
         studio/src/import.cpp studio/src/file_dialog.cpp studio/src/environment.cpp)
     target_link_libraries(tefra_studio_app
-        PUBLIC tefra_studio_core tefra_platform tefra_imgui tefra_imguizmo tefra_runtime tefra_audio tefra_ui tefra_mcp
+        PUBLIC tefra_studio_core tefra_platform tefra_imgui tefra_imguizmo tefra_runtime tefra_audio tefra_ui tefra_mcp tefra_rbx
         PRIVATE tefra_compile_options)
     target_compile_definitions(tefra_studio_app PRIVATE TEFRA_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
                                                         TEFRA_VERSION="${PROJECT_VERSION}")
