@@ -317,7 +317,6 @@ namespace Tefra
             if (amount <= 0f) return;
             Health = Math.Max(0f, Health - amount);
         }
-        public string DisplayName { get => GetString(NameP); set => SetString(NameP, value); }
         public HumanoidDisplayDistanceType DisplayDistanceType { get => (HumanoidDisplayDistanceType)GetInt(KindP); set => SetEnum(KindP, (int)value); }
         public float NameDisplayDistance { get => GetFloat(DistanceP); set => SetFloat(DistanceP, value); }
     }
@@ -510,7 +509,6 @@ namespace Tefra
 
         internal static Vector2 ToV2(Vector3 v) => new Vector2(v.X, v.Y);
         internal static Vector3 FromV2(Vector2 v) => new Vector3(v.X, v.Y, 0f);
-        public Vector3 AnchorPoint { get => GetVector3(AnchorP); set => SetVector3(AnchorP, value); }
         public int LayoutOrder { get => GetInt(LayoutOrderP); set => SetInt(LayoutOrderP, value); }
         public bool ClipsDescendants { get => GetBool(ClipsP); set => SetBool(ClipsP, value); }
     }
@@ -549,9 +547,6 @@ namespace Tefra
         public TextXAlignment TextXAlignment { get => (TextXAlignment)GetInt(TextXAlignmentP); set => SetEnum(TextXAlignmentP, (int)value); }
         public TextYAlignment TextYAlignment { get => (TextYAlignment)GetInt(TextYAlignmentP); set => SetEnum(TextYAlignmentP, (int)value); }
         public Font Font { get => (Font)GetInt(FontP); set => SetEnum(FontP, (int)value); }
-        public float TextStrokeTransparency { get => GetFloat(StrokeP); set => SetFloat(StrokeP, value); }
-        public TextXAlignment TextXAlignment { get => (TextXAlignment)GetInt(XAlignP); set => SetEnum(XAlignP, (int)value); }
-        public TextYAlignment TextYAlignment { get => (TextYAlignment)GetInt(YAlignP); set => SetEnum(YAlignP, (int)value); }
     }
 
     public class TextButton : TextLabel
@@ -588,7 +583,6 @@ namespace Tefra
             add => AddSignal("MouseLeave", value);
             remove => RemoveSignal("MouseLeave", value);
         }
-        public bool AutoButtonColor { get => GetBool(AutoP); set => SetBool(AutoP, value); }
     }
 
     public class ImageLabel : GuiObject
@@ -606,7 +600,6 @@ namespace Tefra
         public Color3 ImageColor { get => GetColor3(ImageColorP); set => SetColor3(ImageColorP, value); }
         public float ImageTransparency { get => GetFloat(ImageTransparencyP); set => SetFloat(ImageTransparencyP, value); }
         public ScaleType ScaleType { get => (ScaleType)GetInt(ScaleTypeP); set => SetEnum(ScaleTypeP, (int)value); }
-        public ScaleType ScaleType { get => (ScaleType)GetInt(ScaleP); set => SetEnum(ScaleP, (int)value); }
     }
 
     public class ImageButton : ImageLabel
@@ -641,7 +634,6 @@ namespace Tefra
             add => AddSignal("MouseLeave", value);
             remove => RemoveSignal("MouseLeave", value);
         }
-        public bool AutoButtonColor { get => GetBool(AutoP); set => SetBool(AutoP, value); }
     }
 
     // ---- Audio -------------------------------------------------------------------------------------------------
