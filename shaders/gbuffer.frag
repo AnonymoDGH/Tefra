@@ -44,7 +44,15 @@ float fbm3(vec3 p) {
 void main() {
     Material m = pc.materials.m[v_material];
     vec4 base = texture(TEX2D(m.base_color_tex, SMP_ANISO_REPEAT), v_uv) * m.base_color;
-    if (m.emissive_cutoff.w > 0.0 && base.a < m.emissive_cutoff.w) discard;
+    if (m.emissive_cutoff.w > 0.0) {
+        // Alpha-tested cards (palm fronds, needles, leaves): mip averaging thins the coverage with distance until
+        // far crowns vanish. Boost alpha by the mip level and sharpen it to the pixel (Golus, "Anti-aliased alpha
+        // test"), so distant foliage keeps its body.
+        const float lod = textureQueryLod(TEX2D(m.base_color_tex, SMP_ANISO_REPEAT), v_uv).y;
+        float a = base.a * (1.0 + max(lod, 0.0) * 0.25);
+        a = (a - m.emissive_cutoff.w) / max(fwidth(a), 1e-4) + 0.5;
+        if (a < 0.5) discard;
+    }
     vec3 orm = texture(TEX2D(m.orm_tex, SMP_ANISO_REPEAT), v_uv).rgb;
     float ao = mix(1.0, orm.r, m.occlusion_strength);
     if ((m.flags & 1u) != 0u) ao *= clamp(abs(v_tangent.w), 0.0, 1.0); // foliage: baked crown occlusion
