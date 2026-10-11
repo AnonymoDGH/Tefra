@@ -66,6 +66,7 @@ namespace tefra::studio {
 struct StudioConfig {
     u32 width = 1600, height = 900;
     bool validation = false;
+    i32 gpu_index = -1;       // -1 = auto; --gpu N or TEFRA_GPU=N picks a Vulkan device by index (see the log)
     std::string open_path;    // .tefra to open at start
     bool demo = false;        // build the demo scene instead of the baseplate
     std::string capture_path; // non-interactive: render `frames` frames, save the window as PNG and quit

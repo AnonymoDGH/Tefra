@@ -11,6 +11,7 @@
 #include "tefra/core/json_value.h"
 #include "tefra/core/log.h"
 
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -63,6 +64,9 @@ int main(int argc, char** argv) {
     cfg.height = static_cast<u32>(cl.get_int("height", static_cast<i64>(cfg.height)));
     cfg.fullscreen = cfg.fullscreen || cl.has("fullscreen");
     cfg.validation = cl.has("validation");
+    cfg.gpu_index = static_cast<i32>(cl.get_int("gpu", -1));
+    if (cfg.gpu_index < 0)
+        if (const char* g = std::getenv("TEFRA_GPU")) cfg.gpu_index = std::atoi(g);
     if (const char* c = cl.get("capture")) cfg.capture_path = c;
     cfg.frames = static_cast<u32>(cl.get_int("frames", cfg.capture_path.empty() ? 0 : 60));
     if (!file_exists(place.c_str())) {

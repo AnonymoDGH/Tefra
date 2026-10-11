@@ -10,6 +10,7 @@
 #include "tefra/core/log.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 using namespace tefra;
@@ -33,6 +34,9 @@ int main(int argc, char** argv) {
     cfg.width = static_cast<u32>(cl.get_int("width", 1600));
     cfg.height = static_cast<u32>(cl.get_int("height", 900));
     cfg.validation = cl.has("validation");
+    cfg.gpu_index = static_cast<i32>(cl.get_int("gpu", -1));
+    if (cfg.gpu_index < 0)
+        if (const char* g = std::getenv("TEFRA_GPU")) cfg.gpu_index = std::atoi(g);
     cfg.demo = cl.has("demo");
     cfg.play_at_start = cl.has("play");
     cfg.mcp_port = cl.has("no-mcp") ? u16(0) : static_cast<u16>(cl.get_int("mcp-port", 44755));

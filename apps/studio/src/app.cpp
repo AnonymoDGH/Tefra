@@ -128,6 +128,7 @@ bool App::init(std::string* error) {
     rhi::DeviceDesc dd;
     dd.app_name = cfg_.player ? "tefra_player" : "tefra_studio";
     dd.validation = cfg_.validation;
+    dd.gpu_index = cfg_.gpu_index;
     dd.instance_extensions = platform::Window::required_instance_extensions();
     device_ = rhi::Device::create(dd);
     if (!device_) {
