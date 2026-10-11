@@ -56,6 +56,9 @@ f32 srgb_to_linear(f32 c) {
     return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
 }
 int to_byte(f32 v) { return static_cast<int>(clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); }
+
+constexpr f32 kMinTextPx = 1.0f;
+constexpr f32 kMaxTextPx = 512.0f; // TextScaled on a short word can ask for a huge size: the glyph atlas would explode
 ImU32 srgb_color(vec3 c, f32 transparency) {
     const f32 a = clamp(1.0f - transparency, 0.0f, 1.0f);
     return IM_COL32(to_byte(srgb_to_linear(c.x)), to_byte(srgb_to_linear(c.y)), to_byte(srgb_to_linear(c.z)),
@@ -117,6 +120,14 @@ void place_list(const Instance& lay, Rect box, const std::vector<Instance*>& kid
     }
 }
 
+// Cells that fit in `span`. The float count is clamped to `n` before the integer conversion: a tiny CellSize would
+// otherwise convert an out-of-range float to usize (undefined behaviour).
+usize cells_that_fit(f32 span, f32 step, usize n) {
+    const f32 fit = std::max(1.0f, std::floor(span / step));
+    if (!(fit < static_cast<f32>(n))) return n; // also catches NaN and infinity
+    return static_cast<usize>(fit);
+}
+
 // UIGridLayout: equal cells, filled across (Horizontal: rows) or down (Vertical: columns) as many as fit.
 void place_grid(const Instance& lay, Rect box, const std::vector<Instance*>& kids, std::vector<PlacedChild>& out) {
     if (kids.empty()) return;
@@ -127,9 +138,9 @@ void place_grid(const Instance& lay, Rect box, const std::vector<Instance*>& kid
     const f32 step_x = cell.x + pad.x, step_y = cell.y + pad.y;
     usize across = n; // cells per row (Horizontal) or per column (Vertical)
     if (horizontal && step_x > 0.0f)
-        across = static_cast<usize>(std::max(1.0f, std::floor((box.size.x + pad.x) / step_x)));
+        across = cells_that_fit(box.size.x + pad.x, step_x, n);
     else if (!horizontal && step_y > 0.0f)
-        across = static_cast<usize>(std::max(1.0f, std::floor((box.size.y + pad.y) / step_y)));
+        across = cells_that_fit(box.size.y + pad.y, step_y, n);
     across = std::max<usize>(1, std::min(across, n));
     const usize lines = (n + across - 1) / across;
     const f32 cols = static_cast<f32>(horizontal ? across : lines);
@@ -435,11 +446,12 @@ void draw_text(DrawCtx& c, Instance& g, Rect r, ImVec2 a, ImVec2 b) {
     }
     if (text.empty() && !focused) return;
     const GuiFont family = static_cast<GuiFont>(std::min<u32>(enum_at(g, "Font"), 2));
-    f32 size = g.get_float("TextSize", 20.0f);
+    // A TextSize of 0 or a negative one from a script would make ImGui bake an empty or huge glyph set; keep it sane.
+    f32 size = clamp(g.get_float("TextSize", 20.0f), kMinTextPx, kMaxTextPx);
     ImFont* font = c.impl->font_for(family);
     ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str());
     if (g.get_bool("TextScaled") && ts.y > 0.0f) {
-        size = text_scaled_size(size, {r.size.x, r.size.y}, {ts.x, ts.y});
+        size = clamp(text_scaled_size(size, {r.size.x, r.size.y}, {ts.x, ts.y}), kMinTextPx, kMaxTextPx);
         ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str());
     }
     const u32 xal = enum_at(g, "TextXAlignment", 1), yal = enum_at(g, "TextYAlignment", 1);

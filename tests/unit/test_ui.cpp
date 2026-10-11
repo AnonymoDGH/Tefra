@@ -6,8 +6,10 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <cmath>
 #include <string>
+#include <vector>
 
 using namespace tefra;
 using namespace tefra::ui;
@@ -319,4 +321,159 @@ TEST_CASE("ui text entry: focus, typing, Backspace and Enter") {
     CHECK(box->get_string("Text") == "h");
 
     ImGui::DestroyContext();
+}
+
+// ---- regressions found by the verifier pass -----------------------------------------------------------------------
+
+namespace {
+
+// A headless ImGui context: default font atlas, no backend (draw lists are built, never rendered).
+struct HeadlessImGui {
+    HeadlessImGui() {
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(800, 600);
+        io.DeltaTime = 1.0f / 60.0f;
+        io.IniFilename = nullptr;
+        io.Fonts->AddFontDefault();
+        io.Fonts->Build();
+    }
+    ~HeadlessImGui() { ImGui::DestroyContext(); }
+};
+
+// Draws `root` (a StarterGui with ShowDevelopmentGui, so the non-interactive preview path runs) and returns the
+// vertices that GameGui::draw appended to the window draw list.
+std::vector<ImDrawVert> draw_vertices(GameGui& gui, Instance& root, const GuiCamera* cam = nullptr) {
+    ImGui::NewFrame();
+    ImGui::Begin("ui_regression");
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const int from = dl->VtxBuffer.Size;
+    gui.draw(dl, rect(0, 0, 800, 600), root, nullptr, false, cam);
+    std::vector<ImDrawVert> out(dl->VtxBuffer.Data + from, dl->VtxBuffer.Data + dl->VtxBuffer.Size);
+    ImGui::End();
+    ImGui::Render();
+    return out;
+}
+
+} // namespace
+
+TEST_CASE("ui colours: sRGB authored colours reach ImGui as linear") {
+    HeadlessImGui imgui;
+    DataModel dm;
+    Instance* starter = dm.find_path("StarterGui");
+    starter->set("ShowDevelopmentGui", Value::boolean(true));
+    Instance* screen = dm.create("ScreenGui", starter, "Screen");
+    Instance* f = make_gui(dm, screen, "Frame", {0, 0, 0}, {0, 0, 0}, {100, 100, 0});
+    f->set("BackgroundColor", Value::color3({0.5f, 0.5f, 0.5f}));
+    GameGui gui;
+    const std::vector<ImDrawVert> verts = draw_vertices(gui, *starter);
+    REQUIRE(!verts.empty());
+    // Exact sRGB -> linear transfer of 0.5, quantised to 8 bits (what ImGui's vertex colour holds).
+    const f32 lin = std::pow((0.5f + 0.055f) / 1.055f, 2.4f);
+    const u32 expect = static_cast<u32>(lin * 255.0f + 0.5f);
+    CHECK((verts[0].col & 0xFFu) == expect);
+    CHECK(((verts[0].col >> 8) & 0xFFu) == expect);
+    CHECK(((verts[0].col >> 16) & 0xFFu) == expect);
+    CHECK((verts[0].col >> 24) == 255u); // alpha is not gamma-encoded
+    CHECK(expect < 128u);                // 0.5 sRGB is much darker than 128 once linearised
+}
+
+TEST_CASE("ui rotation: a rotated object turns its vertices around its centre") {
+    HeadlessImGui imgui;
+    DataModel dm;
+    Instance* starter = dm.find_path("StarterGui");
+    starter->set("ShowDevelopmentGui", Value::boolean(true));
+    Instance* screen = dm.create("ScreenGui", starter, "Screen");
+    // 200 x 100 at (100, 100): centre (200, 150). A 90 degree turn swaps the extents: x 150..250, y 50..250.
+    Instance* f = make_gui(dm, screen, "Frame", {0, 0, 0}, {0, 0, 0}, {200, 100, 0});
+    f->set("PositionOffset", Value::vector3({100, 100, 0}));
+    f->set("Rotation", Value::number(90.0));
+    GameGui gui;
+    const std::vector<ImDrawVert> verts = draw_vertices(gui, *starter);
+    REQUIRE(verts.size() >= 4);
+    f32 minx = 1e9f, maxx = -1e9f, miny = 1e9f, maxy = -1e9f;
+    for (const ImDrawVert& v : verts) {
+        minx = std::min(minx, v.pos.x);
+        maxx = std::max(maxx, v.pos.x);
+        miny = std::min(miny, v.pos.y);
+        maxy = std::max(maxy, v.pos.y);
+    }
+    CHECK(near(minx, 150.0f));
+    CHECK(near(maxx, 250.0f));
+    CHECK(near(miny, 50.0f));
+    CHECK(near(maxy, 250.0f));
+}
+
+TEST_CASE("ui images: Crop fills the box and Fit keeps the whole image") {
+    static int dummy_texture = 0;
+    HeadlessImGui imgui;
+    DataModel dm;
+    Instance* starter = dm.find_path("StarterGui");
+    starter->set("ShowDevelopmentGui", Value::boolean(true));
+    Instance* screen = dm.create("ScreenGui", starter, "Screen");
+    GameGui gui;
+    // The image is 200 x 100 (aspect 2); the box is 100 x 100.
+    gui.set_texture_loader([](const std::string&, vec2* size) -> void* {
+        if (size) *size = vec2{200.0f, 100.0f};
+        return &dummy_texture;
+    });
+
+    Instance* crop = make_gui(dm, screen, "ImageLabel", {0, 0, 0}, {0, 0, 0}, {100, 100, 0});
+    crop->set("Image", Value::string("ui_test.png"));
+    crop->set("BackgroundTransparency", Value::number(1.0));
+    crop->set("ScaleType", Value::enumeration(2)); // Crop
+    std::vector<ImDrawVert> verts = draw_vertices(gui, *starter);
+    REQUIRE(verts.size() >= 4);
+    f32 umin = 1e9f, umax = -1e9f;
+    for (const ImDrawVert& v : verts) {
+        umin = std::min(umin, v.uv.x);
+        umax = std::max(umax, v.uv.x);
+    }
+    CHECK(near(umin, 0.25f)); // the middle half of the width is shown
+    CHECK(near(umax, 0.75f));
+
+    crop->set("ScaleType", Value::enumeration(1)); // Fit: 100 x 50 centred vertically in the box
+    verts = draw_vertices(gui, *starter);
+    REQUIRE(verts.size() >= 4);
+    f32 miny = 1e9f, maxy = -1e9f, minx = 1e9f, maxx = -1e9f;
+    for (const ImDrawVert& v : verts) {
+        miny = std::min(miny, v.pos.y);
+        maxy = std::max(maxy, v.pos.y);
+        minx = std::min(minx, v.pos.x);
+        maxx = std::max(maxx, v.pos.x);
+    }
+    CHECK(near(minx, 0.0f));
+    CHECK(near(maxx, 100.0f));
+    CHECK(near(miny, 25.0f));
+    CHECK(near(maxy, 75.0f));
+}
+
+TEST_CASE("ui layout: a tiny grid cell does not overflow the cell count") {
+    DataModel dm;
+    Instance* starter = dm.find_path("StarterGui");
+    Instance* screen = dm.create("ScreenGui", starter, "Screen");
+    Instance* box = make_gui(dm, screen, "Frame", {0, 0, 0}, {0, 0, 0}, {100, 100, 0});
+    Instance* grid = make_child(dm, box, "UIGridLayout");
+    grid->set("CellSize", Value::vector3({1e-30f, 10.0f, 0.0f})); // 100 / 1e-30 does not fit a usize
+    grid->set("CellPadding", Value::vector3({0.0f, 0.0f, 0.0f}));
+    for (int i = 0; i < 3; ++i) make_child(dm, box, "TextLabel");
+    const std::vector<PlacedChild> placed = layout_children(*box, rect(0, 0, 100, 100));
+    CHECK(placed.size() == 3);
+}
+
+TEST_CASE("ui text: a zero or huge TextSize is clamped, nothing crashes") {
+    HeadlessImGui imgui;
+    DataModel dm;
+    Instance* starter = dm.find_path("StarterGui");
+    starter->set("ShowDevelopmentGui", Value::boolean(true));
+    Instance* screen = dm.create("ScreenGui", starter, "Screen");
+    Instance* a = make_gui(dm, screen, "TextLabel", {0, 0, 0}, {0, 0, 0}, {300, 60, 0});
+    a->set("Text", Value::string("zero"));
+    a->set("TextSize", Value::number(0.0));
+    Instance* b = make_gui(dm, screen, "TextLabel", {0, 0, 0}, {0, 0, 0}, {300, 60, 0});
+    b->set("Text", Value::string("huge"));
+    b->set("TextSize", Value::number(1.0e9));
+    GameGui gui;
+    const std::vector<ImDrawVert> verts = draw_vertices(gui, *starter);
+    CHECK_FALSE(verts.empty());
 }
