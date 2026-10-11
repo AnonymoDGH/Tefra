@@ -55,3 +55,4 @@ tefra_add_executable(tefra_run SOURCES run/main.cpp DEPS tefra_scripting tefra_w
 if(TARGET tefra_managed)
     add_dependencies(tefra_run tefra_managed)
 endif()
+tefra_add_executable(tefra_import SOURCES import/main.cpp DEPS tefra_rbx)

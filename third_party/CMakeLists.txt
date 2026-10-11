@@ -25,6 +25,12 @@ target_include_directories(tefra_stb SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/s
 add_library(tefra_cgltf STATIC cgltf/cgltf_impl.c)
 target_include_directories(tefra_cgltf SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/cgltf)
 
+# --- zstd decompressor (BSD-3, v1.5.7) ------------------------------------------------------------
+# Single-file amalgamation of the official decoder (build/single_file_libs/zstddeclib-in.c, combined without legacy
+# formats). Used by engine/rbx for zstd-compressed chunks of .rbxl/.rbxm files (ADR-017).
+add_library(tefra_zstd STATIC zstd/zstddeclib.c)
+target_include_directories(tefra_zstd SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/zstd)
+
 # --- doctest ---------------------------------------------------------------------------------------
 add_library(tefra_doctest INTERFACE)
 target_include_directories(tefra_doctest SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/doctest)
