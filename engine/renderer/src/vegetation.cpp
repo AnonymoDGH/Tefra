@@ -613,6 +613,7 @@ void Vegetation::upload() {
     if (cpu_.empty()) cpu_.push_back({});
     instances_ = rhi::upload_buffer(dev_, cpu_.data(), cpu_.size() * sizeof(VegInstanceGPU),
                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "veg_instances");
+    protos_gpu_ = protos;
     if (protos.empty()) protos.push_back({});
     protos_ = rhi::upload_buffer(dev_, protos.data(), protos.size() * sizeof(ProtoGPU),
                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "veg_protos");

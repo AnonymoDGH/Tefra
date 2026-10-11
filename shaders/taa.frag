@@ -14,7 +14,8 @@ vec3 from_ycocg(vec3 c) { return vec3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.
 
 vec3 fetch(ivec2 p) {
     ivec2 size = ivec2(pc.sizes.xy);
-    return texelFetch(TEX2D(pc.current, SMP_NEAREST_CLAMP), clamp(p, ivec2(0), size - 1), 0).rgb;
+    vec3 c = texelFetch(TEX2D(pc.current, SMP_NEAREST_CLAMP), clamp(p, ivec2(0), size - 1), 0).rgb;
+    return (any(isnan(c)) || any(isinf(c))) ? vec3(0.0) : c;
 }
 
 // 5-tap Catmull-Rom (bilinear-optimized, Jimenez).
@@ -41,6 +42,7 @@ void main() {
     vec2 in_pos = v_uv * pc.sizes.xy;
     ivec2 px = ivec2(in_pos);
     vec3 cur = pc.sizes.x < pc.sizes.z ? textureLod(TEX2D(pc.current, SMP_LINEAR_CLAMP), v_uv, 0.0).rgb : fetch(px);
+    if (any(isnan(cur)) || any(isinf(cur))) cur = vec3(0.0); // one bad pixel must not spread through the history
     if (pc.valid == 0u) { o_color = vec4(cur, 1.0); return; }
 
     // Closest depth in a 3x3 neighbourhood: reprojects edges with the foreground's motion.
@@ -93,5 +95,6 @@ void main() {
     float range = max(hi.x - lo.x, 1e-4);
     float amount = 0.55 * clamp(1.0 - range / (mean.x + 1e-3) * 0.5, 0.2, 1.0);
     res = clamp(res + detail * amount, from_ycocg(lo) * 0.0 + min(res, mean_rgb) * 0.7, max(res, mean_rgb) * 1.3);
+    if (any(isnan(res)) || any(isinf(res))) res = cur;
     o_color = vec4(max(res, vec3(0.0)), 1.0);
 }

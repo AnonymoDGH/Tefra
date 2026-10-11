@@ -18,6 +18,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 
 namespace tefra::render {
@@ -174,6 +175,15 @@ void frustum_planes(const mat4& m, vec4 out[6]) {
 
 Renderer::Renderer(const rhi::Device& dev, rhi::BindlessHeap& heap, u32 frames_in_flight)
     : dev_(dev), heap_(heap), graph_(dev, heap) {
+    // Legacy AMD drivers (GCN, Vulkan < 1.3) draw no vegetation from the compute culling path although validation is
+    // clean; the CPU fills the same visible lists and indirect commands there instead.
+    {
+        const rhi::AdapterInfo& a = dev_.adapter();
+        cpu_veg_cull_ =
+            a.vendor_id == 0x1002 && a.api_version.rfind("1.3", 0) != 0 && a.api_version.rfind("1.4", 0) != 0;
+        if (const char* e = std::getenv("TEFRA_GPU_CULL")) cpu_veg_cull_ = e[0] == '0';
+        if (cpu_veg_cull_) TEFRA_LOG_INFO("Vegetation: CPU culling (GPU culling disabled for this driver)");
+    }
     frames_.resize(frames_in_flight);
     for (auto& f : frames_) {
         f.constants = rhi::create_buffer(dev_, sizeof(FrameConstants), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -862,15 +872,58 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             fb.veg_capacity = veg->visible_capacity();
             const VkBufferUsageFlags ind = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-            fb.veg_visible = rhi::create_buffer(dev_, fb.veg_capacity * 4ull, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                                rhi::MemoryUsage::GpuOnly, "veg_visible");
+            const rhi::MemoryUsage mem = cpu_veg_cull_ ? rhi::MemoryUsage::Upload : rhi::MemoryUsage::GpuOnly;
+            fb.veg_visible = rhi::create_buffer(dev_, fb.veg_capacity * 4ull, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, mem,
+                                                "veg_visible");
             fb.veg_shadow_visible = rhi::create_buffer(dev_, fb.veg_capacity * 4ull, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                                       rhi::MemoryUsage::GpuOnly, "veg_shadow_visible");
-            fb.veg_cmds = rhi::create_buffer(dev_, Vegetation::kMaxDraws * sizeof(DrawCmd), ind,
-                                             rhi::MemoryUsage::GpuOnly, "veg_cmds");
-            fb.veg_shadow_cmds = rhi::create_buffer(dev_, Vegetation::kMaxDraws * sizeof(DrawCmd), ind,
-                                                    rhi::MemoryUsage::GpuOnly, "veg_shadow_cmds");
+                                                       mem, "veg_shadow_visible");
+            fb.veg_cmds = rhi::create_buffer(dev_, Vegetation::kMaxDraws * sizeof(DrawCmd), ind, mem, "veg_cmds");
+            fb.veg_shadow_cmds =
+                rhi::create_buffer(dev_, Vegetation::kMaxDraws * sizeof(DrawCmd), ind, mem, "veg_shadow_cmds");
         }
+    }
+    if (has_veg && cpu_veg_cull_) {
+        // Same rules as shaders/veg_cull.comp: LOD by distance, shadow casters by distance, main list by frustum.
+        const auto& protos = veg->cpu_protos();
+        const auto& draws = veg->draws();
+        auto* cmds = static_cast<DrawCmd*>(fb.veg_cmds.mapped);
+        auto* scmds = static_cast<DrawCmd*>(fb.veg_shadow_cmds.mapped);
+        auto* vis = static_cast<u32*>(fb.veg_visible.mapped);
+        auto* svis = static_cast<u32*>(fb.veg_shadow_visible.mapped);
+        for (u32 d = 0; d < veg->draw_count(); ++d) {
+            cmds[d] = {draws[d].index_count, 0, draws[d].first_index, draws[d].vertex_offset, 0};
+            scmds[d] = cmds[d];
+        }
+        vec4 vplanes[6];
+        frustum_planes(fc.view_proj, vplanes);
+        const vec3 cam = fc.camera_pos.xyz();
+        const f32 ls = fc.veg_lod_scale > 0.0f ? fc.veg_lod_scale : 1.0f;
+        auto emit = [&](DrawCmd* c, u32* list, u32 d0, u32 d1, u32 index) {
+            const u32 at = c[d0].instance_count++;
+            list[draws[d0].visible_base + at] = index;
+            if (d1 != ~0u) ++c[d1].instance_count;
+        };
+        const auto& insts = veg->cpu_instances();
+        for (u32 i = 0; i < veg->instance_count() && i < insts.size(); ++i) {
+            const VegInstanceGPU& in = insts[i];
+            const u32 pid = static_cast<u32>(in.rot_proto.z);
+            if (pid >= protos.size()) continue;
+            const Vegetation::ProtoGPU& p = protos[pid];
+            const f32 sc = in.pos_scale.w;
+            const vec3 c = in.pos_scale.xyz() + vec3{0.0f, p.bounds.y * sc, 0.0f} - cam;
+            const f32 r = p.bounds.w * sc, dist = length(c);
+            const int lod = dist < p.lod_dist.x * ls ? 0 : ((p.lod_dist.w > 1.5f && dist < p.lod_dist.y * ls) ? 1 : -1);
+            if (lod < 0) continue;
+            const u32 d0 = p.draw[lod][0], d1 = p.draw[lod][1];
+            if (d0 == ~0u) continue;
+            if (p.casts_shadows != 0u && dist < p.lod_dist.z * ls) emit(scmds, svis, d0, d1, i);
+            bool inside = true;
+            for (int k = 0; k < 5 && inside; ++k)
+                if (dot(vplanes[k].xyz(), c) + vplanes[k].w < -r) inside = false;
+            if (inside) emit(cmds, vis, d0, d1, i);
+        }
+        for (rhi::Buffer* b : {&fb.veg_visible, &fb.veg_shadow_visible, &fb.veg_cmds, &fb.veg_shadow_cmds})
+            vmaFlushAllocation(dev_.allocator(), b->allocation, 0, VK_WHOLE_SIZE);
     }
     struct VegCullPush {
         VkDeviceAddress frame, instances, protos, draws, visible, cmds, shadow_visible, shadow_cmds;
@@ -962,7 +1015,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         }
     };
 
-    if (has_veg) {
+    if (has_veg && !cpu_veg_cull_) {
         graph_.add_pass(
             "veg_cull", rg::PassType::Compute, [](rg::PassBuilder&) {},
             [=, this](const rg::PassContext& ctx) {

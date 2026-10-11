@@ -142,5 +142,9 @@ void main() {
     fog_terms(f, -V, dist, Tf, ins);
     vec3 c = (surface * Tf + ins) * f.exposure.x;
     c += bg * T * (1.0 - F) * (1.0 - foam);
-    o_color = vec4(min(c, vec3(60000.0)), 1.0);
+    // Drivers differ on NaN/Inf (legacy AMD propagates them where Intel clamps): never let one reach TAA, which would
+    // smear it into a black sea.
+    if (any(isnan(c)) || any(isinf(c))) c = (refl * F + body) * f.exposure.x;
+    if (any(isnan(c)) || any(isinf(c))) c = vec3(0.02, 0.05, 0.07) * skyE * f.exposure.x;
+    o_color = vec4(clamp(c, vec3(0.0), vec3(60000.0)), 1.0);
 }

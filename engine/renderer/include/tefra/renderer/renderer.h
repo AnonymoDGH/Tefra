@@ -176,6 +176,7 @@ class Renderer {
     VkPipeline p_skyview_ = VK_NULL_HANDLE, p_terrain_ = VK_NULL_HANDLE, p_terrain_shadow_ = VK_NULL_HANDLE;
     VkPipeline p_veg_ = VK_NULL_HANDLE, p_veg_2s_ = VK_NULL_HANDLE, p_veg_shadow_ = VK_NULL_HANDLE,
                p_veg_cull_ = VK_NULL_HANDLE, p_water_ = VK_NULL_HANDLE, p_particles_ = VK_NULL_HANDLE;
+    bool cpu_veg_cull_ = false; // legacy AMD drivers: vegetation culled on the CPU (TEFRA_GPU_CULL=0/1 forces)
     rhi::Buffer veg_cmd_template_;
     std::unique_ptr<CanopyMap> canopy_;
     VkPipeline p_grass_ = VK_NULL_HANDLE, p_grass_count_ = VK_NULL_HANDLE;
