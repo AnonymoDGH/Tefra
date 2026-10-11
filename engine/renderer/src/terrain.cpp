@@ -83,13 +83,16 @@ void Terrain::upload_textures(const std::string& texture_dir) {
     }
     // Layer order (terrain.frag): 0 = default ground, 1 = patches, 2 = rock (triplanar), 3 = wet ground.
     const bool coast = f.kind() == TerrainKind::Coast;
+    const bool plains = f.kind() == TerrainKind::Plains;
     const char* valley_layers[4] = {"forest_leaves_02", "brown_mud_leaves_01", "aerial_rocks_02", "brown_mud_02"};
     const char* coast_layers[4] = {"coast_sand_01", "aerial_grass_rock", "coast_land_rocks_01", "damp_beach_sand"};
-    const char* const* layers = coast ? coast_layers : valley_layers;
+    const char* plains_layers[4] = {"leafy_grass", "sparse_grass", "aerial_rocks_02", "brown_mud_02"};
+    const char* const* layers = coast ? coast_layers : plains ? plains_layers : valley_layers;
     const u8 valley_col[4][3] = {{78, 58, 38}, {70, 60, 45}, {95, 98, 88}, {60, 48, 38}};
     const u8 coast_col[4][3] = {{196, 180, 150}, {170, 158, 135}, {110, 104, 96}, {140, 125, 100}};
-    const u8(*fallback_col)[3] = coast ? coast_col : valley_col;
-    gpu_.flags = coast ? 2u : 0u;
+    const u8 plains_col[4][3] = {{70, 92, 40}, {96, 104, 56}, {95, 98, 88}, {60, 48, 38}};
+    const u8(*fallback_col)[3] = coast ? coast_col : plains ? plains_col : valley_col;
+    gpu_.flags = coast ? 2u : plains ? 4u : 0u;
     for (int l = 0; l < 4; ++l) {
         const std::string base = path_join(path_join(texture_dir, layers[l]), layers[l]);
         const char* suffix[3] = {"_diff.jpg", "_nor_gl.jpg", "_arm.jpg"};

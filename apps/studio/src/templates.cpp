@@ -1,6 +1,8 @@
 #include "tefra/studio/templates.h"
 #include "tefra/studio/session.h"
 
+#include "tefra/world/environment_sync.h"
+
 #include <cmath>
 #include <string>
 
@@ -104,12 +106,61 @@ void build_flat_terrain(DataModel& dm) {
     lighting(dm, 15.0f, 0.35f, 0.0005f);
 }
 
+// Spawn on the landscape: the nearest spot to the origin whose height is in [lo, hi] and that is not steep, facing the
+// lowest ground around it (the sea on the coast, the valley floor inland).
+void spawn_on_terrain(DataModel& dm, const Instance& terrain, f32 lo, f32 hi) {
+    auto h = [&](f32 x, f32 z) { return world::terrain_height(terrain, x, z); };
+    vec3 best{0, h(0, 0), 0};
+    bool found = false;
+    for (f32 r = 0.0f; r <= 900.0f && !found; r += 15.0f) {
+        const int steps = r == 0.0f ? 1 : static_cast<int>(r / 6.0f);
+        for (int i = 0; i < steps && !found; ++i) {
+            const f32 a = 6.2831853f * f32(i) / f32(steps);
+            const f32 x = std::cos(a) * r, z = std::sin(a) * r, y = h(x, z);
+            const f32 slope = std::fabs(h(x + 3, z) - y) + std::fabs(h(x, z + 3) - y);
+            if (y >= lo && y <= hi && slope < 1.2f) {
+                best = {x, y, z};
+                found = true;
+            }
+        }
+    }
+    f32 low = 1e9f, yaw = 0.0f;
+    for (int i = 0; i < 16; ++i) {
+        const f32 a = 6.2831853f * f32(i) / 16.0f;
+        const vec3 f{-std::sin(a), 0, -std::cos(a)}; // forward of yaw a
+        const f32 y = h(best.x + f.x * 80.0f, best.z + f.z * 80.0f);
+        if (y < low) {
+            low = y;
+            yaw = a;
+        }
+    }
+    Instance* s = spawn(dm, dm.workspace(), best, {0.82f, 0.75f, 0.58f});
+    set_enum(s, "Material", "Sand");
+    if (world::terrain_height(terrain, best.x, best.z) > lo + 1e5f || lo < -1e5f) {
+        // Inland (grass up to the knee): a raised stone platform the blades do not poke through.
+        s->set("Size", Value::vector3({6, 1.4f, 6}));
+        s->set("Position", Value::vector3({best.x, best.y + 0.6f, best.z}));
+        s->set("Color", Value::color3({0.55f, 0.55f, 0.52f}));
+        set_enum(s, "Material", "Slate");
+    }
+    s->set("Orientation", Value::vector3({0, yaw * 57.29578f, 0}));
+}
+
 void build_beach(DataModel& dm) {
     Instance* ws = dm.workspace();
     Instance* t = dm.create("Terrain", ws, "Terrain");
     set_enum(t, "Kind", "Coast");
     dm.create("Ocean", ws, "Ocean");
     lighting(dm, 16.0f, 0.38f);
+    spawn_on_terrain(dm, *t, t->get_float("SeaLevel", 0.0f) + 1.2f, t->get_float("SeaLevel", 0.0f) + 3.5f);
+}
+
+void build_meadow(DataModel& dm) {
+    Instance* ws = dm.workspace();
+    Instance* t = dm.create("Terrain", ws, "Terrain");
+    set_enum(t, "Kind", "Plains");
+    lighting(dm, 17.2f, 0.35f);
+    spawn_on_terrain(dm, *t, -1e6f, 1e6f);
 }
 
 void build_valley(DataModel& dm) {
@@ -117,6 +168,7 @@ void build_valley(DataModel& dm) {
     Instance* t = dm.create("Terrain", ws, "Terrain");
     set_enum(t, "Kind", "Valley");
     lighting(dm, 9.0f, 0.3f, 0.008f);
+    spawn_on_terrain(dm, *t, -1e6f, 1e6f);
 }
 
 // ---- Obby: a complete example game ----------------------------------------------------------------------------
@@ -436,6 +488,8 @@ const std::vector<TemplateInfo> kTemplates = {
     {"flat_terrain", "Flat Terrain", "A huge grass field with a few boulders.", "Basic"},
     {"obby", "Obby", "A complete obstacle course: checkpoints, kill bricks, movers, HUD and sounds.", "Game"},
     {"beach", "Beach", "Tropical coast with palms, surf and an animated ocean.", "Environment"},
+    {"meadow", "Meadow", "Rolling grassland covered in tall grass and wildflowers that sway in the wind.",
+     "Environment"},
     {"valley", "Valley", "Misty forest valley with trees, grass and morning light.", "Environment"},
 };
 
@@ -462,6 +516,8 @@ bool build_template(std::string_view id, DataModel& dm) {
         build_beach(dm);
     else if (id == "valley")
         build_valley(dm);
+    else if (id == "meadow")
+        build_meadow(dm);
     else
         return false;
     return true;

@@ -26,6 +26,8 @@ void restore_editor_settings(render::RenderSettings& s) {
     s.cascades = 3;
     s.shadow_distance = 160.0f;
     s.grass = false;
+    s.grass_density = def.grass_density;
+    s.grass_radius = def.grass_radius;
     s.canopy_occlusion = def.canopy_occlusion;
     s.volumetric_fog = def.volumetric_fog;
     s.fog_height = def.fog_height;
@@ -67,9 +69,26 @@ void App::sync_environment() {
             settings_.fog_density = 0.000012f;
             settings_.fog_falloff = 0.03f;
         }
+    } else if (env.kind() == render::TerrainKind::Plains) {
+        // Meadow: dense tall grass everywhere, open sky, light haze for depth; no canopy to occlude.
+        settings_.cascades = 3;
+        settings_.shadow_distance = 160.0f;
+        settings_.grass = true;
+        settings_.grass_density = 2.0f;
+        settings_.grass_radius = 60.0f;
+        settings_.canopy_occlusion = false;
+        settings_.volumetric_fog = false;
+        settings_.fog_height = env.height_at(0.0f, 0.0f);
+        settings_.fog_anisotropy = 0.65f;
+        if (!lighting_fog) {
+            settings_.fog_density = 0.0004f;
+            settings_.fog_falloff = 0.02f;
+        }
     } else {
         // bench "valley": forest haze in a layer at the valley floor, grass and canopy occlusion, volumetric light.
         settings_.cascades = 3;
+        settings_.grass_density = render::RenderSettings{}.grass_density;
+        settings_.grass_radius = render::RenderSettings{}.grass_radius;
         settings_.shadow_distance = 200.0f;
         settings_.grass = true;
         settings_.canopy_occlusion = true;

@@ -75,6 +75,8 @@ vec2 populate_valley(render::Scene& scene, const render::Terrain& terrain, rende
 // ~20 m from the water (the camera of the bench scene stands there).
 vec2 populate_coast(render::Scene& scene, const render::Terrain& terrain, render::Vegetation& veg,
                     LandscapeAssets& assets, const std::string& cache_dir = "assets/cache");
+vec2 populate_plains(render::Scene& scene, const render::Terrain& terrain, render::Vegetation& veg,
+                     LandscapeAssets& assets, const std::string& cache_dir = "assets/cache");
 // Three procedural palm prototypes (bark and frond materials). palms[] receives the prototype indices.
 void add_palm_prototypes(render::Scene& scene, render::Vegetation& veg, u32 palms[3],
                          const std::string& cache_dir = "assets/cache");

@@ -91,6 +91,7 @@ struct RenderSettings {
     // Procedural grass on the terrain (G-buffer pass only, foliage class). Needs a terrain.
     bool grass = true;
     f32 grass_density = 1.5f; // candidate blades per m^2 = 256 * density (cost scales with it)
+    f32 grass_radius = 30.0f; // m, disc of blades around the camera (max 60; cost ~ radius^2, thinned far out)
     bool grass_stats = false; // count the blades drawn with an extra compute pass; see Renderer::grass_blades()
 };
 

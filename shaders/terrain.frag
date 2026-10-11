@@ -179,8 +179,10 @@ void main() {
 
     const bool coast = (t.flags & 2u) != 0u;
     float w_mud = wet * (1.0 - w_rock);
-    float w_mudl = coast ? smoothstep(0.15, 0.85, mask.b + (patchy - 0.5) * 0.4) * (1.0 - wet) * (1.0 - w_rock)
-                         : smoothstep(0.42, 0.68, patchy) * (1.0 - wet) * (1.0 - w_rock);
+    const bool meadow = (t.flags & 4u) != 0u;
+    float w_mudl = coast    ? smoothstep(0.15, 0.85, mask.b + (patchy - 0.5) * 0.4) * (1.0 - wet) * (1.0 - w_rock)
+                   : meadow ? smoothstep(0.55, 0.9, patchy) * 0.6 * (1.0 - w_rock)
+                            : smoothstep(0.42, 0.68, patchy) * (1.0 - wet) * (1.0 - w_rock);
     float w_leaves = max(1.0 - w_rock - w_mud - w_mudl, 0.0);
     vec4 w = vec4(w_leaves, w_mudl, w_rock, w_mud);
     // Height-aware sharpening: the detail path uses the real layer heights (albedo alpha), the M2 path the
@@ -208,6 +210,16 @@ void main() {
         // The CC0 sand scans are warmer than bright quartz beach sand: pull the chroma back a little.
         float lum = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
         albedo = mix(vec3(lum), albedo, mix(0.78, 1.0, w.y + w.z)) * mix(1.12, 1.0, w.y + w.z);
+    } else if (detail && (t.flags & 4u) != 0u) {
+        // Meadow: lush green with sun-dried patches at distance, so the field reads as grass beyond the blades.
+        // The blades cover the near field; beyond them the ground must read as the same grass: pull the albedo to
+        // the blade colours (lush green with sun-dried swathes), keeping the texture's detail as variation.
+        float macro = 0.6 * vnoise(v_world / 60.0 + 1.7) + 0.4 * vnoise(v_world / 17.0 + 5.3);
+        float swathe = smoothstep(0.55, 0.85, vnoise(v_world / 22.0 + 7.0));
+        vec3 lush = mix(vec3(0.075, 0.175, 0.030), vec3(0.125, 0.215, 0.042), macro);
+        vec3 grass_col = mix(lush, vec3(0.36, 0.32, 0.13), swathe * 0.7);
+        float detail_v = dot(albedo, vec3(0.333)) / 0.18;
+        albedo = mix(albedo, grass_col * 0.8 * clamp(detail_v, 0.75, 1.25), 0.92 * (1.0 - w.z));
     } else if (detail) {
         // Low-frequency macro variation at distance: moss-green patches on the ground, rust-red dry-needle patches.
         float macro = 0.65 * vnoise(v_world / 45.0 + 3.1) + 0.35 * vnoise(v_world / 13.0 + 7.7);

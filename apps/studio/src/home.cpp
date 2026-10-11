@@ -326,9 +326,19 @@ void App::frame_camera_for_template(std::string_view id) {
         look({48, 30, -40}, {0, 4, -110});
     else if (id == "flat_terrain")
         look({20, 9, 26}, {0, 1, 0});
-    else if (id == "beach" || id == "valley")
+    else if (id == "beach" || id == "valley" || id == "meadow") {
+        // Behind the spawn, looking the way it faces.
+        for (world::Instance* i : session_.model().workspace()->children())
+            if (i->is_a("SpawnLocation")) {
+                const vec3 p = i->get_vec3("Position");
+                const f32 yaw = radians(i->get_vec3("Orientation").y);
+                const vec3 f{-std::sin(yaw), 0, -std::cos(yaw)};
+                const f32 up = id == "meadow" ? 2.6f : 8.0f;
+                look(p - f * (id == "meadow" ? 16.0f : 18.0f) + vec3{0, up, 0}, p + f * 40.0f + vec3{0, 1, 0});
+                return;
+            }
         look({0, 40, 60}, {0, 10, 0});
-    else
+    } else
         look({18, 12, 22}, {0, 0, 0});
 }
 

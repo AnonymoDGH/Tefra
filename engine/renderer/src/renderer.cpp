@@ -100,11 +100,10 @@ static_assert(sizeof(MeshPush) <= kPushBytes && sizeof(LightingPush) <= kPushByt
 
 // Grass (grass.vert / grass_count.comp, shaders/common/grass.glsl). The grid is kGrassSide^2 world cells centred on the
 // camera; the CPU keeps the cells inside the disc and the frustum.
-constexpr f32 kGrassRadius = 30.0f;   // m
 constexpr f32 kGrassLodStart = 12.0f; // m: beyond this, 5-vertex blades and thinner density
 constexpr f32 kGrassWind = 0.12f;     // m: tip displacement at full gust
 constexpr f32 kGrassMargin = 1.3f;    // m: cell bounding radius for the frustum test (blade height and slope)
-constexpr i32 kGrassHalf = 31;        // cells from the camera cell to each grid edge (disc radius + margin)
+constexpr i32 kGrassHalf = 61;        // cells from the camera cell to each grid edge (max disc radius + margin)
 constexpr u32 kGrassSide = 2 * kGrassHalf + 1;
 constexpr u32 kGrassMaxCells = kGrassSide * kGrassSide;
 constexpr u32 kGrassBladesPerCell = 256; // candidate blades per 1 m^2 at density 1
@@ -780,11 +779,12 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         const u32 blades =
             max<u32>(1u, static_cast<u32>(std::lround(f32(kGrassBladesPerCell) * max(s.grass_density, 0.0f))));
         std::vector<u32> near_cells, far_cells;
+        const f32 grass_radius = clamp(s.grass_radius, 4.0f, f32(kGrassHalf - 1));
         for (u32 gi = 0; gi < kGrassMaxCells; ++gi) {
             const f64 cx = f64(bx + i32(gi % kGrassSide)) + 0.5, cz = f64(bz + i32(gi / kGrassSide)) + 0.5;
             const f64 dx = cx - camera.position.x, dz = cz - camera.position.z;
             const f32 dist = static_cast<f32>(std::sqrt(dx * dx + dz * dz));
-            if (dist >= kGrassRadius) continue;
+            if (dist >= grass_radius) continue;
             const f32 ground = terrain->height_at(static_cast<f32>(cx), static_cast<f32>(cz));
             const vec3 rel{static_cast<f32>(dx), ground + 0.4f - static_cast<f32>(camera.position.y),
                            static_cast<f32>(dz)};
@@ -809,7 +809,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         grass.terrain = fb.terrain.address;
         grass.cells = fb.grass_cells.address;
         grass.counter = fb.grass_counter.address;
-        grass.p0 = {kGrassRadius, kGrassLodStart, kGrassWind, 3.0f};
+        grass.p0 = {grass_radius, kGrassLodStart, kGrassWind, 3.0f};
         grass.grid[0] = bx;
         grass.grid[1] = static_cast<i32>(kGrassSide);
         grass.grid[2] = bz;

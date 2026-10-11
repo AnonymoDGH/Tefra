@@ -234,6 +234,24 @@ f32 TerrainField::valley_height(f32 x, f32 z) const {
     return h;
 }
 
+// Meadow: a broad, gently rolling plain (slopes under ~8 deg near the centre) with shallow swales, a few low knolls
+// and a rim of higher, smoother hills towards the map edge so the horizon is not a flat line.
+f32 TerrainField::plains_height(f32 x, f32 z) const {
+    const u32 seed = desc_.seed;
+    const f32 wx = x + 40.0f * fbm(x / 500.0f, z / 500.0f, seed + 7, 3);
+    const f32 wz = z + 40.0f * fbm(x / 500.0f + 4.3f, z / 500.0f + 2.1f, seed + 9, 3);
+    const f32 rolling = fbm(wx / 320.0f, wz / 320.0f, seed + 11, 4) * 9.0f;
+    const f32 swells = fbm(wx / 110.0f, wz / 110.0f, seed + 15, 3) * 2.2f;
+    const f32 knolls = std::pow(max(fbm(wx / 180.0f + 9.1f, wz / 180.0f, seed + 27, 3), 0.0f), 2.0f) * 10.0f;
+    const f32 r = std::sqrt(x * x + z * z);
+    const f32 rim =
+        smoothstep(420.0f, 980.0f, r) * (35.0f + 45.0f * (0.5f + 0.5f * fbm(wx / 260.0f, wz / 260.0f, seed + 3, 4)));
+    const f32 bumps = fbm(x / 14.0f, z / 14.0f, seed + 13, 3) * 0.18f;
+    // Keep the spawn area (r < 60 m) nearly flat.
+    const f32 calm = smoothstep(20.0f, 90.0f, r);
+    return 12.0f + (rolling + swells + knolls) * lerp(0.35f, 1.0f, calm) + rim + bumps;
+}
+
 // Shoreline of the cove (world z where the beach meets the still sea): bowed inland at the centre, two rocky
 // headlands reaching out to sea at |x| ~ 450 m.
 f32 TerrainField::coast_shore_z(f32 x) const {
@@ -291,7 +309,10 @@ void TerrainField::generate() {
     mask_.resize(usize(n / 2) * (n / 2) * 4);
     const u32 seed = desc_.seed;
     const bool coast = desc_.kind == TerrainKind::Coast;
-    auto height_fn = [&](f32 x, f32 z) { return coast ? coast_height(x, z) : valley_height(x, z); };
+    const bool plains = desc_.kind == TerrainKind::Plains;
+    auto height_fn = [&](f32 x, f32 z) {
+        return coast ? coast_height(x, z) : plains ? plains_height(x, z) : valley_height(x, z);
+    };
     // Parallel over rows (the reference PC has 4 threads; the cloud has 4).
     const u32 threads = max(1u, std::thread::hardware_concurrency());
     std::vector<std::thread> pool;
@@ -323,6 +344,8 @@ void TerrainField::generate() {
             if (coast) {
                 // Wet sand below the swash limit (~0.9 m above the still sea); the sea bed is fully wet.
                 wet = 1.0f - smoothstep(desc_.sea_level + 0.15f, desc_.sea_level + 0.9f, h);
+            } else if (plains) {
+                wet = 0.0f; // well-drained grassland
             } else {
                 const f32 d = std::fabs(river_distance(wx, wz));
                 wet = max(1.0f - smoothstep(4.0f, 22.0f, d), 1.0f - smoothstep(15.6f, 17.5f, h));

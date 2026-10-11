@@ -270,6 +270,46 @@ vec2 populate_valley(render::Scene& scene, const render::Terrain& terrain, rende
     return vec2{cx0, cz0};
 }
 
+vec2 populate_plains(render::Scene& scene, const render::Terrain& terrain, render::Vegetation& veg,
+                     LandscapeAssets& assets, const std::string& cache_dir) {
+    build_valley_assets(scene, assets, cache_dir);
+    u32 tree_protos[3];
+    for (u32 v = 0; v < 3; ++v) tree_protos[v] = veg.add_prototype(assets.valley[v].proto);
+    const u32 rock_proto = assets.valley[5].valid ? veg.add_prototype(assets.valley[5].proto) : ~0u;
+    // Open grassland: a few copses and lone trees on the knolls, boulders here and there, nothing near the spawn.
+    const f32 half = terrain.world_size() * 0.5f - 4.0f;
+    u32 trees = 0, rocks = 0;
+    const f32 spacing = 9.0f;
+    for (f32 z = -half; z < half; z += spacing)
+        for (f32 x = -half; x < half; x += spacing) {
+            const u32 ix = static_cast<u32>(i32((x + half) / spacing)),
+                      iz = static_cast<u32>(i32((z + half) / spacing));
+            const f32 px = x + (hash01(ix, iz, 1) - 0.5f) * spacing * 0.9f;
+            const f32 pz = z + (hash01(ix, iz, 2) - 0.5f) * spacing * 0.9f;
+            const f32 r = std::sqrt(px * px + pz * pz);
+            if (r < 45.0f) continue;
+            const vec3 n = terrain.normal_at(px, pz);
+            const f32 h = terrain.height_at(px, pz);
+            // Copses: blobs of a slow noise; elsewhere very rare lone trees.
+            const f32 copse = std::sin(px * 0.013f + std::sin(pz * 0.009f) * 2.3f) * std::cos(pz * 0.011f + 1.7f);
+            const f32 p = copse > 0.93f ? 0.35f : 0.003f;
+            if (n.y > 0.85f && hash01(ix, iz, 3) < p) {
+                const u32 v = hash_u32(ix * 31u + iz * 17u) % 3u;
+                const f32 scale = 0.8f + 0.6f * hash01(ix, iz, 4);
+                veg.add_instance(tree_protos[v], {px, h - 0.3f, pz}, hash01(ix, iz, 5) * kTwoPi, scale,
+                                 hash01(ix, iz, 6));
+                ++trees;
+            } else if (rock_proto != ~0u && hash01(ix, iz, 7) < 0.002f) {
+                veg.add_instance(rock_proto, {px, h - 0.1f, pz}, hash01(ix, iz, 8) * kTwoPi,
+                                 0.8f + 1.6f * hash01(ix, iz, 9), hash01(ix, iz, 10));
+                ++rocks;
+            }
+        }
+    veg.upload();
+    TEFRA_LOG_INFO("Plains: %u trees, %u boulders", trees, rocks);
+    return vec2{0.0f, 0.0f};
+}
+
 void build_palm_assets(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir) {
     if (assets.palms_built) return;
     assets.palms_built = true;
@@ -450,7 +490,7 @@ vec2 populate_coast(render::Scene& scene, const render::Terrain& terrain, render
 
 namespace {
 
-constexpr i64 kKindNone = 0, kKindCoast = 2; // Terrain.Kind enum: None, Valley, Coast
+constexpr i64 kKindNone = 0, kKindCoast = 2, kKindPlains = 3; // Terrain.Kind enum: None, Valley, Coast, Plains
 
 i64 int_prop(const Instance& inst, const char* name, i64 def) {
     const Value* v = inst.get(name);
@@ -505,7 +545,9 @@ bool terrain_desc(const Instance& terrain, render::TerrainDesc& out) {
     const i64 kind = int_prop(terrain, "Kind", kKindNone);
     if (kind == kKindNone) return false;
     out = render::TerrainDesc{};
-    out.kind = kind == kKindCoast ? render::TerrainKind::Coast : render::TerrainKind::Valley;
+    out.kind = kind == kKindCoast    ? render::TerrainKind::Coast
+               : kind == kKindPlains ? render::TerrainKind::Plains
+                                     : render::TerrainKind::Valley;
     out.seed = static_cast<u32>(int_prop(terrain, "Seed", 1337));
     out.sea_level = terrain.get_float("SeaLevel", 0.0f);
     return true;
@@ -629,14 +671,19 @@ bool EnvironmentSync::update(const DataModel& model, u32 settle_frames) {
                 s.vegetation = std::make_unique<render::Vegetation>(s.dev, s.scene);
                 if (td.kind == render::TerrainKind::Coast)
                     populate_coast(s.scene, *s.terrain, *s.vegetation, s.assets);
+                else if (td.kind == render::TerrainKind::Plains)
+                    populate_plains(s.scene, *s.terrain, *s.vegetation, s.assets);
                 else
                     populate_valley(s.scene, *s.terrain, *s.vegetation, s.assets);
             }
             if (td.kind == render::TerrainKind::Valley) s.water = std::make_unique<render::Water>(s.dev, *s.terrain);
             ++s.revision;
             TEFRA_LOG_INFO("Landscape: %s terrain built (seed %lld, sea %.1f m, %s vegetation)",
-                           td.kind == render::TerrainKind::Coast ? "coast" : "valley", static_cast<long long>(ts.seed),
-                           static_cast<f64>(ts.sea), ts.vegetation ? "with" : "without");
+                           td.kind == render::TerrainKind::Coast    ? "coast"
+                           : td.kind == render::TerrainKind::Plains ? "plains"
+                                                                    : "valley",
+                           static_cast<long long>(ts.seed), static_cast<f64>(ts.sea),
+                           ts.vegetation ? "with" : "without");
         }
         // The ocean level follows the sea of the terrain: force the ocean to be rebuilt below.
         s.ocean_sig = OceanSig{};

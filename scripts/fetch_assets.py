@@ -20,6 +20,9 @@ TERRAIN_LAYERS = ["forest_leaves_02", "brown_mud_leaves_01", "aerial_rocks_02", 
 # Coast terrain layers: dry sand, grassy hinterland, shore rock, wet sand.
 COAST_LAYERS = ["coast_sand_01", "aerial_grass_rock", "coast_land_rocks_01", "damp_beach_sand"]
 TERRAIN_LAYERS += COAST_LAYERS
+# Plains (meadow) terrain layers: grassy ground, sparse grass patches (rock and mud are shared with the valley).
+PLAINS_LAYERS = ["leafy_grass", "sparse_grass"]
+TERRAIN_LAYERS += PLAINS_LAYERS
 # Bark: brown conifer bark (valley trunks) and palm trunk bark (palm scene).
 TEXTURES = TERRAIN_LAYERS + ["bark_brown_01", "palm_tree_bark"]
 API = "https://api.polyhaven.com"

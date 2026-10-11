@@ -47,8 +47,9 @@ void main() {
     const vec3 P3 = D * g.lean + Y * g.height;
     const vec3 spine = grass_bez(vec3(0.0), P1, P2, P3, t);
     const vec3 T = normalize(grass_bez_d(vec3(0.0), P1, P2, P3, t));
-    const float w = g.width * pow(1.0 - t, 0.8);
-    const vec3 wind = grass_wind(g.root.xz, t);
+    // Wildflowers: a thin stem with a small head of petals at the top.
+    const float w = g.flower > 0.0 ? (t > 0.82 ? 0.045 * (1.0 - t) / 0.18 + 0.02 : 0.008) : g.width * pow(1.0 - t, 0.8);
+    const vec3 wind = grass_wind(g.root.xz, t, g.height, g.phase);
     const vec3 world = g.root + spine + wind + S3 * (0.5 * w * sgn);
 
     const Frame f = pc.frame.f;
@@ -57,10 +58,24 @@ void main() {
     const vec3 N = normalize(mix(normalize(cross(T, S3)), Y, 0.5));
     const vec3 base = mix(vec3(0.040, 0.105, 0.022), vec3(0.085, 0.150, 0.035), g.shade);
     const vec3 dry = vec3(0.34, 0.29, 0.11);
-    const vec3 col = mix(base, dry, g.dry) * mix(0.85, 1.12, g.patchy) * mix(0.8, 1.05, t);
+    vec3 col = mix(base, dry, g.dry) * mix(0.85, 1.12, g.patchy) * mix(0.8, 1.05, t);
+    if (grass_meadow()) {
+        // Fresher greens, golden dry swathes, and the sheen of bent blades riding the gust fronts.
+        const vec3 lush = mix(vec3(0.050, 0.140, 0.025), vec3(0.120, 0.200, 0.040), g.shade);
+        const vec3 straw = vec3(0.42, 0.36, 0.14);
+        col = mix(lush, straw, g.dry) * mix(0.85, 1.1, g.patchy) * mix(0.7, 1.08, t);
+        col *= 1.0 + 0.22 * smoothstep(0.6, 1.2, grass_gust(g.root.xz)) * t;
+        if (g.flower > 0.0 && t > 0.8) {
+            const vec3 petals[4] = vec3[4](vec3(0.85, 0.82, 0.70), vec3(0.85, 0.65, 0.05), vec3(0.45, 0.20, 0.60),
+                                           vec3(0.80, 0.15, 0.10));
+            col = petals[min(uint(g.flower * 4.0), 3u)];
+        }
+    }
 
     v_pos = rel;
     v_normal = N;
-    v_color_ao = vec4(col, mix(0.35, 1.0, t));
+    // Far meadow blades: ambient occlusion fades out so the ring matches the grass-coloured terrain behind it.
+    const float ao_far = grass_meadow() ? smoothstep(0.4, 1.0, dist / pc.p0.x) : 0.0;
+    v_color_ao = vec4(col, mix(mix(0.35, 1.0, t), 1.0, ao_far));
     gl_Position = f.view_proj * vec4(rel, 1.0);
 }

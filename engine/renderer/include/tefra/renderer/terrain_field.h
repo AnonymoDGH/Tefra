@@ -18,6 +18,7 @@ namespace tefra::render {
 enum class TerrainKind : u32 {
     Valley, // forest valley with a river and a lake (spec 2)
     Coast,  // sandy cove between two rocky headlands; the sea (y < sea_level) lies towards -Z
+    Plains, // open meadow: gently rolling grassland with swales, rimmed by low hills on the horizon
 };
 
 struct TerrainDesc {
@@ -81,6 +82,7 @@ class TerrainField {
     TerrainField(const TerrainField& src, f32 sea_level, Shifted);
     void generate();
     f32 valley_height(f32 x, f32 z) const;
+    f32 plains_height(f32 x, f32 z) const;
     f32 coast_height(f32 x, f32 z) const;
     f32 coast_shore_z(f32 x) const;
     f32 coast_shore_z_dist(f32 x, f32 z) const; // > 0 inland (unwarped, approximate)

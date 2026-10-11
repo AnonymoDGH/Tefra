@@ -55,7 +55,7 @@ void register_builtin_classes(ClassRegistry& r) {
                      "Brick",   "Cobblestone",   "Granite", "Marble",     "Slate", "Sand",         "Grass",
                      "Ground",  "Rock",          "Ice",     "Glass",      "Neon",  "Fabric",       "Foil"});
     const EnumInfo* shape = r.add_enum("PartType", {"Block", "Ball", "Cylinder", "Wedge"});
-    const EnumInfo* terrain_kind = r.add_enum("TerrainKind", {"None", "Valley", "Coast"});
+    const EnumInfo* terrain_kind = r.add_enum("TerrainKind", {"None", "Valley", "Coast", "Plains"});
     const EnumInfo* script_ctx = r.add_enum("RunContext", {"Server", "Client"});
     const EnumInfo* humanoid_state = r.add_enum("HumanoidState", {"Idle", "Walking", "Running", "Jumping", "Freefall",
                                                                   "Landed", "Dead", "Seated", "Climbing", "Swimming"});
