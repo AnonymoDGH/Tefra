@@ -76,6 +76,7 @@ App::~App() {
     if (device_) device_->wait_idle();
     if (oneshot_pool_) vkDestroyCommandPool(device_->device(), oneshot_pool_, nullptr);
     release_textures();
+    game_gui_.reset(); // frees the in-game UI textures (TextureCache) while the device and ImGui still exist
     if (ImGui::GetCurrentContext()) {
         if (viewport_tex_) ImGui_ImplVulkan_RemoveTexture(viewport_tex_);
         viewport_tex_ = VK_NULL_HANDLE;

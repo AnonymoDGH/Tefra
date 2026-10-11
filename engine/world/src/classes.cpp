@@ -64,6 +64,11 @@ void register_builtin_classes(ClassRegistry& r) {
     const EnumInfo* text_y = r.add_enum("TextYAlignment", {"Top", "Center", "Bottom"});
     const EnumInfo* scale_type = r.add_enum("ScaleType", {"Stretch", "Fit", "Crop"});
     const EnumInfo* font = r.add_enum("Font", {"Default", "Bold", "Mono"});
+    const EnumInfo* h_align = r.add_enum("HorizontalAlignment", {"Left", "Center", "Right"});
+    const EnumInfo* v_align = r.add_enum("VerticalAlignment", {"Top", "Center", "Bottom"});
+    const EnumInfo* fill_dir = r.add_enum("FillDirection", {"Vertical", "Horizontal"});
+    const EnumInfo* sort_order = r.add_enum("SortOrder", {"LayoutOrder", "Name"});
+    const EnumInfo* display_dist = r.add_enum("HumanoidDisplayDistanceType", {"Viewer", "Subject", "None"});
 
     Builder b{r};
     // Every class starts with Name (property index 0).
@@ -199,18 +204,27 @@ void register_builtin_classes(ClassRegistry& r) {
     b.group("Behavior").prop("Enabled", Value::boolean(true), "Drawn when true.");
     b.prop("DisplayOrder", Value::integer(0), "Higher ScreenGuis draw on top.");
     b.prop("ResetOnSpawn", Value::boolean(true), "Copied again from StarterGui when the character respawns.");
+    b.cls("BillboardGui", "GuiBase", "UI drawn in 3D space above an Adornee and facing the camera.", "UI");
+    b.group("Behavior").prop("Enabled", Value::boolean(true), "Drawn when true.");
+    b.prop("Adornee", Value::reference(0), "Part the billboard follows (nil = the parent part).");
+    b.prop("Size", Value::vector3({200, 50, 0}), "Size on screen (pixels, x and y).");
+    b.prop("StudsOffset", Value::vector3({0, 0, 0}), "Offset from the Adornee in metres (world space).");
+    b.prop("AlwaysOnTop", Value::boolean(false), "Draws through walls (no occlusion test is done yet).");
+    b.prop("MaxDistance", Value::number(100.0), "Hidden beyond this distance from the camera (m).");
     b.cls("GuiObject", "GuiBase", "A rectangle of UI.").abstract();
     b.group("Layout").prop("Position", Value::vector3({0, 0, 0}), "Position: fraction of the parent (x, y).");
     b.prop("PositionOffset", Value::vector3({0, 0, 0}), "Position offset in pixels (x, y).");
     b.prop("Size", Value::vector3({0, 0, 0}), "Size: fraction of the parent (x, y).");
     b.prop("SizeOffset", Value::vector3({200, 50, 0}), "Size offset in pixels (x, y).");
     b.prop("AnchorPoint", Value::vector3({0, 0, 0}), "Pivot inside the object (0-1, 0-1).");
-    b.prop("Rotation", Value::number(0.0), "Rotation (degrees).");
+    b.prop("Rotation", Value::number(0.0), "Rotation (degrees, clockwise on screen) around the centre.");
+    b.prop("LayoutOrder", Value::integer(0), "Order inside a UIListLayout / UIGridLayout (SortOrder LayoutOrder).");
+    b.prop("ClipsDescendants", Value::boolean(false), "Children are clipped to this rectangle.");
     b.group("Appearance").prop("BackgroundColor", Value::color3({0.16f, 0.17f, 0.19f}), "Fill colour.");
     b.prop("BackgroundTransparency", Value::number(0.0), "0 = opaque, 1 = invisible.");
-    b.prop("CornerRadius", Value::number(0.0), "Rounded corners (pixels).");
+    b.prop("CornerRadius", Value::number(0.0), "Rounded corners (pixels). A UICorner child overrides it.");
     b.prop("BorderColor", Value::color3({0, 0, 0}), "Outline colour.");
-    b.prop("BorderSize", Value::number(0.0), "Outline thickness (pixels).");
+    b.prop("BorderSize", Value::number(0.0), "Outline thickness (pixels). A UIStroke child overrides it.");
     b.cls("Frame", "GuiObject", "A plain rectangle that groups other UI.", "UI");
     b.cls("TextLabel", "GuiObject", "Shows text.", "UI");
     b.group("Text").prop("Text", Value::string("Label"), "The text.");
@@ -224,6 +238,9 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("Font", Value::enumeration(0), "Typeface.", 0, font);
     b.cls("TextButton", "TextLabel", "Clickable text: fires Activated.", "UI");
     b.group("Behavior").prop("AutoButtonColor", Value::boolean(true), "Darkens when hovered or pressed.");
+    b.cls("TextBox", "TextLabel", "Editable text. Enter or a click elsewhere fires FocusLost.", "UI");
+    b.group("Text").prop("PlaceholderText", Value::string(""), "Grey hint shown while the text is empty.");
+    b.prop("ClearTextOnFocus", Value::boolean(true), "Empties the text when the box gets focus.");
     b.cls("ImageLabel", "GuiObject", "Shows an image (.png/.jpg file).", "UI");
     b.group("Image").prop("Image", Value::string(""), "Image file path.");
     b.prop("ImageColor", Value::color3({1, 1, 1}), "Tint.");
@@ -231,6 +248,41 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("ScaleType", Value::enumeration(0), "How the image fits the box.", 0, scale_type);
     b.cls("ImageButton", "ImageLabel", "Clickable image: fires Activated.", "UI");
     b.group("Behavior").prop("AutoButtonColor", Value::boolean(true), "Darkens when hovered or pressed.");
+
+    // Layout and styling modifiers: children of a GuiObject (or of a ScreenGui / BillboardGui for the layouts).
+    b.cls("UICorner", "Instance", "Rounds the corners of its parent (overrides CornerRadius).", "UI");
+    b.group("Appearance").prop("CornerRadius", Value::number(8.0), "Corner radius (pixels).");
+    b.cls("UIStroke", "Instance", "Outline around its parent (overrides BorderSize).", "UI");
+    b.group("Appearance").prop("Color", Value::color3({1, 1, 1}), "Outline colour.");
+    b.prop("Thickness", Value::number(1.0), "Outline thickness (pixels).");
+    b.prop("Transparency", Value::number(0.0), "0 = opaque, 1 = invisible.");
+    b.cls("UIPadding", "Instance", "Insets the children of its parent (pixels).", "UI");
+    b.group("Layout").prop("PaddingLeft", Value::number(0.0), "Left inset (pixels).");
+    b.prop("PaddingRight", Value::number(0.0), "Right inset (pixels).");
+    b.prop("PaddingTop", Value::number(0.0), "Top inset (pixels).");
+    b.prop("PaddingBottom", Value::number(0.0), "Bottom inset (pixels).");
+    b.cls("UIListLayout", "Instance", "Stacks the children of its parent in a row or a column.", "UI");
+    b.group("Layout").prop("FillDirection", Value::enumeration(0), "Vertical stacks down, Horizontal across.", 0,
+                           fill_dir);
+    b.prop("Padding", Value::number(0.0), "Gap between children (pixels).");
+    b.prop("HorizontalAlignment", Value::enumeration(0), "Cross-axis (Vertical list) or main-axis alignment.", 0,
+           h_align);
+    b.prop("VerticalAlignment", Value::enumeration(0), "Main-axis (Vertical list) or cross-axis alignment.", 0,
+           v_align);
+    b.prop("SortOrder", Value::enumeration(0), "Order of the children: LayoutOrder, then Name.", 0, sort_order);
+    b.cls("UIGridLayout", "Instance", "Places the children of its parent in equal cells.", "UI");
+    b.group("Layout").prop("CellSize", Value::vector3({100, 100, 0}), "Cell size (pixels, x and y).");
+    b.prop("CellPadding", Value::vector3({5, 5, 0}), "Gap between cells (pixels, x and y).");
+    b.prop("FillDirection", Value::enumeration(1), "Horizontal fills rows, Vertical fills columns.", 0, fill_dir);
+    b.prop("HorizontalAlignment", Value::enumeration(0), "Horizontal alignment of the grid block.", 0, h_align);
+    b.prop("VerticalAlignment", Value::enumeration(0), "Vertical alignment of the grid block.", 0, v_align);
+    b.prop("SortOrder", Value::enumeration(0), "Order of the children: LayoutOrder, then Name.", 0, sort_order);
+    b.cls("UIGradient", "Instance", "Colour gradient over the background of its parent.", "UI");
+    b.group("Appearance").prop("Color0", Value::color3({1, 1, 1}), "Colour at the start of the gradient.");
+    b.prop("Color1", Value::color3({0.5f, 0.5f, 0.5f}), "Colour at the end of the gradient.");
+    b.prop("Rotation", Value::number(0.0), "Direction (degrees): 0 = left to right, 90 = top to bottom.");
+    b.cls("UIAspectRatioConstraint", "Instance", "Keeps the parent's width / height ratio.", "UI");
+    b.group("Layout").prop("AspectRatio", Value::number(1.0), "Width divided by height.");
 
     // ---- Audio ---------------------------------------------------------------------------------------------
     b.cls("Sound", "Instance", "Plays an audio file; 3D when parented to a part.", "Audio");
@@ -256,6 +308,11 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("AutoRotate", Value::boolean(true), "Turns to face the movement direction.");
     b.prop("RigType", Value::enumeration(0), "Body rig.", 0, rig);
     b.prop("DisplayName", Value::string(""), "Name shown above the character.");
+    b.prop("DisplayDistanceType", Value::enumeration(0),
+           "Who sees the name: Viewer (everyone), Subject (only the "
+           "player's own character), None.",
+           0, display_dist);
+    b.prop("NameDisplayDistance", Value::number(100.0), "The name is hidden beyond this distance (m).");
     b.prop("State", Value::enumeration(0), "Current state.", kPropReadOnly | kPropNotSerialized, humanoid_state);
     b.prop("MoveDirection", Value::vector3({0, 0, 0}), "Desired movement (world, unit).", kPropNotSerialized);
     b.cls("Animator", "Instance", "Plays and blends animations on a Humanoid's rig.", "Characters");
