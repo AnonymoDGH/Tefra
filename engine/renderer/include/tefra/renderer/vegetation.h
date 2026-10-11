@@ -60,6 +60,9 @@ class Vegetation {
     void upload();
 
     u32 instance_count() const { return static_cast<u32>(cpu_.size()); }
+    // Unique per upload() in the process (never reused, unlike the object's address): caches keyed on the vegetation
+    // (the renderer's draw template, the canopy map) rebuild when it changes.
+    u64 uid() const { return uid_; }
     u32 draw_count() const { return static_cast<u32>(draws_.size()); }
     f32 prototype_wind(u32 p) const { return protos_cpu_[p].wind; }
 
@@ -100,6 +103,7 @@ class Vegetation {
     std::vector<DrawGPU> draws_;
     rhi::Buffer instances_, protos_, draws_buf_;
     u32 visible_capacity_ = 0;
+    u64 uid_ = 0;
 };
 
 // Procedural assets (clean-room): conifer meshes and the baked needle atlas for their foliage cards.

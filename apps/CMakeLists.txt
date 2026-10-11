@@ -1,6 +1,6 @@
 add_library(tefra_app STATIC common/runner.cpp common/options.cpp common/scenes.cpp)
 target_include_directories(tefra_app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/common)
-target_link_libraries(tefra_app PUBLIC tefra_renderer PRIVATE tefra_compile_options)
+target_link_libraries(tefra_app PUBLIC tefra_renderer tefra_world PRIVATE tefra_compile_options)
 target_compile_definitions(tefra_app PUBLIC
     TEFRA_VERSION="${PROJECT_VERSION}" TEFRA_GIT_SHA="${TEFRA_GIT_SHA}" TEFRA_BUILD_TYPE="$<CONFIG>")
 if(TEFRA_WITH_WINDOW)
@@ -29,7 +29,7 @@ if(TEFRA_WITH_WINDOW)
     # The editor shell is a library shared by tefra_studio and tefra_player (player mode: the game fills the window).
     add_library(tefra_studio_app STATIC
         studio/src/app.cpp studio/src/ui.cpp studio/src/play.cpp studio/src/home.cpp studio/src/export.cpp
-        studio/src/import.cpp studio/src/file_dialog.cpp)
+        studio/src/import.cpp studio/src/file_dialog.cpp studio/src/environment.cpp)
     target_link_libraries(tefra_studio_app
         PUBLIC tefra_studio_core tefra_platform tefra_imgui tefra_imguizmo tefra_runtime tefra_audio tefra_ui tefra_mcp
         PRIVATE tefra_compile_options)

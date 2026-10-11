@@ -6,6 +6,7 @@
 #include "tefra/rhi/upload.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 namespace tefra::render {
@@ -619,6 +620,8 @@ void Vegetation::upload() {
     if (dr.empty()) dr.push_back({});
     draws_buf_ = rhi::upload_buffer(dev_, dr.data(), dr.size() * sizeof(DrawGPU), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                     "veg_draws");
+    static std::atomic<u64> next_uid{1};
+    uid_ = next_uid.fetch_add(1);
     TEFRA_LOG_INFO("Vegetation: %u prototypes, %zu instances, %zu draws", static_cast<u32>(protos_cpu_.size()),
                    cpu_.size(), draws_.size());
 }

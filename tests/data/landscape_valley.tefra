@@ -1,0 +1,30 @@
+{
+ "format": "tefra-place",
+ "version": 1,
+ "services": [
+  {
+   "class": "Workspace",
+   "props": {},
+   "children": [
+    {
+     "class": "Terrain",
+     "id": 10,
+     "props": {
+      "Name": "Terrain",
+      "Kind": "Valley",
+      "Seed": 1337,
+      "Vegetation": true
+     }
+    }
+   ]
+  },
+  {
+   "class": "Lighting",
+   "props": {
+    "ClockTime": 9.0,
+    "CloudCover": 0.3,
+    "FogDensity": 0.0
+   }
+  }
+ ]
+}

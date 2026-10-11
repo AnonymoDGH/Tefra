@@ -1,0 +1,116 @@
+#pragma once
+
+// Landscape of a DataModel (M3b): the Workspace Terrain (Kind Valley or Coast, Seed, SeaLevel, Vegetation) and the
+// Ocean become the GPU terrain, the trees / palms / rocks, the water or ocean surface, and the CPU heightfield that
+// physics, templates and the runtime share with them. The same builders produce tefra_bench's "valley" and "coast"
+// scenes, so a place with a Terrain looks like the bench scene it was copied from.
+//
+// Cost: the first generation of a field takes 1-4 s (TerrainField::acquire caches the last two). EnvironmentSync
+// rebuilds only when a Terrain or Ocean property changes, and only after it has settled (see update()); it waits for
+// the GPU to be idle first. The meshes, textures and materials of the trees, palms and rocks are created once
+// (LandscapeAssets) and reused by every rebuild, so a rebuild adds nothing to the Scene.
+
+#include "tefra/core/math.h"
+#include "tefra/renderer/terrain_field.h"
+#include "tefra/renderer/vegetation.h"
+#include "tefra/world/datamodel.h"
+
+#include <memory>
+#include <string>
+
+namespace tefra::rhi {
+class Device;
+class BindlessHeap;
+} // namespace tefra::rhi
+
+namespace tefra::render {
+class Scene;
+class Renderer;
+class Terrain;
+class Vegetation;
+class Water;
+class Ocean;
+} // namespace tefra::render
+
+namespace tefra::world {
+
+// ---- CPU side (no GPU) -------------------------------------------------------------------------------------------
+
+// The first Terrain child of the Workspace with Kind != None. nullptr when there is none.
+Instance* find_terrain(const DataModel& dm);
+// The Ocean child of the Workspace, or nullptr.
+Instance* find_ocean(const DataModel& dm);
+// Generator settings of a Terrain instance (Kind, Seed, SeaLevel). False when Kind is None.
+bool terrain_desc(const Instance& terrain, render::TerrainDesc& out);
+// Height (m) of the landscape at (x, z): the same values as the GPU terrain and the physics heightfield. 0 when the
+// instance has Kind None. Generates the field on first use (cached by TerrainField::acquire).
+f32 terrain_height(const Instance& terrain, f32 x, f32 z);
+
+// ---- Building blocks shared with tefra_bench (apps/common/scenes.cpp) --------------------------------------------
+
+// Scene resources of the landscape prototypes (materials, textures, meshes), built on first use and then reused:
+// the prototypes refer to them by index, and the Scene has no removal.
+struct LandscapeAssets {
+    struct Proto {
+        render::VegetationPrototype proto;
+        bool valid = false; // false when the model file is missing
+    };
+    bool valley_built = false, palms_built = false, rocks_built = false;
+    Proto valley[7]; // conifers [0..2], undergrowth [3..6] (fern, grass, rock, stump)
+    Proto palms[3];
+    Proto rocks[3]; // coast_rocks_05, sand_rocks_small_01, coast_land_rocks_02
+};
+
+// Builds the valley / palm / rock resources into assets (no-op when already built). cache_dir holds the CC0 assets
+// (textures/, models/); missing files are skipped.
+void build_valley_assets(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir = "assets/cache");
+void build_palm_assets(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir = "assets/cache");
+void build_rock_assets(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir = "assets/cache");
+
+// Valley materials, conifer and undergrowth prototypes and the forest scatter. Returns the start point (x, z) beside
+// the river.
+vec2 populate_valley(render::Scene& scene, const render::Terrain& terrain, render::Vegetation& veg,
+                     LandscapeAssets& assets, const std::string& cache_dir = "assets/cache");
+// Coast: palms on the back beach, reef / pebble / boulder rocks, the scatter. Returns the x, z of a beach spot
+// ~20 m from the water (the camera of the bench scene stands there).
+vec2 populate_coast(render::Scene& scene, const render::Terrain& terrain, render::Vegetation& veg,
+                    LandscapeAssets& assets, const std::string& cache_dir = "assets/cache");
+// Three procedural palm prototypes (bark and frond materials). palms[] receives the prototype indices.
+void add_palm_prototypes(render::Scene& scene, render::Vegetation& veg, u32 palms[3],
+                         const std::string& cache_dir = "assets/cache");
+
+// ---- Live landscape ----------------------------------------------------------------------------------------------
+
+class EnvironmentSync {
+  public:
+    // The renderer draws the landscape through Renderer::set_landscape; it must outlive this object.
+    EnvironmentSync(const rhi::Device& dev, rhi::BindlessHeap& heap, render::Scene& scene, render::Renderer& renderer);
+    ~EnvironmentSync();
+    EnvironmentSync(const EnvironmentSync&) = delete;
+    EnvironmentSync& operator=(const EnvironmentSync&) = delete;
+
+    // Call once per frame on the main thread. Rebuilds what changed in the model and returns true when anything was
+    // rebuilt (the caller may refresh lighting that depends on the landscape). While a landscape exists, an edit is
+    // applied once it has stayed the same for settle_frames consecutive calls (1 or 0: at once), so a value dragged
+    // every frame rebuilds once; the first build and a removal are applied at once.
+    bool update(const DataModel& model, u32 settle_frames = 1);
+    // Detaches the landscape from the renderer and frees its GPU objects (before the device or heap go away).
+    void clear();
+
+    bool has_terrain() const;
+    bool has_ocean() const;
+    render::TerrainKind kind() const; // Valley / Coast; Valley when there is no terrain
+    f32 sea_level() const;            // Terrain.SeaLevel as applied; 0 without a terrain
+    // Height (m) of the landscape at (x, z); 0 without a terrain.
+    f32 height_at(f32 x, f32 z) const;
+    // The shared CPU field (null without a terrain).
+    const render::TerrainField* field() const;
+    // Counts rebuilds of the terrain (0 = none yet); changes whenever the GPU terrain is replaced.
+    u64 terrain_revision() const;
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+} // namespace tefra::world

@@ -83,6 +83,7 @@ App::~App() {
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
     }
+    environment_.reset(); // before the renderer, heap and device it draws with
     sync_.reset();
     renderer_.reset();
     if (device_) {
@@ -382,6 +383,7 @@ void App::sync_world() {
         update_lighting(true);
     }
     update_lighting(false);
+    sync_environment();
     sync_->update();
 }
 

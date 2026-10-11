@@ -482,8 +482,13 @@ void Renderer::compute_cascades(const Camera& cam, f32 aspect, const RenderSetti
     fc.shadow_soft = vec4{s.penumbra_scale, s.contact_length, 0.0f, 0.0f};
 }
 
-void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTimer* timer, const RenderWorld& world,
+void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTimer* timer, const RenderWorld& world_in,
                       const Camera& camera, f32 time, const RenderSettings& settings_in, const OutputTarget& target) {
+    RenderWorld world = world_in;
+    if (!world.terrain) world.terrain = landscape_.terrain;
+    if (!world.vegetation) world.vegetation = landscape_.vegetation;
+    if (!world.water) world.water = landscape_.water;
+    if (!world.ocean) world.ocean = landscape_.ocean;
     const Scene& scene = *world.scene;
     const Environment& env = *world.env;
     const Atmosphere* atmo = world.atmosphere;
@@ -732,7 +737,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     static_assert(sizeof(DrawCmd) == 20);
     const bool has_veg = veg && veg->draw_count() > 0;
     if (has_veg) {
-        if (veg_template_owner_ != veg) {
+        if (veg_template_uid_ != veg->uid()) {
             dev_.wait_idle();
             rhi::destroy_buffer(dev_, veg_cmd_template_);
             for (u32 i = 0; i < 2; ++i) {
@@ -743,7 +748,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             for (const auto& d : veg->draws()) tmpl.push_back({d.index_count, 0, d.first_index, d.vertex_offset, 0});
             veg_cmd_template_ = rhi::upload_buffer(dev_, tmpl.data(), tmpl.size() * sizeof(DrawCmd),
                                                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "veg_cmd_template");
-            veg_template_owner_ = veg;
+            veg_template_uid_ = veg->uid();
         }
         if (fb.veg_capacity < veg->visible_capacity()) {
             for (rhi::Buffer* b : {&fb.veg_visible, &fb.veg_shadow_visible, &fb.veg_cmds, &fb.veg_shadow_cmds})

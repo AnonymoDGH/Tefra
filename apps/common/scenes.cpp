@@ -1,5 +1,7 @@
 #include "scenes.h"
 
+#include "tefra/world/environment_sync.h"
+
 #include "tefra/renderer/gltf.h"
 #include "tefra/renderer/palm.h"
 #include "tefra/rhi/upload.h"
@@ -162,42 +164,6 @@ namespace tefra::app {
 
 namespace {
 
-u32 load_texture_file(render::Scene& scene, const std::string& path, bool srgb, u32 fallback) {
-    ImageRGBA8 img;
-    if (!image_read(path.c_str(), img)) return fallback;
-    rhi::TextureUpload up;
-    up.pixels = img.pixels.data();
-    up.width = img.width;
-    up.height = img.height;
-    up.format = srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
-    up.name = path.c_str();
-    return scene.add_texture(rhi::upload_texture(scene.device(), up));
-}
-
-struct LoadedModel {
-    u32 mesh[2] = {~0u, ~0u};
-    u32 material[2] = {0, 0};
-    f32 radius = 1.0f, center_y = 0.0f;
-};
-
-// Loads a glTF and keeps its first two primitives as a vegetation prototype (instances are removed).
-LoadedModel load_model(render::Scene& scene, const std::string& path) {
-    LoadedModel m;
-    const usize first = scene.instances().size();
-    if (!render::load_gltf(scene, path.c_str(), {}).ok) return m;
-    f32 top = 0.0f;
-    for (usize i = first; i < scene.instances().size() && i - first < 2; ++i) {
-        m.mesh[i - first] = scene.instances()[i].mesh;
-        m.material[i - first] = scene.instances()[i].material;
-        const auto& b = scene.meshes()[scene.instances()[i].mesh].bounds;
-        m.radius = max(m.radius, b.radius);
-        top = max(top, b.center.y);
-    }
-    m.center_y = top;
-    scene.instances().resize(first);
-    return m;
-}
-
 u32 hash_u32(u32 x) {
     x ^= x >> 16;
     x *= 0x7feb352du;
@@ -205,10 +171,6 @@ u32 hash_u32(u32 x) {
     x *= 0x846ca68bu;
     x ^= x >> 16;
     return x;
-}
-f32 smoothstep(f32 a, f32 b, f32 x) {
-    const f32 t = saturate((x - a) / (b - a));
-    return t * t * (3.0f - 2.0f * t);
 }
 f32 hash01(u32 a, u32 b, u32 c) {
     return static_cast<f32>(hash_u32(a * 73856093u ^ b * 19349663u ^ c * 83492791u) >> 8) / 16777216.0f;
@@ -234,163 +196,11 @@ void build_valley_scene(render::Scene& scene, render::Environment& env, const re
     setup.settings.grade_contrast = 1.15f;
     build_atmosphere_environment(atmo, env, setup.settings.sun_direction);
 
-    // ---- Materials --------------------------------------------------------------------------------
-    const std::string tex = "assets/cache/textures/";
-    render::MaterialGPU bark = plain(scene, {1, 1, 1}, 1.0f, 0.0f);
-    bark.base_color = {0.85f, 0.80f, 0.75f, 1.0f};
-    bark.base_color_tex =
-        load_texture_file(scene, tex + "bark_brown_01/bark_brown_01_diff.jpg", true, scene.white_texture());
-    bark.normal_tex =
-        load_texture_file(scene, tex + "bark_brown_01/bark_brown_01_nor_gl.jpg", false, scene.flat_normal_texture());
-    bark.orm_tex = load_texture_file(scene, tex + "bark_brown_01/bark_brown_01_arm.jpg", false, scene.white_texture());
-    bark.occlusion_strength = 1.0f;
-    bark.normal_scale = 1.8f;                // stronger relief: the plates read at 2-5 m
-    bark.flags = 4u;                         // bark: per-instance tint and moss
-    bark.pad[0] = std::bit_cast<u32>(0.85f); // moss coverage
-    const u32 bark_mat = scene.add_material(bark);
-
-    std::vector<u8> needle_albedo, needle_normal;
-    render::make_needle_textures(7, 1024, 512, needle_albedo, needle_normal);
-    rhi::TextureUpload up;
-    up.pixels = needle_albedo.data();
-    up.width = 1024;
-    up.height = 512;
-    up.format = VK_FORMAT_R8G8B8A8_SRGB;
-    up.alpha_coverage_cutoff = 0.4f;
-    up.name = "needles";
-    rhi::TextureUpload nup;
-    nup.pixels = needle_normal.data();
-    nup.width = 1024;
-    nup.height = 512;
-    nup.format = VK_FORMAT_R8G8B8A8_UNORM;
-    nup.name = "needles_normal";
-    render::MaterialGPU needles = plain(scene, {1, 1, 1}, 0.62f, 0.0f);
-    needles.base_color_tex = scene.add_texture(rhi::upload_texture(scene.device(), up));
-    needles.normal_tex = scene.add_texture(rhi::upload_texture(scene.device(), nup));
-    needles.emissive_cutoff.w = 0.4f;
-    needles.flags = 1u | 2u | 8u; // foliage, two-sided, normal alpha = baked AO
-    needles.translucency = 0.5f;
-    const u32 needle_mat = scene.add_material(needles);
-
-    // ---- Conifer prototypes (procedural) ---------------------------------------------------------------
-    struct Variant {
-        u32 seed;
-        f32 h, r;
-    };
-    const Variant variants[3] = {{11, 30.0f, 0.55f}, {23, 24.0f, 0.42f}, {37, 36.0f, 0.68f}};
-    u32 tree_protos[3];
-    for (int v = 0; v < 3; ++v) {
-        const render::ConiferMeshes cm = render::make_conifer(variants[v].seed, variants[v].h, variants[v].r);
-        TEFRA_LOG_INFO("Conifer %d: LOD0 %u triangles (trunk %u, crown %u)", v,
-                       u32((cm.trunk_lod0.indices.size() + cm.crown_lod0.indices.size()) / 3),
-                       u32(cm.trunk_lod0.indices.size() / 3), u32(cm.crown_lod0.indices.size() / 3));
-        render::VegetationPrototype p;
-        p.lods[0].mesh[0] = scene.add_mesh(cm.trunk_lod0);
-        p.lods[0].material[0] = bark_mat;
-        p.lods[0].mesh[1] = scene.add_mesh(cm.crown_lod0);
-        p.lods[0].material[1] = needle_mat;
-        p.lods[0].max_distance = 140.0f;
-        p.lods[1].mesh[0] = scene.add_mesh(cm.trunk_lod1);
-        p.lods[1].material[0] = bark_mat;
-        p.lods[1].mesh[1] = scene.add_mesh(cm.crown_lod1);
-        p.lods[1].material[1] = needle_mat;
-        p.lods[1].max_distance = 2200.0f;
-        p.lod_count = 2;
-        p.radius = cm.height * 0.55f;
-        p.center_y = cm.height * 0.5f;
-        p.wind = 0.35f;
-        p.shadow_distance = 160.0f;
-        p.canopy_radius = cm.canopy_radius;
-        p.canopy_top = cm.height * 0.98f;
-        p.canopy_density = 1.4f;
-        tree_protos[v] = veg.add_prototype(p);
-    }
-
-    // ---- Undergrowth prototypes (Poly Haven CC0) ------------------------------------------------------
-    const std::string models = "assets/cache/models/";
-    struct Under {
-        const char* name;
-        f32 dist;
-        f32 spacing;
-        u32 proto = ~0u;
-    };
-    Under under[4] = {{"fern_02", 70.0f, 2.2f},
-                      {"grass_medium_02", 45.0f, 1.1f},
-                      {"rock_moss_set_01", 160.0f, 9.0f},
-                      {"tree_stump_01", 160.0f, 21.0f}};
-    for (Under& u : under) {
-        const std::string path = models + u.name + "/" + u.name + ".gltf";
-        if (!file_exists(path.c_str())) continue;
-        const LoadedModel lm = load_model(scene, path);
-        if (lm.mesh[0] == ~0u) continue;
-        render::VegetationPrototype p;
-        p.lods[0].mesh[0] = lm.mesh[0];
-        p.lods[0].material[0] = lm.material[0];
-        p.lods[0].mesh[1] = lm.mesh[1];
-        p.lods[0].material[1] = lm.material[1];
-        p.lods[0].max_distance = u.dist;
-        p.radius = lm.radius;
-        p.center_y = lm.center_y;
-        p.wind = (std::string(u.name).find("grass") != std::string::npos ||
-                  std::string(u.name).find("fern") != std::string::npos)
-                     ? 1.0f
-                     : 0.0f;
-        p.cast_shadows = std::string(u.name).find("grass") == std::string::npos;
-        p.shadow_distance = 40.0f;
-        u.proto = veg.add_prototype(p);
-    }
-    scene.upload();
-
-    // ---- Scatter ---------------------------------------------------------------------------------
-    const f32 half = terrain.world_size() * 0.5f - 4.0f;
-    u32 trees = 0;
-    const f32 spacing = 6.0f;
-    for (f32 z = -half; z < half; z += spacing)
-        for (f32 x = -half; x < half; x += spacing) {
-            const u32 ix = static_cast<u32>(i32((x + half) / spacing)),
-                      iz = static_cast<u32>(i32((z + half) / spacing));
-            const f32 px = x + (hash01(ix, iz, 1) - 0.5f) * spacing * 0.9f;
-            const f32 pz = z + (hash01(ix, iz, 2) - 0.5f) * spacing * 0.9f;
-            const vec3 n = terrain.normal_at(px, pz);
-            const f32 h = terrain.height_at(px, pz);
-            const f32 rd = std::fabs(terrain.river_distance(px, pz));
-            if (n.y < 0.80f || rd < 11.0f || h < 16.5f || h > 400.0f) continue;
-            // Clearings: low-frequency density field.
-            const f32 density =
-                0.5f + 0.5f * std::sin(px * 0.011f + std::sin(pz * 0.007f) * 2.0f) * std::cos(pz * 0.009f);
-            if (hash01(ix, iz, 3) > 0.25f + 0.75f * density) continue;
-            const u32 v = hash_u32(ix * 31u + iz * 17u) % 3u;
-            const f32 scale = 0.75f + 0.5f * hash01(ix, iz, 4);
-            veg.add_instance(tree_protos[v], {px, h - 0.3f, pz}, hash01(ix, iz, 5) * kTwoPi, scale, hash01(ix, iz, 6));
-            ++trees;
-        }
-    // Undergrowth only around the start area for now (M3 streams it by cells).
-    const f32 cz0 = -120.0f, cx0 = -terrain.river_distance(0.0f, cz0) + 18.0f;
-    u32 small = 0;
-    for (u32 k = 0; k < 4; ++k) {
-        if (under[k].proto == ~0u) continue;
-        const f32 sp = under[k].spacing, R = k < 2 ? 220.0f : 500.0f;
-        for (f32 z = cz0 - R; z < cz0 + R; z += sp)
-            for (f32 x = cx0 - R; x < cx0 + R; x += sp) {
-                const u32 ix = static_cast<u32>(i32((x - cx0 + R) / sp)),
-                          iz = static_cast<u32>(i32((z - cz0 + R) / sp));
-                const f32 px = x + (hash01(ix, iz, 11 + k) - 0.5f) * sp, pz = z + (hash01(ix, iz, 21 + k) - 0.5f) * sp;
-                const f32 rd = std::fabs(terrain.river_distance(px, pz));
-                const vec3 n = terrain.normal_at(px, pz);
-                if (rd < 5.0f || n.y < 0.7f) continue;
-                if (hash01(ix, iz, 31 + k) > (k < 2 ? 0.55f : 0.5f)) continue;
-                const f32 h = terrain.height_at(px, pz);
-                const f32 scale = (k == 3 ? 0.8f : 0.7f) + 0.6f * hash01(ix, iz, 41 + k);
-                veg.add_instance(under[k].proto, {px, h - 0.05f, pz}, hash01(ix, iz, 51 + k) * kTwoPi, scale,
-                                 hash01(ix, iz, 61 + k));
-                ++small;
-            }
-    }
-    veg.upload();
-    TEFRA_LOG_INFO("Valley: %u trees, %u undergrowth instances", trees, small);
-
+    // Materials, prototypes and scatter: the same code the game runtime uses (world::populate_valley).
+    world::LandscapeAssets assets;
+    const vec2 start = world::populate_valley(scene, terrain, veg, assets, "assets/cache");
     // Stand on the valley floor beside the river, looking downstream.
-    const f32 z = cz0, x = cx0;
+    const f32 z = start.y, x = start.x;
     setup.camera.position = {static_cast<f64>(x), static_cast<f64>(terrain.height_at(x, z) + 1.7f),
                              static_cast<f64>(z)};
     setup.camera.yaw = radians(185.0f);
@@ -400,82 +210,6 @@ void build_valley_scene(render::Scene& scene, render::Environment& env, const re
 }
 
 // "palms": a small grove of procedural coconut palms on sand, morning-to-noon sun ~40 deg up.
-namespace {
-
-// Palm materials (CC0 palm bark, baked frond atlas) and three procedural palm prototypes.
-void make_palm_prototypes(render::Scene& scene, render::Vegetation& veg, u32 palm_protos[3]) {
-    const std::string tex = "assets/cache/textures/";
-    render::MaterialGPU bark = plain(scene, {1, 1, 1}, 0.9f, 0.0f);
-    bark.base_color = {0.62f, 0.58f, 0.54f, 1.0f};
-    bark.base_color_tex =
-        load_texture_file(scene, tex + "palm_tree_bark/palm_tree_bark_diff.jpg", true, scene.white_texture());
-    bark.normal_tex =
-        load_texture_file(scene, tex + "palm_tree_bark/palm_tree_bark_nor_gl.jpg", false, scene.flat_normal_texture());
-    bark.orm_tex =
-        load_texture_file(scene, tex + "palm_tree_bark/palm_tree_bark_arm.jpg", false, scene.white_texture());
-    bark.occlusion_strength = 1.0f;
-    bark.normal_scale = 1.2f;
-    const u32 bark_mat = scene.add_material(bark);
-
-    std::vector<u8> frond_albedo, frond_normal;
-    render::make_frond_textures(5, 1024, 512, frond_albedo, frond_normal);
-    rhi::TextureUpload up;
-    up.pixels = frond_albedo.data();
-    up.width = 1024;
-    up.height = 512;
-    up.format = VK_FORMAT_R8G8B8A8_SRGB;
-    up.alpha_coverage_cutoff = 0.35f;
-    up.name = "fronds";
-    rhi::TextureUpload nup;
-    nup.pixels = frond_normal.data();
-    nup.width = 1024;
-    nup.height = 512;
-    nup.format = VK_FORMAT_R8G8B8A8_UNORM;
-    nup.name = "fronds_normal";
-    render::MaterialGPU fronds = plain(scene, {1, 1, 1}, 0.55f, 0.0f);
-    fronds.base_color_tex = scene.add_texture(rhi::upload_texture(scene.device(), up));
-    fronds.normal_tex = scene.add_texture(rhi::upload_texture(scene.device(), nup));
-    fronds.emissive_cutoff.w = 0.35f;
-    fronds.flags = 1u | 2u | 8u; // foliage, two-sided, normal alpha = baked AO
-    fronds.translucency = 0.5f;
-    const u32 frond_mat = scene.add_material(fronds);
-
-    // Three palms with different heights and seeds.
-    struct Variant {
-        u32 seed;
-        f32 h;
-    };
-    const Variant variants[3] = {{5, 10.0f}, {9, 12.5f}, {21, 14.5f}};
-    for (int v = 0; v < 3; ++v) {
-        const render::PalmMeshes pm = render::make_palm(variants[v].seed, variants[v].h);
-        TEFRA_LOG_INFO("Palm %d: LOD0 %u triangles, LOD1 %u triangles", v,
-                       u32((pm.trunk_lod0.indices.size() + pm.crown_lod0.indices.size()) / 3),
-                       u32((pm.trunk_lod1.indices.size() + pm.crown_lod1.indices.size()) / 3));
-        render::VegetationPrototype p;
-        p.lods[0].mesh[0] = scene.add_mesh(pm.trunk_lod0);
-        p.lods[0].material[0] = bark_mat;
-        p.lods[0].mesh[1] = scene.add_mesh(pm.crown_lod0);
-        p.lods[0].material[1] = frond_mat;
-        p.lods[0].max_distance = 120.0f;
-        p.lods[1].mesh[0] = scene.add_mesh(pm.trunk_lod1);
-        p.lods[1].material[0] = bark_mat;
-        p.lods[1].mesh[1] = scene.add_mesh(pm.crown_lod1);
-        p.lods[1].material[1] = frond_mat;
-        p.lods[1].max_distance = 2000.0f;
-        p.lod_count = 2;
-        p.center_y = pm.height * 0.5f;
-        const f32 half_h = pm.height * 0.5f;
-        p.radius = std::sqrt(half_h * half_h + pm.crown_radius * pm.crown_radius) + 1.0f;
-        p.wind = 0.25f;
-        p.shadow_distance = 120.0f;
-        p.canopy_radius = pm.canopy_radius;
-        p.canopy_top = pm.height;
-        p.canopy_density = 0.9f;
-        palm_protos[v] = veg.add_prototype(p);
-    }
-}
-
-} // namespace
 
 void build_palms_scene(render::Scene& scene, render::Environment& env, const render::Atmosphere& atmo,
                        render::Vegetation& veg, SceneSetup& setup) {
@@ -499,7 +233,7 @@ void build_palms_scene(render::Scene& scene, render::Environment& env, const ren
     scene.add_instance(ground);
 
     u32 palm_protos[3];
-    make_palm_prototypes(scene, veg, palm_protos);
+    world::add_palm_prototypes(scene, veg, palm_protos, "assets/cache");
     scene.upload();
 
     // A loose grove: positions, variant, yaw (the lean points along +X before yaw) and scale.
@@ -543,96 +277,10 @@ void build_coast_scene(render::Scene& scene, render::Environment& env, const ren
     setup.settings.cloud_coverage = 0.38f;
     build_atmosphere_environment(atmo, env, setup.settings.sun_direction);
 
-    u32 palms[3];
-    make_palm_prototypes(scene, veg, palms);
-    // Shore rocks (Poly Haven CC0): reef rocks at the waterline, pebble clusters on the sand, big boulders at the
-    // foot of the headlands.
-    struct Rock {
-        const char* name;
-        f32 dist;
-        u32 proto = ~0u;
-    };
-    Rock rocks[3] = {{"coast_rocks_05", 450.0f}, {"sand_rocks_small_01", 140.0f}, {"coast_land_rocks_02", 900.0f}};
-    for (Rock& r : rocks) {
-        const std::string path = std::string("assets/cache/models/") + r.name + "/" + r.name + ".gltf";
-        if (!file_exists(path.c_str())) continue;
-        const LoadedModel lm = load_model(scene, path);
-        if (lm.mesh[0] == ~0u) continue;
-        render::VegetationPrototype p;
-        p.lods[0].mesh[0] = lm.mesh[0];
-        p.lods[0].material[0] = lm.material[0];
-        p.lods[0].mesh[1] = lm.mesh[1];
-        p.lods[0].material[1] = lm.material[1];
-        p.lods[0].max_distance = r.dist;
-        p.radius = lm.radius;
-        p.center_y = lm.center_y;
-        p.wind = 0.0f;
-        p.shadow_distance = 150.0f;
-        r.proto = veg.add_prototype(p);
-    }
-    scene.upload();
-
-    const f32 half = terrain.world_size() * 0.5f - 10.0f;
-    auto seaward = [&](f32 x, f32 z) {
-        const f32 gx = terrain.shore_distance(x + 2.0f, z) - terrain.shore_distance(x - 2.0f, z);
-        const f32 gz = terrain.shore_distance(x, z + 2.0f) - terrain.shore_distance(x, z - 2.0f);
-        return std::atan2(gz, gx); // yaw that points the palm's lean (+X) towards the sea
-    };
-    // Palms: groves along the back of the beach and the dunes, leaning out over the sand.
-    u32 n_palms = 0, n_rocks = 0;
-    const f32 sp = 6.0f;
-    for (f32 z = -700.0f; z < 500.0f; z += sp)
-        for (f32 x = -half; x < half; x += sp) {
-            const u32 ix = static_cast<u32>(i32((x + half) / sp)), iz = static_cast<u32>(i32((z + 700.0f) / sp));
-            const f32 px = x + (hash01(ix, iz, 1) - 0.5f) * sp, pz = z + (hash01(ix, iz, 2) - 0.5f) * sp;
-            const f32 land = -terrain.shore_distance(px, pz);
-            if (land < 36.0f || land > 160.0f || terrain.normal_at(px, pz).y < 0.93f ||
-                terrain.height_at(px, pz) > terrain.sea_level() + 9.0f)
-                continue;
-            const f32 grove = 0.5f + 0.5f * std::sin(px * 0.021f + std::sin(pz * 0.017f) * 2.0f);
-            const f32 p = 0.3f * (0.15f + 0.85f * grove * grove) * (1.0f - smoothstep(70.0f, 160.0f, land));
-            if (hash01(ix, iz, 3) > p) continue;
-            const f32 yaw = seaward(px, pz) + (hash01(ix, iz, 4) - 0.5f) * 1.2f;
-            veg.add_instance(palms[hash_u32(ix * 7u + iz * 13u) % 3u], {px, terrain.height_at(px, pz) - 0.1f, pz}, yaw,
-                             0.7f + 0.65f * hash01(ix, iz, 5), hash01(ix, iz, 6));
-            ++n_palms;
-        }
-    // Rocks.
-    const f32 rsp[3] = {7.0f, 9.0f, 22.0f};
-    for (u32 k = 0; k < 3; ++k) {
-        if (rocks[k].proto == ~0u) continue;
-        for (f32 z = -800.0f; z < 300.0f; z += rsp[k])
-            for (f32 x = -half; x < half; x += rsp[k]) {
-                const u32 ix = static_cast<u32>(i32((x + half) / rsp[k])),
-                          iz = static_cast<u32>(i32((z + 800.0f) / rsp[k]));
-                const f32 px = x + (hash01(ix, iz, 11 + k) - 0.5f) * rsp[k];
-                const f32 pz = z + (hash01(ix, iz, 21 + k) - 0.5f) * rsp[k];
-                const f32 sd = terrain.shore_distance(px, pz);
-                const f32 headland = smoothstep(240.0f, 380.0f, std::fabs(px));
-                f32 prob = 0.0f;
-                const bool low = terrain.height_at(px, pz) < terrain.sea_level() + 3.0f;
-                if (k == 0 && low && sd > -6.0f && sd < 30.0f) prob = 0.04f + 0.5f * headland;
-                if (k == 1 && low && sd > -45.0f && sd < -4.0f) prob = 0.05f + 0.3f * headland;
-                if (k == 2 && sd > -14.0f && sd < 18.0f && terrain.height_at(px, pz) < terrain.sea_level() + 4.0f)
-                    prob = 0.6f * headland;
-                if (hash01(ix, iz, 31 + k) > prob) continue;
-                const f32 scale = (k == 2 ? 0.8f : 0.6f) + (k == 2 ? 0.7f : 1.0f) * hash01(ix, iz, 41 + k);
-                veg.add_instance(rocks[k].proto, {px, terrain.height_at(px, pz) - 0.25f * scale, pz},
-                                 hash01(ix, iz, 51 + k) * kTwoPi, scale, hash01(ix, iz, 61 + k));
-                ++n_rocks;
-            }
-    }
-    veg.upload();
-    TEFRA_LOG_INFO("Coast: %u palms, %u rocks", n_palms, n_rocks);
-
+    world::LandscapeAssets assets;
+    const vec2 spot = world::populate_coast(scene, terrain, veg, assets, "assets/cache");
     // Stand on the beach, ~20 m from the water, looking out to sea (-Z).
-    const f32 cx = 0.0f;
-    f32 cz = 0.0f;
-    for (f32 z = 400.0f; z > -400.0f; z -= 0.5f)
-        if (terrain.shore_distance(cx, z) > -20.0f) {
-            cz = z;
-            break;
-        }
+    const f32 cx = spot.x, cz = spot.y;
     setup.camera.position = {f64(cx), f64(terrain.height_at(cx, cz) + 1.7f), f64(cz)};
     setup.camera.yaw = 0.0f;
     setup.camera.pitch = radians(-3.0f);

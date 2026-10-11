@@ -143,6 +143,9 @@ struct WorldImpl {
     f32 accumulator = 0.0f;
     bool writing_back = false;
     bool update_error_logged = false;
+    JPH::BodyID heightfield_body; // the landscape heightfield (set_heightfield); valid only when has_heightfield
+    bool has_heightfield = false;
+    void clear_heightfield();
     // Declaration order matters: the system (last) is destroyed first, while its filters and allocators still live.
     BroadPhaseLayers broad_layers;
     ObjectVsBroadPhase object_vs_broad;

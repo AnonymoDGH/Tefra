@@ -6,8 +6,10 @@
 #include "tefra/core/log.h"
 #include "tefra/physics/character.h"
 #include "tefra/physics/physics_world.h"
+#include "tefra/renderer/terrain_field.h"
 #include "tefra/scripting/script_host.h"
 #include "tefra/world/datamodel.h"
+#include "tefra/world/environment_sync.h"
 
 #include <cmath>
 
@@ -82,6 +84,17 @@ bool GameRuntime::start() {
         model_.fire_event(a, name, &b);
         model_.fire_event(b, name, &a);
     });
+    // Landscape: the Workspace Terrain becomes a static heightfield with the same samples as the GPU terrain.
+    if (const Instance* terrain = world::find_terrain(model_)) {
+        render::TerrainDesc td;
+        if (world::terrain_desc(*terrain, td)) {
+            const auto field = render::TerrainField::acquire(td);
+            physics_->set_heightfield(field->heights().data(), field->resolution(), field->texel_size(),
+                                      field->sample_origin(), terrain);
+            TEFRA_LOG_INFO("runtime: landscape heightfield %ux%u at %.1f m", field->resolution(), field->resolution(),
+                           static_cast<f64>(field->texel_size()));
+        }
+    }
     animator_ = std::make_unique<anim::AnimatorSystem>(model_);
 
     // The local player and its containers.
@@ -132,6 +145,9 @@ void GameRuntime::spawn_character() {
         const vec3 p = spawn->get_vec3("Position"), s = spawn->get_vec3("Size");
         desc.origin = p + vec3{0, s.y * 0.5f + 0.05f, 0};
         desc.yaw_deg = spawn->get_vec3("Orientation").y;
+    } else if (const Instance* terrain = world::find_terrain(model_)) {
+        // No SpawnLocation: stand on the landscape at the origin.
+        desc.origin = {0, world::terrain_height(*terrain, 0.0f, 0.0f) + 0.5f, 0};
     } else {
         desc.origin = {0, 0.5f, 0};
     }
