@@ -13,9 +13,11 @@ using world::Value;
 
 namespace {
 constexpr usize kMaxOneShots = 48;
-constexpr f64 kSeekEpsilon = 1e-3;  // a TimePosition this far from the voice was written by the game: seek
-constexpr f64 kWriteEpsilon = 1e-6; // write TimePosition back only when it moved
-constexpr f64 kLoopEpsilon = 1e-4;  // jitter of the device cursor that is not a loop
+constexpr f64 kSeekEpsilon = 1e-3;   // a TimePosition this far from the voice was written by the game: seek
+constexpr f64 kWriteEpsilon = 1e-6;  // write TimePosition back only when it moved
+constexpr f64 kLoopEpsilon = 1e-4;   // jitter of the device cursor that is not a loop
+constexpr f32 kSettleSeconds = 0.1f; // a device applies a seek within one audio callback; this covers a few of them
+constexpr f32 kSettleDone = 1e-4f;   // rounding of the countdown does not keep the write-back off
 } // namespace
 
 SoundDriver::SoundDriver(Backend& backend, SoundPaths paths) : backend_(backend), paths_(std::move(paths)) {}
@@ -70,6 +72,8 @@ void SoundDriver::load(Instance& s, Tracked& t, bool spatial) {
     t.voice.reset();
     t.clip.reset();
     t.pos = 0.0;
+    t.started = false;
+    t.settle = 0.0f;
 
     bool unsupported = false;
     const std::string path = resolve_sound_id(t.sound_id, paths_.project_resolve, paths_.base_dirs, &unsupported);
@@ -127,32 +131,54 @@ void SoundDriver::sync_sound(DataModel& dm, Instance& s, Tracked& t, f32 dt) {
     if (std::abs(wanted - t.pos) > kSeekEpsilon) {
         v.seek(wanted);
         t.pos = wanted;
+        t.settle = v.seek_is_async() ? kSettleSeconds : 0.0f;
     }
 
-    if (want && !v.playing()) {
-        v.play(true);
-    } else if (!want && v.playing()) {
-        v.play(false);
+    if (!want) {
+        if (v.playing()) v.play(false);
+        t.started = false;
+    } else {
+        // A device stops a clip that reached its end between two frames, and miniaudio rewinds a clip that is at its
+        // end when it is started again. So a non-looped clip is finished here, before the start below can restart it.
+        if (t.started && !looped && v.finished()) {
+            finish(dm, s, v, t);
+            return;
+        }
+        if (!v.playing()) {
+            v.play(true);
+            t.started = true;
+        }
     }
     v.advance(dt);
 
     const f64 now = v.position();
     // A looped clip wrapped around: the position jumped back since the last frame.
-    if (want && looped && v.playing() && now + kLoopEpsilon < t.pos) dm.fire_event(s, "Looped");
-
-    if (want && !looped && v.finished()) {
-        v.play(false);
-        v.seek(0.0);
-        t.pos = 0.0;
-        s.set("Playing", Value::boolean(false), true);
-        s.set("TimePosition", Value::number(0.0), true);
-        dm.fire_event(s, "Ended");
+    const bool wrapped = want && looped && v.playing() && now + kLoopEpsilon < t.pos;
+    if (want && !looped && t.started && v.finished()) {
+        finish(dm, s, v, t);
         return;
     }
-    if (std::abs(now - t.pos) > kWriteEpsilon) {
+
+    // A device applies a seek in its audio thread, so for a moment the cursor still shows the old position. Keep the
+    // value the game wrote until the seek has been applied.
+    if (t.settle > 0.0f) t.settle -= dt;
+    if (t.settle <= kSettleDone && std::abs(now - t.pos) > kWriteEpsilon) {
         s.set("TimePosition", Value::number(now), true);
         t.pos = now;
     }
+    if (wrapped) dm.fire_event(s, "Looped"); // after the writes, for the same reason
+}
+
+void SoundDriver::finish(DataModel& dm, Instance& s, Voice& v, Tracked& t) {
+    v.play(false);
+    v.seek(0.0);
+    t.pos = 0.0;
+    t.started = false;
+    t.settle = 0.0f;
+    s.set("Playing", Value::boolean(false), true);
+    s.set("TimePosition", Value::number(0.0), true);
+    // Last thing done for this Sound: a listener may destroy it, so the caller must not use `s` after this.
+    dm.fire_event(s, "Ended");
 }
 
 bool SoundDriver::start_one_shot(std::shared_ptr<const ClipData> clip, f32 gain, f32 pitch, const vec3* where) {
@@ -193,11 +219,17 @@ void SoundDriver::update(DataModel& dm, const Listener& listener, f32 dt) {
     master_ = service ? service->get_float("Volume", 1.0f) : 1.0f;
     rolloff_ = service ? service->get_float("RolloffScale", 1.0f) : 1.0f;
 
+    // Ids, not pointers: a script that handles Ended or Looped may destroy other Sounds, and a snapshot of pointers
+    // would then dangle. Each Sound is looked up again right before it is synced.
+    std::vector<u64> ids;
+    for (Instance* s : dm.root().descendants())
+        if (s->is_a("Sound")) ids.push_back(s->id());
     std::unordered_set<u64> alive;
-    for (Instance* s : dm.root().descendants()) {
-        if (!s->is_a("Sound")) continue;
-        alive.insert(s->id());
-        sync_sound(dm, *s, tracked_[s->id()], dt);
+    for (u64 id : ids) {
+        Instance* s = dm.find(id);
+        if (!s || !s->is_a("Sound")) continue;
+        alive.insert(id);
+        sync_sound(dm, *s, tracked_[id], dt);
     }
     for (auto it = tracked_.begin(); it != tracked_.end();) {
         if (!alive.count(it->first)) {

@@ -51,7 +51,9 @@ class SoundDriver {
         bool spatial = false; // the parent is a part: 3D voice
         std::shared_ptr<const ClipData> clip;
         std::unique_ptr<Voice> voice;
-        f64 pos = 0.0; // last position written to TimePosition
+        f64 pos = 0.0;        // last position written to TimePosition
+        bool started = false; // the driver started the voice and has not stopped or finished it since
+        f32 settle = 0.0f;    // seconds left in which TimePosition keeps the game's seek (device seeks are async)
         // Snapshot taken every frame: the Sound is gone when the driver next looks, so PlayOnRemove uses this.
         bool play_on_remove = false;
         f32 volume = 0.5f;
@@ -68,6 +70,7 @@ class SoundDriver {
     void sync_sound(world::DataModel& dm, world::Instance& s, Tracked& t, f32 dt);
     void load(world::Instance& s, Tracked& t, bool spatial);
     void fire_removed(Tracked& t);
+    void finish(world::DataModel& dm, world::Instance& s, Voice& v, Tracked& t); // a non-looped clip ran out
     bool start_one_shot(std::shared_ptr<const ClipData> clip, f32 gain, f32 pitch, const vec3* where);
     f32 distance_gain(vec3 where, f32 min_distance, f32 max_distance) const;
     bool anchor_position(const world::DataModel& dm, const world::Instance& s, vec3& out) const;

@@ -15,6 +15,9 @@ class MaVoice final : public Voice {
         const auto frames = static_cast<ma_uint64>(clip_->samples.size() / clip_->channels);
         ma_audio_buffer_config bc =
             ma_audio_buffer_config_init(ma_format_f32, clip_->channels, frames, clip_->samples.data(), nullptr);
+        // Without this the buffer reports rate 0 and miniaudio plays the clip at the engine rate: a 22050 Hz file
+        // ran 2.2x fast and TimeLength was infinite. The decoder kept the file's own rate, so it is passed on here.
+        bc.sampleRate = clip_->sample_rate;
         if (ma_audio_buffer_init(&bc, &buffer_) != MA_SUCCESS) return;
         buffer_ready_ = true;
         // 2D sounds skip the spatializer. 3D sounds keep it for panning; the distance gain is ours (sound_math.cpp),
@@ -53,6 +56,7 @@ class MaVoice final : public Voice {
         return f64(seconds);
     }
     bool finished() const override { return sound_ready_ && ma_sound_at_end(&sound_) != 0; }
+    bool seek_is_async() const override { return true; } // ma_sound_seek_to_second sets a target the mixer applies
     void set_looped(bool looped) override {
         if (sound_ready_) ma_sound_set_looping(&sound_, looped ? MA_TRUE : MA_FALSE);
     }
@@ -91,8 +95,30 @@ class MaBackend final : public Backend {
         ready_ = true;
         return true;
     }
+    // Offline engine for tests: no device, rendered by render_for_test().
+    bool init_offline() {
+        ma_engine_config cfg = ma_engine_config_init();
+        cfg.noDevice = MA_TRUE;
+        cfg.channels = 2;
+        cfg.sampleRate = kOfflineRate;
+        if (ma_engine_init(&cfg, &engine_) != MA_SUCCESS) return false;
+        ready_ = true;
+        offline_ = true;
+        return true;
+    }
 
-    const char* name() const override { return "miniaudio"; }
+    const char* name() const override { return offline_ ? "miniaudio-offline" : "miniaudio"; }
+    void render_for_test(u32 frames) override {
+        if (!offline_) return;
+        float scratch[512 * 2];
+        while (frames > 0) {
+            const auto n = static_cast<ma_uint32>(frames < 512u ? frames : 512u);
+            ma_uint64 got = 0;
+            (void)ma_engine_read_pcm_frames(&engine_, scratch, n, &got);
+            if (got == 0) break;
+            frames -= static_cast<u32>(got);
+        }
+    }
     std::unique_ptr<Voice> create_voice(const std::shared_ptr<const ClipData>& clip, bool spatial) override {
         if (!ready_ || !clip || clip->channels == 0 || clip->samples.empty()) return nullptr;
         return std::make_unique<MaVoice>(&engine_, clip, spatial);
@@ -104,8 +130,10 @@ class MaBackend final : public Backend {
     }
 
   private:
+    static constexpr ma_uint32 kOfflineRate = 48000;
     ma_engine engine_{};
     bool ready_ = false;
+    bool offline_ = false;
 };
 
 } // namespace
@@ -117,6 +145,12 @@ std::unique_ptr<Backend> open_backend(bool use_device) {
         TEFRA_LOG_INFO("audio: no output device; sounds run on the null backend (timing and events are unchanged)");
     }
     return make_null_backend();
+}
+
+std::unique_ptr<Backend> make_offline_engine_backend() {
+    auto backend = std::make_unique<MaBackend>();
+    if (!backend->init_offline()) return nullptr;
+    return backend;
 }
 
 } // namespace tefra::audio

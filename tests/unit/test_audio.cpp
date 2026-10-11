@@ -1,6 +1,8 @@
 #define DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS
 #include <doctest.h>
 
+#include "../../engine/audio/src/backend.h"
+#include "../../engine/audio/src/sound_driver.h"
 #include "tefra/audio/audio_system.h"
 #include "tefra/audio/sound_math.h"
 #include "tefra/core/fs.h"
@@ -10,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -72,6 +75,7 @@ struct Session {
     GameRuntime rt;
     AudioSystem* audio = nullptr;
     Counts counts;
+    std::function<void(const GameEvent&)> on_event; // extra handler, e.g. a script that destroys instances
 
     explicit Session(bool spawn_character) : rt(dm, make_config(spawn_character)) {
         auto system = std::make_unique<AudioSystem>(AudioOptions{false});
@@ -81,6 +85,7 @@ struct Session {
         listener.event = [this](const GameEvent& e) {
             if (e.name == "Ended") ++counts.ended;
             if (e.name == "Looped") ++counts.looped;
+            if (on_event) on_event(e);
         };
         (void)dm.add_listener(std::move(listener));
     }
@@ -310,4 +315,118 @@ TEST_CASE("audio: the local character makes footsteps, and CharacterSounds turns
     }
     CHECK(peak == 0);
     s.rt.stop();
+}
+
+TEST_CASE("audio: a device voice plays a clip at the clip's own sample rate") {
+    // Regression: the miniaudio buffer had rate 0, so an 8 kHz clip ran at the 48 kHz engine rate (6x fast).
+    std::unique_ptr<Backend> backend = make_offline_engine_backend();
+    REQUIRE(backend != nullptr);
+    CHECK(std::string(backend->name()) == "miniaudio-offline");
+
+    ClipData clip;
+    std::string error;
+    REQUIRE(decode_clip(write_test_wav("rate8k.wav", 8000, 0.5f), true, clip, error));
+    REQUIRE(clip.sample_rate == 8000u);
+    const std::shared_ptr<const ClipData> shared = std::make_shared<const ClipData>(std::move(clip));
+
+    std::unique_ptr<Voice> voice = backend->create_voice(shared, false);
+    REQUIRE(voice != nullptr);
+    voice->set_gain(1.0f);
+    voice->play(true);
+    CHECK(voice->position() == doctest::Approx(0.0));
+
+    backend->render_for_test(12000); // 0.25 s at 48 kHz
+    CHECK(voice->position() == doctest::Approx(0.25).epsilon(0.02));
+    CHECK(voice->playing());
+    CHECK_FALSE(voice->finished());
+
+    backend->render_for_test(14000); // to 0.54 s: past the 0.5 s clip
+    CHECK(voice->finished());
+    CHECK_FALSE(voice->playing());
+}
+
+TEST_CASE("audio: an Ended handler may destroy other Sounds in the same frame") {
+    // Regression: the driver kept raw pointers to every Sound of the frame, so destroying a later one from an event
+    // handler left a dangling pointer for the rest of the loop.
+    Session s(false);
+    const std::string wav_short = write_test_wav("ends_soon.wav", 8000, 0.2f);
+    const std::string wav_long = write_test_wav("keeps_going.wav", 8000, 2.0f);
+    Instance* a = s.dm.create("Sound", s.dm.workspace(), "A");
+    Instance* b = s.dm.create("Sound", s.dm.workspace(), "B");
+    REQUIRE(a != nullptr);
+    REQUIRE(b != nullptr);
+    a->set("SoundId", Value::string(wav_short));
+    b->set("SoundId", Value::string(wav_long));
+    const u64 b_id = b->id();
+    s.on_event = [&s, a, b_id](const GameEvent& e) {
+        if (e.name == "Ended" && e.source == a) {
+            if (Instance* victim = s.dm.find(b_id)) s.dm.destroy(victim);
+        }
+    };
+    s.rt.start();
+    a->set("Playing", Value::boolean(true));
+    b->set("Playing", Value::boolean(true));
+    s.run(4, 0.1f);
+    CHECK(s.counts.ended == 1);
+    CHECK(s.dm.find(b_id) == nullptr);
+    s.run(3, 0.1f); // the driver carries on without B
+    CHECK(s.counts.ended == 1);
+    s.rt.stop();
+}
+
+TEST_CASE("audio: a device clip that ends fires Ended once and is not restarted") {
+    // Regression: a device stops the clip between two frames; the driver then restarted it (miniaudio rewinds a clip
+    // at its end on start), so a non-looped Sound replayed forever and never ended.
+    std::unique_ptr<Backend> backend = make_offline_engine_backend();
+    REQUIRE(backend != nullptr);
+    DataModel dm;
+    Instance* snd = dm.create("Sound", dm.workspace(), "Clip");
+    REQUIRE(snd != nullptr);
+    snd->set("SoundId", Value::string(write_test_wav("device_end.wav", 8000, 0.2f)));
+    snd->set("Playing", Value::boolean(true));
+    int ended = 0;
+    WorldListener listener;
+    listener.event = [&ended](const GameEvent& e) {
+        if (e.name == "Ended") ++ended;
+    };
+    (void)dm.add_listener(std::move(listener));
+
+    SoundPaths paths; // the test file is absolute: no project folder needed
+    SoundDriver driver(*backend, paths);
+    const Listener at_origin{};
+    for (int i = 0; i < 20; ++i) {           // 20 frames of 50 ms = 1 s; the clip is 0.2 s
+        driver.update(dm, at_origin, 0.05f); // the game step
+        backend->render_for_test(2400);      // the device plays 50 ms at 48 kHz
+    }
+    CHECK(ended == 1);
+    CHECK_FALSE(snd->get_bool("Playing"));
+    CHECK(snd->get_float("TimePosition") == doctest::Approx(0.0f));
+}
+
+TEST_CASE("audio: a seek written by the game is not overwritten by the device's old cursor") {
+    // Device seeks are applied on the audio thread: until then the cursor still shows the old position.
+    std::unique_ptr<Backend> backend = make_offline_engine_backend();
+    REQUIRE(backend != nullptr);
+    DataModel dm;
+    Instance* snd = dm.create("Sound", dm.workspace(), "Long");
+    REQUIRE(snd != nullptr);
+    snd->set("SoundId", Value::string(write_test_wav("device_seek.wav", 8000, 2.0f)));
+    snd->set("Playing", Value::boolean(true));
+    SoundPaths paths;
+    SoundDriver driver(*backend, paths);
+    const Listener at_origin{};
+    for (int i = 0; i < 2; ++i) {
+        driver.update(dm, at_origin, 0.05f);
+        backend->render_for_test(2400);
+    }
+    CHECK(snd->get_float("TimePosition") == doctest::Approx(0.05f).epsilon(0.1));
+
+    snd->set("TimePosition", Value::number(1.0)); // seek forward; the device has not applied it yet
+    driver.update(dm, at_origin, 0.05f);
+    CHECK(snd->get_float("TimePosition") == doctest::Approx(1.0f)); // not reverted to the old cursor (about 0.1 s)
+
+    backend->render_for_test(2400); // the device applies the seek and plays 50 ms
+    driver.update(dm, at_origin, 0.05f);
+    CHECK(snd->get_float("TimePosition") == doctest::Approx(1.05f).epsilon(0.01));
+    CHECK(snd->get_bool("Playing"));
 }

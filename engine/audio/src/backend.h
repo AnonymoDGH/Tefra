@@ -39,6 +39,8 @@ class Voice {
     virtual void set_gain(f32 gain) = 0;   // linear: volume x master x attenuation
     virtual void set_pitch(f32 speed) = 0; // PlaybackSpeed (pitch and speed together)
     virtual void set_position(vec3 p) = 0; // only meaningful for voices created spatial
+    // True when seek() takes effect later, on the audio thread (a device); the cursor then lags for a moment.
+    virtual bool seek_is_async() const { return false; }
     // Once per frame from the driver: the null backend advances its clock here, a device backend ignores it.
     virtual void advance(f32 dt) { (void)dt; }
 };
@@ -49,11 +51,15 @@ class Backend {
     virtual const char* name() const = 0;
     virtual std::unique_ptr<Voice> create_voice(const std::shared_ptr<const ClipData>& clip, bool spatial) = 0;
     virtual void set_listener(vec3 position, vec3 forward) = 0;
+    // Tests only: renders `frames` at the backend's own rate through an offline engine (no device). No-op otherwise.
+    virtual void render_for_test(u32 frames) { (void)frames; }
 };
 
 // The device backend when an output device opens, else the null backend. use_device = false forces the null one.
 std::unique_ptr<Backend> open_backend(bool use_device);
 std::unique_ptr<Backend> make_null_backend();
+// The miniaudio engine without a device, rendered by hand (render_for_test). Null when miniaudio fails to start.
+std::unique_ptr<Backend> make_offline_engine_backend();
 
 // Decoded clips by path and mono flag. Failed loads are cached as nullptr so they are not retried every frame.
 class ClipCache {
