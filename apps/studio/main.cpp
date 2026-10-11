@@ -35,6 +35,7 @@ int main(int argc, char** argv) {
     cfg.height = static_cast<u32>(cl.get_int("height", 900));
     cfg.validation = cl.has("validation");
     cfg.gpu_index = static_cast<i32>(cl.get_int("gpu", -1));
+    if (const char* q = cl.get("quality")) cfg.quality = q;
     if (cfg.gpu_index < 0)
         if (const char* g = std::getenv("TEFRA_GPU")) cfg.gpu_index = std::atoi(g);
     cfg.demo = cl.has("demo");

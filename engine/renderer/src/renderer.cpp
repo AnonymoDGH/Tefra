@@ -492,6 +492,7 @@ void Renderer::compute_cascades(const Camera& cam, f32 aspect, const RenderSetti
     }
     for (u32 c = n; c < kMaxCascades; ++c) fc.cascade_splits[static_cast<int>(c)] = 1e30f;
     fc.shadow_params = {1.0f / (res * f32(n)), 1.0f / res, f32(n), res};
+    fc.veg_lod_scale = clamp(s.vegetation_distance, 0.2f, 2.0f);
     fc.shadow_flags = (s.pcss_shadows ? 1u : 0u) | (s.contact_shadows ? 2u : 0u) | (s.debug_sun_shadow ? 4u : 0u);
     fc.shadow_soft = vec4{s.penumbra_scale, s.contact_length, 0.0f, 0.0f};
 }
@@ -1488,6 +1489,54 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         history_layout_[next_i] = graph_.final_state(taa_handles_[1]).layout;
         history_cur_ = next_i;
         history_valid_ = true;
+    }
+}
+
+const char* quality_name(Quality q) {
+    switch (q) {
+    case Quality::Low: return "Low";
+    case Quality::Medium: return "Medium";
+    case Quality::High: return "High";
+    case Quality::Ultra: return "Ultra";
+    }
+    return "?";
+}
+
+void limit_quality(RenderSettings& s, Quality q) {
+    struct Tier {
+        f32 render_scale;
+        u32 cascades, shadow_resolution;
+        f32 shadow_distance;
+        bool pcss, contact, gtao, volumetric, terrain_detail, bloom, canopy, grass;
+        f32 grass_density, grass_radius, vegetation;
+    };
+    static const Tier tiers[4] = {
+        // scale casc res   dist  pcss   contact gtao   vol    detail bloom  canopy grass  dens rad  veg
+        {0.60f, 1, 1024, 50.0f, false, false, false, false, false, false, false, false, 0.0f, 0.0f, 0.45f}, // Low
+        {0.80f, 2, 1024, 90.0f, false, true, true, false, false, true, true, true, 0.8f, 20.0f, 0.7f},      // Medium
+        {1.00f, 3, 2048, 160.0f, true, true, true, true, true, true, true, true, 1.5f, 30.0f, 1.0f},        // High
+        {1.00f, 4, 2048, 250.0f, true, true, true, true, true, true, true, true, 2.2f, 50.0f, 1.3f},        // Ultra
+    };
+    const Tier& t = tiers[static_cast<u32>(q)];
+    s.render_scale = min(s.render_scale, t.render_scale);
+    if (s.render_scale < 1.0f) s.taa = true; // TAAU reconstructs the output resolution
+    s.cascades = min(s.cascades, t.cascades);
+    s.shadow_resolution = min(s.shadow_resolution, t.shadow_resolution);
+    s.shadow_distance = min(s.shadow_distance, t.shadow_distance);
+    s.pcss_shadows = s.pcss_shadows && t.pcss;
+    s.contact_shadows = s.contact_shadows && t.contact;
+    s.gtao = s.gtao && t.gtao;
+    s.volumetric_fog = s.volumetric_fog && t.volumetric;
+    s.terrain_detail = s.terrain_detail && t.terrain_detail;
+    s.bloom = s.bloom && t.bloom;
+    s.canopy_occlusion = s.canopy_occlusion && t.canopy;
+    s.grass = s.grass && t.grass;
+    s.grass_density = min(s.grass_density, t.grass_density);
+    s.grass_radius = min(s.grass_radius, t.grass_radius);
+    s.vegetation_distance *= t.vegetation;
+    if (q == Quality::Low) {
+        s.film_effects = false;
+        s.auto_exposure = false;
     }
 }
 

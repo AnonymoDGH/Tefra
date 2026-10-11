@@ -159,6 +159,7 @@ void App::draw_export_modal() {
             cfg.set("width", JsonValue(static_cast<f64>(g_export.width)));
             cfg.set("height", JsonValue(static_cast<f64>(g_export.height)));
             cfg.set("fullscreen", JsonValue(g_export.fullscreen));
+            cfg.set("quality", JsonValue(std::string("auto"))); // low / medium / high / ultra, or auto-detect
             const std::string text = cfg.dump(true);
             ok = ok && file_write_all(path_join(out, "game.json").c_str(), text.data(), text.size());
             std::string readme = std::string(g_export.title) +

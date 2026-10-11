@@ -90,10 +90,19 @@ struct RenderSettings {
     f32 canopy_strength = 0.85f; // fraction of the ambient light removed under a full canopy
     // Procedural grass on the terrain (G-buffer pass only, foliage class). Needs a terrain.
     bool grass = true;
-    f32 grass_density = 1.5f; // candidate blades per m^2 = 256 * density (cost scales with it)
-    f32 grass_radius = 30.0f; // m, disc of blades around the camera (max 60; cost ~ radius^2, thinned far out)
-    bool grass_stats = false; // count the blades drawn with an extra compute pass; see Renderer::grass_blades()
+    f32 grass_density = 1.5f;       // candidate blades per m^2 = 256 * density (cost scales with it)
+    f32 grass_radius = 30.0f;       // m, disc of blades around the camera (max 60; cost ~ radius^2, thinned far out)
+    f32 vegetation_distance = 1.0f; // scales vegetation draw / LOD / shadow distances (0.4-1.5)
+    bool grass_stats = false;       // count the blades drawn with an extra compute pass; see Renderer::grass_blades()
 };
+
+// Quality presets (Roblox-style graphics level): limit the costly features of a RenderSettings to what a GPU tier can
+// afford. Low targets 30 fps at 720p on the reference hardware (Intel HD 520 / AMD R5 M330): 60 % internal resolution
+// upscaled by TAA, one shadow cascade, no GTAO / volumetric / parallax / bloom, half-distance vegetation, no grass.
+enum class Quality : u8 { Low, Medium, High, Ultra };
+const char* quality_name(Quality q);
+// Applies the preset as a ceiling: features the scene turned off stay off.
+void limit_quality(RenderSettings& s, Quality q);
 
 struct OutputTarget {
     VkImage image = VK_NULL_HANDLE;
