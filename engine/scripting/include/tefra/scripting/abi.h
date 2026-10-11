@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define TEFRA_SCRIPT_ABI_VERSION 2u
+#define TEFRA_SCRIPT_ABI_VERSION 3u
 
 // Log levels: same numbering as tefra::LogLevel.
 enum TefraLogLevel {
@@ -32,7 +32,8 @@ enum TefraEventKind {
     TEFRA_EVENT_REMOVING = 2,   // id
     TEFRA_EVENT_ADDED = 3,      // id (every instance of an added subtree)
     TEFRA_EVENT_REPARENTED = 4, // id, other = old parent (0 if none)
-    TEFRA_EVENT_SIGNAL = 5      // gameplay signal: id = source, other, number, name ("Touched"...), text
+    TEFRA_EVENT_SIGNAL = 5      // gameplay signal: id = source, other, number, name ("Touched"...), text.
+                                // "AttributeChanged" (text = attribute name), "TagAdded" / "TagRemoved" (text = tag).
 };
 
 // A property value in flat form. `type` is a tefra::world::PropType. Bool/Int/Float/Enum use n[0]; Vector3 and
@@ -85,6 +86,21 @@ typedef struct TefraNativeApi {
     int32_t (*input_mouse_down)(int32_t button);     // 0 = left, 1 = right, 2 = middle
     int32_t (*input_mouse_location)(double* xy_out); // game-view pixels (top-left origin); 1 = ok
     uint64_t (*root)(void);                          // the DataModel root (source of InputBegan / InputEnded)
+    // Attributes (ABI 3). Values use TefraValue; attr_get/attr_set accept Bool, Int, Float, String, Vector3, Color3.
+    // String pointers returned here stay valid until the next call that mutates the model.
+    int32_t (*attr_count)(uint64_t id);                                         // -1 if the id is gone
+    const char* (*attr_name_at)(uint64_t id, int32_t index);                    // nullptr when out of range
+    int32_t (*attr_get)(uint64_t id, const char* name, TefraValue* out);        // 1 = found
+    int32_t (*attr_set)(uint64_t id, const char* name, const TefraValue* value); // 1 = ok, 0 = rejected
+    int32_t (*attr_remove)(uint64_t id, const char* name);                      // 1 = removed
+    // Tags (ABI 3).
+    int32_t (*tag_add)(uint64_t id, const char* tag);    // 1 = added, 0 = already tagged or rejected
+    int32_t (*tag_remove)(uint64_t id, const char* tag); // 1 = removed
+    int32_t (*tag_has)(uint64_t id, const char* tag);
+    int32_t (*tag_count)(uint64_t id);                   // -1 if the id is gone
+    const char* (*tag_at)(uint64_t id, int32_t index);   // nullptr when out of range
+    int32_t (*tagged_count)(const char* tag);
+    uint64_t (*tagged_at)(const char* tag, int32_t index); // attached instances, in id order; 0 when out of range
 } TefraNativeApi;
 
 // Functions exported by the managed side. The host fills nothing here; the managed side fills it in Init.

@@ -4,6 +4,7 @@
 #include "tefra/core/log.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace tefra::world {
 
@@ -195,6 +196,71 @@ const std::string& Instance::get_string(std::string_view prop) const {
     return v && v->type == PropType::String ? v->s : empty;
 }
 
+bool attribute_type_supported(PropType t) {
+    switch (t) {
+    case PropType::Bool:
+    case PropType::Int:
+    case PropType::Float:
+    case PropType::String:
+    case PropType::Vector3:
+    case PropType::Color3: return true;
+    case PropType::Enum:
+    case PropType::Ref: return false;
+    }
+    return false;
+}
+
+const Value* Instance::get_attribute(std::string_view name) const {
+    auto it = attributes_.find(name);
+    return it == attributes_.end() ? nullptr : &it->second;
+}
+
+bool Instance::set_attribute(std::string_view name, Value v) {
+    if (name.empty() || !attribute_type_supported(v.type)) return false;
+    // Keep only the fields of the value's type: the stored copy is small and equal values compare equal.
+    Value clean;
+    clean.type = v.type;
+    for (int i = 0; i < 3; ++i) clean.n[i] = v.n[i];
+    if (v.type == PropType::String) clean.s = std::move(v.s);
+    auto it = attributes_.find(name);
+    if (it != attributes_.end()) {
+        if (it->second == clean) return true;
+        it->second = std::move(clean);
+    } else {
+        attributes_.emplace(std::string(name), std::move(clean));
+    }
+    model_->notify_attribute(*this, name);
+    return true;
+}
+
+bool Instance::remove_attribute(std::string_view name) {
+    auto it = attributes_.find(name);
+    if (it == attributes_.end()) return false;
+    const std::string key = it->first; // name may point into the entry that is erased
+    attributes_.erase(it);
+    model_->notify_attribute(*this, key);
+    return true;
+}
+
+bool Instance::add_tag(std::string_view tag) {
+    if (tag.empty() || !tags_.emplace(std::string(tag)).second) return false;
+    model_->index_tag(id_, tag, true);
+    model_->notify_tag(*this, tag, true);
+    return true;
+}
+
+bool Instance::remove_tag(std::string_view tag) {
+    auto it = tags_.find(tag);
+    if (it == tags_.end()) return false;
+    const std::string key = *it;
+    tags_.erase(it);
+    model_->index_tag(id_, key, false);
+    model_->notify_tag(*this, key, false);
+    return true;
+}
+
+bool Instance::has_tag(std::string_view tag) const { return tags_.find(tag) != tags_.end(); }
+
 // ---- DataModel ----------------------------------------------------------------------------------------------
 
 DataModel::DataModel() {
@@ -297,7 +363,10 @@ bool DataModel::destroy(Instance* inst) {
                 if (other->props_[i].type == PropType::Ref && other->props_[i].ref == d->id_) other->props_[i].ref = 0;
         }
     }
-    for (Instance* d : dead) instances_.erase(d->id_);
+    for (Instance* d : dead) {
+        for (const std::string& t : d->tags_) index_tag(d->id_, t, false);
+        instances_.erase(d->id_);
+    }
     ++revision_;
     return true;
 }
@@ -365,6 +434,43 @@ void DataModel::notify_changed(Instance& inst, u32 prop) {
         if (l && l->changed) l->changed(inst, prop);
 }
 
+void DataModel::notify_attribute(Instance& inst, std::string_view name) {
+    ++revision_;
+    if (!inst.parent_ && &inst != root_) return; // detached: nobody observes it
+    fire_event(inst, "AttributeChanged", nullptr, 0.0, name);
+}
+
+void DataModel::notify_tag(Instance& inst, std::string_view tag, bool added) {
+    ++revision_;
+    if (!inst.parent_ && &inst != root_) return;
+    fire_event(inst, added ? "TagAdded" : "TagRemoved", nullptr, 0.0, tag);
+}
+
+void DataModel::index_tag(u64 id, std::string_view tag, bool add) {
+    if (add) {
+        tag_index_.try_emplace(std::string(tag)).first->second.insert(id);
+        return;
+    }
+    auto it = tag_index_.find(tag);
+    if (it == tag_index_.end()) return;
+    it->second.erase(id);
+    if (it->second.empty()) tag_index_.erase(it);
+}
+
+std::vector<Instance*> DataModel::tagged(std::string_view tag) const {
+    std::vector<Instance*> out;
+    auto it = tag_index_.find(tag);
+    if (it == tag_index_.end()) return out;
+    for (u64 id : it->second) {
+        Instance* inst = find(id);
+        if (!inst) continue;
+        bool attached = inst == root_;
+        for (const Instance* p = inst->parent_; !attached && p; p = p->parent_) attached = p == root_;
+        if (attached) out.push_back(inst);
+    }
+    return out;
+}
+
 void DataModel::notify_added(Instance& inst) {
     for (auto& l : listeners_)
         if (l && l->added) l->added(inst);
@@ -383,6 +489,9 @@ Instance* DataModel::clone(const Instance& src, Instance* parent) {
     std::function<Instance*(const Instance&)> copy = [&](const Instance& s) -> Instance* {
         Instance* d = make(s.cls_, next_id_++);
         d->props_ = s.props_;
+        d->attributes_ = s.attributes_;
+        d->tags_ = s.tags_;
+        for (const std::string& t : d->tags_) index_tag(d->id_, t, true);
         remap[s.id_] = d->id_;
         created.push_back(d);
         for (const Instance* c : s.children_) {
@@ -475,6 +584,72 @@ bool DataModel::value_from_json(const PropInfo& p, const JsonValue& j, Value& ou
     return false;
 }
 
+JsonValue DataModel::attribute_to_json(const Value& v) {
+    switch (v.type) {
+    case PropType::Bool: return JsonValue(v.as_bool());
+    case PropType::Int: return JsonValue(static_cast<i64>(v.n[0]));
+    case PropType::Float: return JsonValue(v.n[0]);
+    case PropType::String: return JsonValue(v.s);
+    case PropType::Vector3:
+    case PropType::Color3: {
+        JsonValue a = JsonValue::array();
+        for (int i = 0; i < 3; ++i) a.push(JsonValue(v.n[i]));
+        if (v.type == PropType::Vector3) return a;
+        JsonValue o = JsonValue::object();
+        o.set("Color3", std::move(a));
+        return o;
+    }
+    case PropType::Enum:
+    case PropType::Ref: break;
+    }
+    return JsonValue();
+}
+
+bool DataModel::attribute_from_json(const JsonValue& j, Value& out) {
+    // Three numbers as a Vector3 or Color3 payload.
+    auto triple = [](const JsonValue& a, Value& v) {
+        if (!a.is_array() || a.size() != 3) return false;
+        for (usize i = 0; i < 3; ++i) {
+            if (!a.at(i).is_number()) return false;
+            v.n[i] = a.at(i).as_number();
+        }
+        return true;
+    };
+    if (j.is_bool()) {
+        out = Value::boolean(j.as_bool());
+        return true;
+    }
+    if (j.is_number()) {
+        const f64 n = j.as_number();
+        if (!std::isfinite(n)) return false;
+        // JSON has one number type: whole numbers come back as Int, others as Float.
+        if (n == std::floor(n) && std::fabs(n) < 9.0e15)
+            out = Value::integer(static_cast<i64>(n));
+        else
+            out = Value::number(n);
+        return true;
+    }
+    if (j.is_string()) {
+        out = Value::string(j.as_string());
+        return true;
+    }
+    if (j.is_array()) {
+        Value v;
+        v.type = PropType::Vector3;
+        if (!triple(j, v)) return false;
+        out = v;
+        return true;
+    }
+    if (j.is_object()) {
+        Value v;
+        v.type = PropType::Color3;
+        if (!triple(j["Color3"], v)) return false;
+        out = v;
+        return true;
+    }
+    return false;
+}
+
 JsonValue DataModel::instance_to_json(const Instance& inst, bool with_children) const {
     JsonValue j = JsonValue::object();
     j.set("class", inst.cls_->name);
@@ -487,6 +662,17 @@ JsonValue DataModel::instance_to_json(const Instance& inst, bool with_children) 
         props.set(p->name, value_to_json(*p, inst.props_[i]));
     }
     j.set("props", std::move(props));
+    // Optional keys: files written before attributes and tags existed simply lack them.
+    if (!inst.attributes_.empty()) {
+        JsonValue attrs = JsonValue::object();
+        for (const auto& [name, v] : inst.attributes_) attrs.set(name, attribute_to_json(v));
+        j.set("attributes", std::move(attrs));
+    }
+    if (!inst.tags_.empty()) {
+        JsonValue tags = JsonValue::array();
+        for (const std::string& t : inst.tags_) tags.push(JsonValue(t));
+        j.set("tags", std::move(tags));
+    }
     if (with_children && !inst.children_.empty()) {
         JsonValue ch = JsonValue::array();
         for (const Instance* c : inst.children_) ch.push(instance_to_json(*c, true));
@@ -518,6 +704,22 @@ Instance* DataModel::instance_from_json(const JsonValue& j, Instance* parent, st
         inst->props_[p->index] = std::move(v);
     }
     if (inst->props_[0].s.empty()) inst->props_[0].s = cls->name;
+    if (const JsonValue* attrs = j.find("attributes"); attrs && attrs->is_object()) {
+        for (const auto& [key, val] : attrs->members()) {
+            Value v;
+            if (key.empty() || !attribute_from_json(val, v)) {
+                TEFRA_LOG_WARN("%s: attribute '%s' ignored (unsupported value)", cls->name.c_str(), key.c_str());
+                continue;
+            }
+            inst->attributes_[key] = std::move(v);
+        }
+    }
+    if (const JsonValue* tags = j.find("tags"); tags && tags->is_array()) {
+        for (const JsonValue& t : tags->items()) {
+            if (!t.is_string() || t.as_string().empty()) continue;
+            if (inst->tags_.emplace(t.as_string()).second) index_tag(inst->id_, t.as_string(), true);
+        }
+    }
     for (const JsonValue& c : j["children"].items()) {
         Instance* child = instance_from_json(c, nullptr, error);
         if (!child) continue;

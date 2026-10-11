@@ -479,6 +479,20 @@ void App::draw_context_menu(Instance& inst) {
 
 // ---- Properties -------------------------------------------------------------------------------------------------
 
+// One attribute value as text for the read-only Attributes list.
+static std::string attribute_text(const Value& v) {
+    char buf[96];
+    switch (v.type) {
+    case PropType::Bool: return v.as_bool() ? "true" : "false";
+    case PropType::Int: std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(v.as_int())); return buf;
+    case PropType::Float: std::snprintf(buf, sizeof(buf), "%g", v.n[0]); return buf;
+    case PropType::String: return "\"" + v.s + "\"";
+    case PropType::Vector3: std::snprintf(buf, sizeof(buf), "(%g, %g, %g)", v.n[0], v.n[1], v.n[2]); return buf;
+    case PropType::Color3: std::snprintf(buf, sizeof(buf), "rgb(%g, %g, %g)", v.n[0], v.n[1], v.n[2]); return buf;
+    default: return "?";
+    }
+}
+
 void App::draw_properties() {
     if (!ImGui::Begin("Properties")) {
         ImGui::End();
@@ -627,6 +641,16 @@ void App::draw_properties() {
             ImGui::TreePop();
         }
         ImGui::EndTable();
+    }
+    // Attributes and tags: read-only here (scripts and the MCP tools change them).
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Attributes", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (inst->attributes().empty()) ImGui::TextDisabled("No attributes. Scripts use SetAttribute.");
+        for (const auto& [name, v] : inst->attributes())
+            ImGui::BulletText("%s = %s", name.c_str(), attribute_text(v).c_str());
+        std::string tags;
+        for (const std::string& t : inst->tags()) tags += (tags.empty() ? "" : ", ") + t;
+        ImGui::Text("Tags: %s", tags.empty() ? "none" : tags.c_str());
     }
     if (inst->is_a("BaseScript") || inst->is_a("ModuleScript")) {
         ImGui::Spacing();

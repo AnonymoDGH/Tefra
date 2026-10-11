@@ -61,8 +61,17 @@ namespace Tefra
             remove => Handlers.Remove(_destroying ??= new List<Handler>(), value);
         }
 
+        // Fires with the attribute name after it was set or removed. Like Changed, it is delivered on the next engine
+        // step, not inside SetAttribute.
+        public event Action<string> AttributeChanged
+        {
+            add => AddSignal("AttributeChanged", value);
+            remove => RemoveSignal("AttributeChanged", value);
+        }
+
         private List<Handler> _changed;
         private List<Handler> _destroying;
+        private Dictionary<string, AttributeChangedSignal> _attributeSignals;
 
         private static void Subscribe(ref List<Handler> list, Delegate handler)
         {
@@ -224,6 +233,127 @@ namespace Tefra
 
         public override string ToString() => Name;
 
+        // ---- Attributes (free-form values stored on the instance; not reflected properties) -----------------------
+
+        // Sets an attribute. Null removes it. Accepted values: bool, numbers (int and long are stored as integers,
+        // float and double as floats), string, Vector3 and Color3. Any other type throws ArgumentException.
+        public void SetAttribute(string name, object value)
+        {
+            if (string.IsNullOrEmpty(name)) throw new ArgumentException("SetAttribute: the name is empty");
+            if (value == null)
+            {
+                RemoveAttribute(name);
+                return;
+            }
+            byte[] text;
+            TefraValue v = AttributeValue(value, out text);
+            Check(Native.AttrSet(Id, name, v, text), "attribute '" + name + "'");
+        }
+
+        public void RemoveAttribute(string name)
+        {
+            if (!string.IsNullOrEmpty(name)) Native.AttrRemove(Id, name);
+        }
+
+        // The attribute's value, or null when it is not set. Every number comes back as a double (as in Roblox), so
+        // use Convert.ToInt32 for integer attributes. Vector3 and Color3 come back as their structs.
+        public object GetAttribute(string name)
+        {
+            TefraValue v;
+            if (string.IsNullOrEmpty(name) || !Native.AttrGet(Id, name, out v)) return null;
+            switch (v.type)
+            {
+                case PropTypes.Bool: return v.n0 != 0;
+                case PropTypes.Int:
+                case PropTypes.Float: return v.n0;
+                case PropTypes.String: return Native.FromValue(v);
+                case PropTypes.Vector3: return new Vector3((float)v.n0, (float)v.n1, (float)v.n2);
+                case PropTypes.Color3: return new Color3((float)v.n0, (float)v.n1, (float)v.n2);
+                default: return null;
+            }
+        }
+
+        // Every attribute of the instance, by name (values as GetAttribute returns them).
+        public Dictionary<string, object> GetAttributes()
+        {
+            var result = new Dictionary<string, object>();
+            int n = Native.AttrCount(Id);
+            for (int i = 0; i < n; i++)
+            {
+                string name = Native.AttrNameAt(Id, i);
+                if (name == null) continue;
+                result[name] = GetAttribute(name);
+            }
+            return result;
+        }
+
+        // Connect(handler) runs the handler when this attribute is set or removed (see AttributeChangedSignal).
+        public AttributeChangedSignal GetAttributeChangedSignal(string name)
+        {
+            name ??= "";
+            _attributeSignals ??= new Dictionary<string, AttributeChangedSignal>();
+            AttributeChangedSignal signal;
+            if (!_attributeSignals.TryGetValue(name, out signal))
+            {
+                signal = new AttributeChangedSignal(this, name);
+                _attributeSignals[name] = signal;
+            }
+            return signal;
+        }
+
+        // ---- Tags (CollectionService) ----------------------------------------------------------------------------
+
+        public void AddTag(string tag)
+        {
+            if (string.IsNullOrEmpty(tag)) throw new ArgumentException("AddTag: the tag is empty");
+            Native.TagAdd(Id, tag);
+        }
+
+        public void RemoveTag(string tag)
+        {
+            if (!string.IsNullOrEmpty(tag)) Native.TagRemove(Id, tag);
+        }
+
+        public bool HasTag(string tag) => !string.IsNullOrEmpty(tag) && Native.TagHas(Id, tag);
+
+        // The instance's tags, sorted.
+        public string[] GetTags()
+        {
+            int n = Native.TagCount(Id);
+            var list = new string[Math.Max(0, n)];
+            for (int i = 0; i < list.Length; i++) list[i] = Native.TagAt(Id, i) ?? "";
+            return list;
+        }
+
+        // Converts a supported managed value to the flat form. Strings are returned with their UTF-8 bytes in `text`.
+        private static TefraValue AttributeValue(object value, out byte[] text)
+        {
+            text = null;
+            switch (value)
+            {
+                case bool b: return Native.NumValue(PropTypes.Bool, b ? 1 : 0);
+                case int i: return Native.NumValue(PropTypes.Int, i);
+                case long l: return Native.NumValue(PropTypes.Int, l);
+                case short sh: return Native.NumValue(PropTypes.Int, sh);
+                case byte by: return Native.NumValue(PropTypes.Int, by);
+                case float f: return Native.NumValue(PropTypes.Float, f);
+                case double d: return Native.NumValue(PropTypes.Float, d);
+                case string s:
+                {
+                    text = Encoding.UTF8.GetBytes(s);
+                    TefraValue sv = default;
+                    sv.type = PropTypes.String;
+                    sv.strLen = (uint)text.Length;
+                    return sv;
+                }
+                case Vector3 p: return Native.NumValue(PropTypes.Vector3, p.X, p.Y, p.Z);
+                case Color3 c: return Native.NumValue(PropTypes.Color3, c.R, c.G, c.B);
+                default:
+                    throw new ArgumentException("Tefra: attribute values must be bool, number, string, Vector3 or Color3, got " +
+                                                value.GetType().Name);
+            }
+        }
+
         // ---- Wrapper cache ---------------------------------------------------------------------------------------
 
         // Returns the typed wrapper for an id (Part, Script, ...), or null for 0 and for ids that no longer exist.
@@ -288,16 +418,21 @@ namespace Tefra
         private static unsafe void DispatchSignal(TefraEvent e)
         {
             string name = e.name == null ? "" : Native.FromUtf8((byte*)e.name) ?? "";
+            string text = e.text == null ? "" : Native.FromUtf8((byte*)e.text) ?? "";
             if (name == "InputBegan" || name == "InputEnded")
             {
-                string key = e.text == null ? "" : Native.FromUtf8((byte*)e.text) ?? "";
-                UserInputService.Dispatch(name == "InputBegan", key);
+                UserInputService.Dispatch(name == "InputBegan", text);
+                return;
+            }
+            if (name == "TagAdded" || name == "TagRemoved")
+            {
+                // Per-tag signals reach scripts that never touched the instance, so they bypass the wrapper cache.
+                CollectionService.Dispatch(name == "TagAdded", e.id, text);
                 return;
             }
             Instance source;
             if (!Cache.TryGetValue(e.id, out source)) return;
             Instance other = e.other == 0 ? null : FromId(e.other);
-            string text = e.text == null ? "" : Native.FromUtf8((byte*)e.text) ?? "";
             source.RaiseSignal(name, other, e.number, text);
         }
 
@@ -357,6 +492,9 @@ namespace Tefra
                         case "InputEnded":
                             ((Action<InputObject>)d)(new InputObject(text));
                             break;
+                        case "AttributeChanged":
+                            ((Action<string>)d)(text);
+                            break;
                         default:
                             ((Action)d)();
                             break;
@@ -381,8 +519,10 @@ namespace Tefra
                 inst._changed = null;
                 inst._destroying = null;
                 inst._signals = null;
+                inst._attributeSignals = null;
             }
             Cache.Clear();
+            CollectionService.ClearAll();
         }
 
         private void RaiseChanged(string name)

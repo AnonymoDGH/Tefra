@@ -1,0 +1,12 @@
+health	100
+offset	3
+armed	True
+tags	Breakable,Solid
+has	True
+lamp watts	40
+attrs	4
+tagged	2
+added	Crate
+removed	Crate
+health changed to	75
+changed	Armed

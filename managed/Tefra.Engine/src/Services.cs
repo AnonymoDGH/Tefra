@@ -50,6 +50,145 @@ namespace Tefra
         public static Player GetPlayerFromCharacter(Instance character) => Service?.GetPlayerFromCharacter(character);
     }
 
+    /// <summary>
+    /// The changes of one attribute, from Instance.GetAttributeChangedSignal(name). Connect(handler) runs the handler
+    /// after the attribute is set or removed (on the next engine step, like Changed).
+    /// </summary>
+    public sealed class AttributeChangedSignal
+    {
+        private readonly Instance _owner;
+        private readonly string _name;
+        private readonly List<KeyValuePair<Action, Action<string>>> _links = new List<KeyValuePair<Action, Action<string>>>();
+
+        internal AttributeChangedSignal(Instance owner, string name)
+        {
+            _owner = owner;
+            _name = name;
+        }
+
+        public void Connect(Action handler)
+        {
+            if (handler == null) return;
+            Action<string> filter = changed =>
+            {
+                if (changed == _name) handler();
+            };
+            _links.Add(new KeyValuePair<Action, Action<string>>(handler, filter));
+            _owner.AddSignal("AttributeChanged", filter);
+        }
+
+        public void Disconnect(Action handler)
+        {
+            for (int i = _links.Count - 1; i >= 0; i--)
+            {
+                if (!_links[i].Key.Equals(handler)) continue;
+                _owner.RemoveSignal("AttributeChanged", _links[i].Value);
+                _links.RemoveAt(i);
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Connect/Disconnect for the InstanceAdded or InstanceRemoved events of one tag (CollectionService).
+    /// </summary>
+    public sealed class TagSignal
+    {
+        private readonly List<Handler> _handlers;
+
+        internal TagSignal(List<Handler> handlers)
+        {
+            _handlers = handlers;
+        }
+
+        public void Connect(Action<Instance> handler) => Handlers.Add(_handlers, handler);
+
+        public void Disconnect(Action<Instance> handler) => Handlers.Remove(_handlers, handler);
+    }
+
+    /// <summary>
+    /// Tags are labels on instances, shared by scripts: GetTagged lists every instance under the DataModel that carries
+    /// a tag. GetInstanceAddedSignal and GetInstanceRemovedSignal report the instances that gain or lose one.
+    /// Instances removed by Destroy do not raise InstanceRemoved.
+    /// </summary>
+    public static class CollectionService
+    {
+        private static readonly Dictionary<string, List<Handler>> AddedHandlers = new Dictionary<string, List<Handler>>();
+        private static readonly Dictionary<string, List<Handler>> RemovedHandlers = new Dictionary<string, List<Handler>>();
+
+        public static void AddTag(Instance instance, string tag)
+        {
+            if (instance == null) throw new ArgumentNullException(nameof(instance));
+            instance.AddTag(tag);
+        }
+
+        public static void RemoveTag(Instance instance, string tag)
+        {
+            if (instance != null) instance.RemoveTag(tag);
+        }
+
+        public static bool HasTag(Instance instance, string tag) => instance != null && instance.HasTag(tag);
+
+        public static string[] GetTags(Instance instance) => instance == null ? new string[0] : instance.GetTags();
+
+        public static Instance[] GetTagged(string tag)
+        {
+            tag ??= "";
+            int n = Native.TaggedCount(tag);
+            var list = new Instance[Math.Max(0, n)];
+            for (int i = 0; i < list.Length; i++) list[i] = Instance.FromId(Native.TaggedAt(tag, i));
+            return list;
+        }
+
+        public static TagSignal GetInstanceAddedSignal(string tag) => new TagSignal(Bucket(AddedHandlers, tag));
+
+        public static TagSignal GetInstanceRemovedSignal(string tag) => new TagSignal(Bucket(RemovedHandlers, tag));
+
+        private static List<Handler> Bucket(Dictionary<string, List<Handler>> map, string tag)
+        {
+            tag ??= "";
+            List<Handler> list;
+            if (!map.TryGetValue(tag, out list))
+            {
+                list = new List<Handler>();
+                map[tag] = list;
+            }
+            return list;
+        }
+
+        // Called by Instance for a TagAdded / TagRemoved signal. The instance is null when it no longer exists.
+        internal static void Dispatch(bool added, ulong id, string tag)
+        {
+            Dictionary<string, List<Handler>> map = added ? AddedHandlers : RemovedHandlers;
+            List<Handler> list;
+            if (!map.TryGetValue(tag, out list) || list.Count == 0) return;
+            Instance inst = Instance.FromId(id);
+            foreach (Handler h in Handlers.Live(list))
+            {
+                ScriptSlot previous = ScriptEngine.Enter(h.Owner);
+                try
+                {
+                    ((Action<Instance>)h.Fn)(inst);
+                }
+                catch (Exception e)
+                {
+                    Native.Log(Native.LogError, "CollectionService." + (added ? "InstanceAdded" : "InstanceRemoved") +
+                                                " handler failed: " + e);
+                }
+                finally
+                {
+                    ScriptEngine.Current = previous;
+                }
+            }
+        }
+
+        internal static void ClearAll()
+        {
+            AddedHandlers.Clear();
+            RemovedHandlers.Clear();
+        }
+    }
+
     /// <summary>Keys of the keyboard. The order and names match tefra::Key (engine/core/input.h).</summary>
     public enum KeyCode
     {

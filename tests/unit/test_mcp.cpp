@@ -416,3 +416,66 @@ TEST_CASE("world tools: create, all-or-nothing set and get over JSON-RPC") {
 
     server.stop();
 }
+
+TEST_CASE("world tools: attributes and tags through set_properties and get_instance") {
+    world::DataModel dm; // must outlive the server
+    Server server;
+    REQUIRE(server.start(0));
+    REQUIRE(register_world_tools(server, dm) == 15);
+
+    const Rpc init = rpc_polled(server, "", kInitialize);
+    REQUIRE(init.status == 200);
+    const std::string session = init.session;
+    rpc_polled(server, session,
+               R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_instance","arguments":)"
+               R"({"class":"Part","parent_path":"Workspace","name":"Crate"}}})");
+    world::Instance* part = dm.find_path("Workspace.Crate");
+    REQUIRE(part != nullptr);
+
+    // A bad attribute value: nothing is set, not even the valid attribute or tag.
+    const Rpc rejected =
+        rpc_polled(server, session,
+                   R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"set_properties","arguments":)"
+                   R"({"path":"Workspace.Crate","attributes":{"Health":100,"Bad":{"x":1}},"tags":["Breakable"]}}})");
+    CHECK(parse_or_fail(rejected.body)["result"]["isError"].as_bool());
+    CHECK(part->attributes().empty());
+    CHECK(part->tags().empty());
+
+    // Attributes merge (Color3 uses its object form), tags replace the list.
+    const Rpc set =
+        rpc_polled(server, session,
+                   R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"set_properties","arguments":)"
+                   R"({"path":"Workspace.Crate","attributes":{"Health":100,"Tint":{"Color3":[1,0,0]},"Label":"crate"},)"
+                   R"("tags":["Breakable","Solid"]}}})");
+    CHECK_FALSE(parse_or_fail(set.body)["result"]["isError"].as_bool());
+    REQUIRE(part->get_attribute("Health") != nullptr);
+    CHECK(part->get_attribute("Health")->as_int() == 100);
+    CHECK(part->get_attribute("Tint")->type == world::PropType::Color3);
+    CHECK(part->has_tag("Breakable"));
+    CHECK(part->tags().size() == 2);
+
+    const Rpc second =
+        rpc_polled(server, session,
+                   R"({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"set_properties","arguments":)"
+                   R"({"path":"Workspace.Crate","attributes":{"Label":null,"Armed":true},"tags":["Solid"]}}})");
+    CHECK_FALSE(parse_or_fail(second.body)["result"]["isError"].as_bool());
+    CHECK(part->get_attribute("Label") == nullptr);
+    CHECK(part->get_attribute("Health") != nullptr);
+    CHECK(part->get_attribute("Armed") != nullptr);
+    CHECK_FALSE(part->has_tag("Breakable"));
+    CHECK(part->has_tag("Solid"));
+
+    const Rpc described =
+        rpc_polled(server, session,
+                   R"({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_instance","arguments":)"
+                   R"({"path":"Workspace.Crate"}}})");
+    const JsonValue payload =
+        parse_or_fail(parse_or_fail(described.body)["result"]["content"].at(0)["text"].as_string());
+    CHECK(payload["attributes"]["Health"].as_int() == 100);
+    CHECK(payload["attributes"]["Armed"].as_bool());
+    CHECK(payload["attributes"]["Tint"]["Color3"].size() == 3);
+    CHECK(payload["tags"].size() == 1);
+    CHECK(payload["tags"].at(0).as_string() == "Solid");
+
+    server.stop();
+}

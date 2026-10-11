@@ -4,6 +4,9 @@
 #include "tefra/core/json_value.h"
 #include "tefra/world/datamodel.h"
 
+#include <string>
+#include <vector>
+
 using namespace tefra;
 using namespace tefra::world;
 
@@ -104,6 +107,196 @@ TEST_CASE("datamodel: save/load and clone keep the tree and remap references") {
     CHECK(copy->id() != car->id());
     Instance* copy_body = copy->find_first_child("Body");
     CHECK(copy->get("PrimaryPart")->ref == copy_body->id());
+}
+
+TEST_CASE("attributes: set, get, remove and change events") {
+    DataModel dm;
+    Instance* part = dm.create("Part", dm.workspace(), "Crate");
+    REQUIRE(part);
+    std::vector<std::string> changed;
+    WorldListener l;
+    l.event = [&](const GameEvent& e) {
+        if (e.name == "AttributeChanged") changed.emplace_back(e.text);
+    };
+    dm.add_listener(l);
+
+    CHECK(part->set_attribute("Health", Value::integer(100)));
+    CHECK(part->get_attribute("Health")->type == PropType::Int);
+    CHECK(part->get_attribute("Health")->as_int() == 100);
+    const u64 rev = dm.revision();
+    CHECK(part->set_attribute("Health", Value::integer(100))); // equal value: accepted, nothing changes
+    CHECK(dm.revision() == rev);
+    CHECK(part->set_attribute("Speed", Value::number(2.5)));
+    CHECK(part->set_attribute("Label", Value::string("crate")));
+    CHECK(part->set_attribute("Offset", Value::vector3({1, 2, 3})));
+    CHECK(part->set_attribute("Tint", Value::color3({1, 0, 0})));
+    CHECK(part->set_attribute("Armed", Value::boolean(true)));
+    CHECK(part->get_attribute("Label")->s == "crate");
+    CHECK(part->get_attribute("Offset")->as_vec3().y == doctest::Approx(2.0f));
+    CHECK(dm.revision() > rev);
+    const std::vector<std::string> expected{"Health", "Speed", "Label", "Offset", "Tint", "Armed"};
+    CHECK(changed == expected);
+
+    // Other value types and empty names are refused.
+    CHECK_FALSE(part->set_attribute("Mode", Value::enumeration(1)));
+    CHECK_FALSE(part->set_attribute("Target", Value::reference(part->id())));
+    CHECK_FALSE(part->set_attribute("", Value::boolean(true)));
+    CHECK(part->get_attribute("Mode") == nullptr);
+    CHECK(part->attributes().size() == 6);
+    CHECK(part->attributes().begin()->first == "Armed"); // sorted by name
+
+    CHECK(part->remove_attribute("Speed"));
+    CHECK_FALSE(part->remove_attribute("Speed"));
+    CHECK(part->get_attribute("Speed") == nullptr);
+    CHECK(changed.back() == "Speed");
+
+    // Detached instances change without events.
+    CHECK(dm.set_parent(part, nullptr));
+    const usize events_before = changed.size();
+    CHECK(part->set_attribute("Health", Value::integer(5)));
+    CHECK(changed.size() == events_before);
+}
+
+TEST_CASE("tags: add, remove, query, tagged instances and events") {
+    DataModel dm;
+    Instance* a = dm.create("Part", dm.workspace(), "A");
+    Instance* b = dm.create("Part", dm.workspace(), "B");
+    Instance* c = dm.create("Model", dm.workspace(), "C");
+    REQUIRE(a != nullptr);
+    REQUIRE(b != nullptr);
+    REQUIRE(c != nullptr);
+    std::vector<std::string> events;
+    WorldListener l;
+    l.event = [&](const GameEvent& e) {
+        if (e.name == "TagAdded" || e.name == "TagRemoved")
+            events.push_back(std::string(e.name) + ":" + std::string(e.text));
+    };
+    dm.add_listener(l);
+
+    CHECK(b->add_tag("Enemy"));
+    CHECK_FALSE(b->add_tag("Enemy")); // already tagged
+    CHECK_FALSE(b->add_tag(""));
+    CHECK(a->add_tag("Enemy"));
+    CHECK(a->add_tag("Breakable"));
+    CHECK(c->add_tag("Enemy"));
+    CHECK(a->has_tag("Enemy"));
+    CHECK_FALSE(a->has_tag("enemy")); // case-sensitive
+    REQUIRE(a->tags().size() == 2);
+    CHECK(*a->tags().begin() == "Breakable"); // sorted
+
+    // Tagged instances come back in id order: a, b, c.
+    const std::vector<Instance*> enemies = dm.tagged("Enemy");
+    REQUIRE(enemies.size() == 3);
+    CHECK(enemies[0] == a);
+    CHECK(enemies[1] == b);
+    CHECK(enemies[2] == c);
+    CHECK(dm.tagged("Nothing").empty());
+
+    CHECK(b->remove_tag("Enemy"));
+    CHECK_FALSE(b->remove_tag("Enemy"));
+    CHECK(dm.tagged("Enemy").size() == 2);
+
+    // Detached instances are not listed until they are back under the DataModel.
+    CHECK(dm.set_parent(a, nullptr));
+    CHECK(dm.tagged("Enemy").size() == 1);
+    CHECK(dm.set_parent(a, dm.workspace()));
+    CHECK(dm.tagged("Enemy").size() == 2);
+
+    // Destroying an instance drops its tags from the index.
+    CHECK(dm.destroy(c));
+    const std::vector<Instance*> left = dm.tagged("Enemy");
+    REQUIRE(left.size() == 1);
+    CHECK(left[0] == a);
+
+    REQUIRE(events.size() == 5);
+    CHECK(events[0] == "TagAdded:Enemy");
+    CHECK(events[2] == "TagAdded:Breakable");
+    CHECK(events[4] == "TagRemoved:Enemy");
+}
+
+TEST_CASE("attributes and tags: save/load round trip, old files still load") {
+    DataModel a;
+    Instance* crate = a.create("Part", a.workspace(), "Crate");
+    REQUIRE(crate);
+    crate->set_attribute("Health", Value::integer(100));
+    crate->set_attribute("Speed", Value::number(2.5));
+    crate->set_attribute("Label", Value::string("wood crate"));
+    crate->set_attribute("Offset", Value::vector3({1, 2, 3}));
+    crate->set_attribute("Tint", Value::color3({1, 0.5f, 0}));
+    crate->set_attribute("Armed", Value::boolean(false));
+    crate->add_tag("Breakable");
+    crate->add_tag("Solid");
+    a.create("Part", a.workspace(), "Plain");
+    const std::string text = a.to_json().dump(true);
+    CHECK(text.find("\"attributes\"") != std::string::npos);
+    CHECK(text.find("\"tags\"") != std::string::npos);
+
+    DataModel b;
+    std::string err;
+    JsonValue doc;
+    REQUIRE(JsonValue::parse(text, doc, &err));
+    REQUIRE(b.from_json(doc, &err));
+    Instance* b_crate = b.find_path("Workspace.Crate");
+    REQUIRE(b_crate);
+    REQUIRE(b_crate->get_attribute("Health"));
+    CHECK(b_crate->get_attribute("Health")->type == PropType::Int);
+    CHECK(b_crate->get_attribute("Health")->as_int() == 100);
+    CHECK(b_crate->get_attribute("Speed")->type == PropType::Float);
+    CHECK(b_crate->get_attribute("Speed")->as_float() == doctest::Approx(2.5f));
+    CHECK(b_crate->get_attribute("Label")->s == "wood crate");
+    CHECK(b_crate->get_attribute("Offset")->type == PropType::Vector3);
+    CHECK(b_crate->get_attribute("Offset")->as_vec3().z == doctest::Approx(3.0f));
+    CHECK(b_crate->get_attribute("Tint")->type == PropType::Color3);
+    CHECK(b_crate->get_attribute("Tint")->n[1] == doctest::Approx(0.5));
+    CHECK(b_crate->get_attribute("Armed")->type == PropType::Bool);
+    CHECK_FALSE(b_crate->get_attribute("Armed")->as_bool());
+    CHECK(b_crate->attributes().size() == 6);
+    CHECK(b_crate->has_tag("Solid"));
+    CHECK(b.tagged("Breakable").size() == 1); // the tag index is rebuilt on load
+    CHECK(b.find_path("Workspace.Plain")->attributes().empty());
+    CHECK(b.to_json().dump(true) == text);
+
+    // A file without the keys loads as before; unusable entries are skipped, the rest is kept.
+    const char* old_file = R"({"format":"tefra-place","version":1,"services":[{"class":"Workspace","props":{},
+        "children":[{"class":"Part","id":50,"props":{"Name":"Old"}},
+        {"class":"Part","id":51,"props":{"Name":"Mixed"},
+         "attributes":{"Bad":{"x":1},"Good":3},"tags":["Ok",5,""]}]}]})";
+    DataModel c;
+    REQUIRE(JsonValue::parse(old_file, doc, &err));
+    REQUIRE(c.from_json(doc, &err));
+    Instance* old = c.find_path("Workspace.Old");
+    REQUIRE(old);
+    CHECK(old->attributes().empty());
+    CHECK(old->tags().empty());
+    Instance* mixed = c.find_path("Workspace.Mixed");
+    REQUIRE(mixed);
+    CHECK(mixed->get_attribute("Good")->as_int() == 3);
+    CHECK(mixed->get_attribute("Bad") == nullptr);
+    CHECK(mixed->tags().size() == 1);
+    CHECK(c.tagged("Ok").size() == 1);
+}
+
+TEST_CASE("attributes and tags: clone copies them and indexes the copy") {
+    DataModel dm;
+    Instance* model = dm.create("Model", dm.workspace(), "Wall");
+    Instance* brick = dm.create("Part", model, "Brick");
+    REQUIRE(brick);
+    brick->set_attribute("Hits", Value::integer(3));
+    brick->add_tag("Breakable");
+    Instance* copy = dm.clone(*model, dm.workspace());
+    REQUIRE(copy);
+    Instance* copy_brick = copy->find_first_child("Brick");
+    REQUIRE(copy_brick);
+    REQUIRE(copy_brick->get_attribute("Hits"));
+    CHECK(copy_brick->get_attribute("Hits")->as_int() == 3);
+    CHECK(copy_brick->has_tag("Breakable"));
+    CHECK(dm.tagged("Breakable").size() == 2);
+
+    // The copy has its own storage.
+    copy_brick->remove_attribute("Hits");
+    CHECK(brick->get_attribute("Hits") != nullptr);
+    CHECK(dm.destroy(copy));
+    CHECK(dm.tagged("Breakable").size() == 1);
 }
 
 TEST_CASE("orientation: quaternion round trip") {

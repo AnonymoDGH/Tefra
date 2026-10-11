@@ -126,6 +126,32 @@ public class Hud : TefraScript   // LocalScript dentro de un ScreenGui de Starte
 - Un script destruido (o deshabilitado, o con error) deja de correr: sus manejadores de eventos y sus `Task.Wait` pendientes tampoco se ejecutan.
 - Limitación: un script con `namespace X;` (con ámbito de archivo) no compila; usa `namespace X { ... }`.
 
+### Atributos y etiquetas
+Cualquier instancia puede llevar atributos (pares nombre-valor libres, como en Roblox) y etiquetas (CollectionService).
+```csharp
+public class Breakable : TefraScript
+{
+    public override void Start()
+    {
+        var part = (Part)Parent;
+        part.SetAttribute("Health", 3);            // bool, número, string, Vector3 o Color3; null lo borra
+        part.AddTag("Breakable");
+        part.GetAttributeChangedSignal("Health").Connect(() =>
+        {
+            if (Convert.ToInt32(part.GetAttribute("Health")) <= 0) part.Destroy();
+        });
+        foreach (var other in CollectionService.GetTagged("Breakable")) { /* ... */ }
+        CollectionService.GetInstanceAddedSignal("Breakable").Connect(i => Debug.Log("nuevo: " + i.Name));
+    }
+}
+```
+- `GetAttribute` devuelve `double` para cualquier número (usa `Convert.ToInt32` para enteros); `SetAttribute` guarda `int`/`long` como entero y `float`/`double` como real.
+- `AttributeChanged` y `GetAttributeChangedSignal(nombre)`, igual que `Changed`, llegan en el paso siguiente del motor, no dentro de `SetAttribute`.
+- `CollectionService.GetTagged(etiqueta)` devuelve las instancias conectadas al DataModel. `GetInstanceAddedSignal` / `GetInstanceRemovedSignal` avisan por etiqueta. Al destruir una instancia no se emite `InstanceRemoved`.
+- Persistencia: se guardan en `.tefra` como `"attributes": {...}` y `"tags": [...]` por instancia (opcionales). Un número entero en un atributo se recarga como entero; un Color3 se guarda como `{"Color3": [r, g, b]}`.
+- Los cambios de atributos y etiquetas no entran en el historial de deshacer (Ctrl+Z) de Studio. El panel Properties los muestra en solo lectura.
+- MCP: `get_instance` devuelve `attributes` y `tags`; `set_properties` acepta `attributes` (se fusionan, `null` borra) y `tags` (reemplaza la lista).
+
 ## Efectos (ParticleEmitter)
 Un `ParticleEmitter` bajo una Part emite partículas de verdad (billboards en GPU, ordenadas, *soft particles*, máscara reactiva para el TAA). Se ven también en modo edición.
 - `Texture`: `builtin:fire`, `smoke`, `spark`, `star`, `snow`, `ring`, `circle`.

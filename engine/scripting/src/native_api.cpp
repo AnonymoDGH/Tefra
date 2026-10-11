@@ -5,7 +5,9 @@
 #include "script_session.h"
 
 #include <cstdint>
+#include <iterator>
 #include <utility>
+#include <vector>
 
 namespace tefra::scripting::detail {
 namespace {
@@ -223,6 +225,78 @@ std::int32_t tefra_script_input_mouse_location(double* xy_out) {
 
 std::uint64_t tefra_script_root() { return current_model() ? current_model()->root().id() : 0; }
 
+std::int32_t tefra_script_attr_count(std::uint64_t id) {
+    tefra::world::Instance* inst = find(id);
+    return inst ? static_cast<std::int32_t>(inst->attributes().size()) : -1;
+}
+
+const char* tefra_script_attr_name_at(std::uint64_t id, std::int32_t index) {
+    tefra::world::Instance* inst = find(id);
+    if (!inst || index < 0 || static_cast<std::size_t>(index) >= inst->attributes().size()) return nullptr;
+    auto it = inst->attributes().begin();
+    std::advance(it, index);
+    return it->first.c_str();
+}
+
+std::int32_t tefra_script_attr_get(std::uint64_t id, const char* name, TefraValue* out) {
+    tefra::world::Instance* inst = find(id);
+    const tefra::world::Value* v = inst && name ? inst->get_attribute(name) : nullptr;
+    if (!v || !out) return 0;
+    to_flat(*v, *out);
+    return 1;
+}
+
+std::int32_t tefra_script_attr_set(std::uint64_t id, const char* name, const TefraValue* value) {
+    tefra::world::Instance* inst = find(id);
+    tefra::world::Value v;
+    if (!inst || !name || !value || !from_flat(*value, v)) return 0;
+    return inst->set_attribute(name, std::move(v)) ? 1 : 0;
+}
+
+std::int32_t tefra_script_attr_remove(std::uint64_t id, const char* name) {
+    tefra::world::Instance* inst = find(id);
+    return inst && name && inst->remove_attribute(name) ? 1 : 0;
+}
+
+std::int32_t tefra_script_tag_add(std::uint64_t id, const char* tag) {
+    tefra::world::Instance* inst = find(id);
+    return inst && tag && inst->add_tag(tag) ? 1 : 0;
+}
+
+std::int32_t tefra_script_tag_remove(std::uint64_t id, const char* tag) {
+    tefra::world::Instance* inst = find(id);
+    return inst && tag && inst->remove_tag(tag) ? 1 : 0;
+}
+
+std::int32_t tefra_script_tag_has(std::uint64_t id, const char* tag) {
+    tefra::world::Instance* inst = find(id);
+    return inst && tag && inst->has_tag(tag) ? 1 : 0;
+}
+
+std::int32_t tefra_script_tag_count(std::uint64_t id) {
+    tefra::world::Instance* inst = find(id);
+    return inst ? static_cast<std::int32_t>(inst->tags().size()) : -1;
+}
+
+const char* tefra_script_tag_at(std::uint64_t id, std::int32_t index) {
+    tefra::world::Instance* inst = find(id);
+    if (!inst || index < 0 || static_cast<std::size_t>(index) >= inst->tags().size()) return nullptr;
+    auto it = inst->tags().begin();
+    std::advance(it, index);
+    return it->c_str();
+}
+
+std::int32_t tefra_script_tagged_count(const char* tag) {
+    if (!current_model() || !tag) return 0;
+    return static_cast<std::int32_t>(current_model()->tagged(tag).size());
+}
+
+std::uint64_t tefra_script_tagged_at(const char* tag, std::int32_t index) {
+    if (!current_model() || !tag || index < 0) return 0;
+    const std::vector<tefra::world::Instance*> list = current_model()->tagged(tag);
+    return static_cast<std::size_t>(index) < list.size() ? list[static_cast<std::size_t>(index)]->id() : 0;
+}
+
 } // extern "C"
 
 const TefraNativeApi* native_table() {
@@ -251,6 +325,18 @@ const TefraNativeApi* native_table() {
         tefra_script_input_mouse_down,
         tefra_script_input_mouse_location,
         tefra_script_root,
+        tefra_script_attr_count,
+        tefra_script_attr_name_at,
+        tefra_script_attr_get,
+        tefra_script_attr_set,
+        tefra_script_attr_remove,
+        tefra_script_tag_add,
+        tefra_script_tag_remove,
+        tefra_script_tag_has,
+        tefra_script_tag_count,
+        tefra_script_tag_at,
+        tefra_script_tagged_count,
+        tefra_script_tagged_at,
     };
     return &table;
 }
