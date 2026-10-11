@@ -108,6 +108,11 @@ u32 SceneSync::material_for(const Instance& part) {
     m.orm_tex = scene_.white_texture();
     m.emissive_tex = render::kNoTexture;
     m.occlusion_strength = 0.0f;
+    // Procedural world-space surface for every material with a texture of its own (shaders/common/surface.glsl).
+    if (mat != 1 && mat != 17 && mat != 18) {
+        m.flags |= 16u;
+        m.pad[1] = mat;
+    }
     if (look.emissive > 0.0f) m.emissive_cutoff = vec4(lin * 40.0f, 0.0f); // Neon glows
     const u32 idx = scene_.add_material(m);
     material_cache_[key] = idx;

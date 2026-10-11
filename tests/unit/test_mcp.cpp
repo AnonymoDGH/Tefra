@@ -383,8 +383,8 @@ TEST_CASE("world tools: create, all-or-nothing set and get over JSON-RPC") {
     world::DataModel dm; // must outlive the server
     Server server;
     REQUIRE(server.start(0));
-    CHECK(register_world_tools(server, dm) == 13);
-    CHECK(server.tool_count() == 13);
+    CHECK(register_world_tools(server, dm) == 15);
+    CHECK(server.tool_count() == 15);
 
     const Rpc init = rpc_polled(server, "", kInitialize);
     REQUIRE(init.status == 200);

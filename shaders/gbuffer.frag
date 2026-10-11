@@ -39,6 +39,8 @@ float fbm3(vec3 p) {
     return 0.55 * value_noise(p) + 0.30 * value_noise(p * 2.03 + 7.1) + 0.15 * value_noise(p * 4.1 + 3.7);
 }
 
+#include "common/surface.glsl"
+
 void main() {
     Material m = pc.materials.m[v_material];
     vec4 base = texture(TEX2D(m.base_color_tex, SMP_ANISO_REPEAT), v_uv) * m.base_color;
@@ -74,6 +76,20 @@ void main() {
         tn = mix(tn, vec3(0.0, 0.0, 1.0), moss * 0.6); // moss is soft: it hides the bark relief
     }
 
+    // Part materials: procedural world-space surface (tint, relief, roughness).
+    const vec3 P = v_pos + pc.frame.f.camera_pos.xyz;
+    const float footprint = length(fwidth(P));
+    float surf_h = 0.0;
+    const bool surf = (m.flags & kFlagSurface) != 0u;
+    if (surf) {
+        const vec3 ng = gl_FrontFacing ? normalize(v_normal) : -normalize(v_normal);
+        const Surface sp = surface_pattern(m.pad1, P, ng, footprint);
+        base.rgb = clamp(base.rgb * sp.tint, 0.0, 1.0);
+        rough = clamp(rough * sp.rough, 0.02, 1.0);
+        ao *= sp.ao;
+        surf_h = sp.height;
+    }
+
     if ((m.flags & 8u) != 0u) ao *= nsamp.a; // needles: depth AO baked into the normal map's alpha
     vec3 N = normalize(v_normal);
     if (!gl_FrontFacing) N = -N;
@@ -81,6 +97,7 @@ void main() {
     vec3 T = normalize(v_tangent.xyz - N * dot(N, v_tangent.xyz));
     vec3 B = cross(N, T) * (v_tangent.w < 0.0 ? -1.0 : 1.0);
     N = normalize(T * tn.x + B * tn.y + N * max(tn.z, 1e-3));
+    if (surf) N = bump_from_height(N, P, surf_h, 1.0);
     // Moss: rough and non-metallic, so it has almost no specular.
     rough = mix(rough, 0.95, moss);
     metal = mix(metal, 0.0, moss);
