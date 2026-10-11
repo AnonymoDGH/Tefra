@@ -2,7 +2,22 @@
 
 Las sesiones no recuerdan nada: este archivo es la memoria. Actualízalo al final de cada sesión.
 
-## Estado actual (2026-10-10)
+## Estado actual (2026-10-11)
+
+- **M3b integrado:**
+  - Página de inicio estilo Roblox Studio: `apps/studio/src/home.cpp`, `projects.cpp`.
+  - Plantillas en `templates.cpp`: Baseplate, Classic, Flat Terrain, Obby (juego completo), Beach, Meadow y Valley.
+  - `tefra_player` + Export Game (`export.cpp`), `engine/runtime` (GameRuntime) y `engine/rbx` (importador Roblox, ADR-017; `tefra_import`).
+  - `engine/ui` (GUI en juego), `engine/audio` (miniaudio), skinning glTF y LocalScript/ModuleScript/eventos.
+  - Terreno Plains con hierba de pradera y viento.
+- **Release:** `.github/workflows/release.yml` publica el instalador Inno Setup (`installer/tefra.iss`) y un zip portable. Se dispara con un commit cuyo mensaje lleva `[release]`, porque el proxy no deja empujar tags. Primer release: v0.1.0-alpha.1.
+- Subagentes: usar `model: 'haiku'` (petición del usuario, por el límite de uso).
+- Siguiente (`docs/research/gap-analysis/REPORT.md`), M4 UI avanzada:
+  - tipos UDim2/ColorSequence;
+  - TweenService;
+  - renderer de UI SDF con fuentes y rich text;
+  - editor visual de UI en Studio.
+- Pendiente de la pradera: el borde del disco de hierba (~60 m) aún se nota; afinar el tono del terreno lejano.
 
 - **M3 en curso: Tefra Studio** (petición del usuario: hacer juegos de verdad). Spec: `docs/specs/2026-10-10-m3-studio.md` (ADR-011..016).
   - Hecho: `JsonValue`; `engine/world` (DataModel reflejado, `.tefra`, `SceneSync`); `apps/studio` (ImGui docking: Explorer, Properties, Viewport+ImGuizmo, Output, editor C#, undo/redo, Play/Stop; `tefra_studio_core` = session+history testeable); `engine/scripting` + `managed/Tefra.Engine` (.NET 8 hostfxr, Roslyn); `engine/physics` (Jolt 5.6, CharacterController); `engine/anim` (avatar R15, 7 clips, Animator); `engine/mcp` (Streamable HTTP, 13 herramientas + 5 de Studio). Play = scripts → personaje → física → animación; cámara 3ª persona. Guía: `docs/STUDIO.md`. Informes: `docs/research/m3-*/REPORT.md`.
