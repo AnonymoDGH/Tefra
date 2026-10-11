@@ -54,6 +54,7 @@ void framebuffer_cache_clear() {
 }
 
 VkShaderModule load_shader(const Device& dev, const char* name) {
+    TEFRA_TRACE("shader: %s", name);
     const std::string path = path_join(path_join(exe_dir(), "shaders"), std::string(name) + ".spv");
     std::vector<u8> code;
     if (!file_read_all(path.c_str(), code) || code.size() % 4 != 0 || code.empty())
@@ -235,6 +236,7 @@ void cmd_end_render_pass(VkCommandBuffer cmd) {
 }
 
 VkPipeline create_graphics_pipeline(const Device& dev, const GraphicsPipelineDesc& d) {
+    TEFRA_TRACE("pipeline: graphics '%s'", d.name ? d.name : "?");
     VkPipelineShaderStageCreateInfo stages[2] = {{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},
                                                  {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
     stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -319,6 +321,7 @@ VkPipeline create_graphics_pipeline(const Device& dev, const GraphicsPipelineDes
 }
 
 VkPipeline create_compute_pipeline(const Device& dev, VkShaderModule cs, VkPipelineLayout layout, const char* name) {
+    TEFRA_TRACE("pipeline: compute '%s'", name ? name : "?");
     VkComputePipelineCreateInfo pci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
     pci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     pci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
