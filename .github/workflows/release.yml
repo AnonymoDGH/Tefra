@@ -1,0 +1,101 @@
+name: Release
+
+# Builds the Windows release (MinGW), bundles the CC0 demo assets and makes the installer, then publishes a GitHub
+# release with Tefra-<version>-Setup.exe and a portable zip. Runs on a "v*" tag or by hand (Actions > Release).
+on:
+  push:
+    tags: ['v*']
+    branches: ['claude/new-session-ksgl0m'] # only commits whose message contains [release] (see the job condition)
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to create (e.g. v0.1.0-alpha)'
+        required: true
+        default: 'v0.1.0-alpha'
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || contains(github.event.head_commit.message, '[release]')
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version
+        id: v
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            if [[ "${{ github.ref }}" == refs/tags/* ]]; then TAG="${{ github.ref_name }}"; else TAG="v0.1.0-alpha.${{ github.run_number }}"; fi
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - name: Set up .NET 8 SDK (C# scripting)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-glslang
+            mingw-w64-ucrt-x86_64-python
+            zip
+      - name: Configure
+        run: cmake --preset windows-mingw-release
+      - name: Build
+        run: cmake --build --preset windows-mingw-release
+      - name: Unit tests
+        run: ctest --preset windows-mingw-release -L unit
+      - name: Demo assets (Poly Haven CC0 textures and models, Khronos sample characters)
+        run: python scripts/fetch_assets.py --res 1k
+      - name: Stage
+        run: |
+          D=dist/Tefra
+          mkdir -p $D
+          B=build/windows-mingw-release/bin
+          cp $B/*.exe $D/
+          cp -r $B/shaders $B/resources $D/
+          if [ -d $B/managed ]; then cp -r $B/managed $D/; fi
+          mkdir -p $D/assets
+          cp -r assets/cache $D/assets/
+          cp scripts/bench-windows.bat $D/
+          cp LICENSE THIRD_PARTY.md README.md $D/
+          mkdir -p $D/docs && cp docs/STUDIO.md $D/docs/
+          du -sh $D
+      - name: Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.v.outputs.version }}" installer\tefra.iss
+      - name: Portable zip
+        run: cd dist && zip -qr "Tefra-${{ steps.v.outputs.version }}-portable.zip" Tefra
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.v.outputs.tag }}
+          name: Tefra ${{ steps.v.outputs.version }}
+          prerelease: true
+          target_commitish: ${{ github.sha }}
+          body: |
+            Tefra Studio para Windows 10/11 (x64, GPU con Vulkan 1.2).
+
+            **Instalar:** descarga `Tefra-${{ steps.v.outputs.version }}-Setup.exe` y ejecútalo (no pide administrador). El zip `portable` sirve igual sin instalar: descomprime y abre `tefra_studio.exe`.
+
+            Para los scripts C# hace falta el runtime de .NET 8 (el instalador avisa si falta).
+
+            Novedades: página de inicio con plantillas (Baseplate, Classic, Flat Terrain, Obby, Beach, Meadow, Valley), importador de lugares de Roblox (.rbxl/.rbxlx), Export Game (tefra_player), UI en juego, sonido, LocalScript/ModuleScript, paisaje en Studio y skinning glTF.
+
+            Guía: `docs/STUDIO.md`. Para enviar rendimiento: menú Inicio > Tefra Benchmark.
+          files: |
+            dist/Tefra-${{ steps.v.outputs.version }}-Setup.exe
+            dist/Tefra-${{ steps.v.outputs.version }}-portable.zip

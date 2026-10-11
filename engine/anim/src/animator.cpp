@@ -316,8 +316,6 @@ void AnimatorSystem::stop(world::Instance& humanoid, std::string_view clip, f32 
 
 namespace {
 
-constexpr f32 kManualSkinFade = 0.2f;
-
 struct SkinnedTrack {
     SkeletalClipPtr clip;
     i32 clip_index = -1;
