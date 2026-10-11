@@ -5,6 +5,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+    branches: ['claude/new-session-ksgl0m'] # only commits whose message contains [release] (see the job condition)
   workflow_dispatch:
     inputs:
       tag:
@@ -17,6 +18,7 @@ permissions:
 
 jobs:
   windows-release:
+    if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || contains(github.event.head_commit.message, '[release]')
     runs-on: windows-latest
     defaults:
       run:
@@ -27,7 +29,10 @@ jobs:
         id: v
         shell: bash
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            if [[ "${{ github.ref }}" == refs/tags/* ]]; then TAG="${{ github.ref_name }}"; else TAG="v0.1.0-alpha.${{ github.run_number }}"; fi
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
       - name: Set up .NET 8 SDK (C# scripting)
