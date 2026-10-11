@@ -146,6 +146,15 @@ public class Lift : TefraScript
 - `TweenService.GetValue(alpha, style, direction)` devuelve la curva evaluada en `alpha` (0 a 1).
 - Los tweens avanzan en cada paso del motor. Si su instancia se destruye, se paran sin evento. Al pulsar Stop se borran todos.
 
+### Tipos de valor (Roblox)
+Código C# puro (`managed/Tefra.Engine/src/MathTypes.cs`), sin llamadas nativas.
+- **CFrame**: posición y rotación. `part.CFrame` lee y escribe la posición y la `Orientation` (grados, orden Y-X-Z, igual que el motor). Constructores: `new CFrame(pos)`, `new CFrame(pos, lookAt)`, `CFrame.Angles(rx, ry, rz)` (radianes, orden X-Y-Z, como Roblox), `CFrame.fromEulerAnglesYXZ(rx, ry, rz)` (orden del motor), `CFrame.fromAxisAngle(eje, ángulo)`, `CFrame.lookAt(desde, hacia[, arriba])`, `CFrame.Identity`. Operadores `*` (CFrame·CFrame, CFrame·Vector3) y `+`/`-` con Vector3. Métodos: `Inverse()`, `Lerp(meta, alfa)`, `ToWorldSpace`/`ToObjectSpace`, `PointToWorldSpace`/`PointToObjectSpace`, `VectorToWorldSpace`/`VectorToObjectSpace`, `ToEulerAnglesYXZ()` (radianes). Propiedades: `Position`, `LookVector` (-Z), `RightVector`, `UpVector`, `Rotation`.
+- **Modelos**: `model.GetPivot()` (la `PrimaryPart` si existe, si no la primera pieza descendiente) y `model.PivotTo(cf)`, que mueve todas las piezas descendientes de forma rígida. `part.PivotTo(cf)` y `part.GetPivot()` existen también.
+- **UDim / UDim2**: `new UDim2(escalaX, desplazX, escalaY, desplazY)`, `UDim2.fromScale(x, y)`, `UDim2.fromOffset(x, y)`, `+`, `-`, `Lerp`. El constructor reemplaza a `UDim2.new` (`new` es palabra reservada en C#).
+- **NumberRange**, **NumberSequence** (`new NumberSequence(new NumberSequenceKeypoint(t, valor), ...)` o `(inicio, fin)`) y **ColorSequence** (`new ColorSequence(new ColorSequenceKeypoint(t, color), ...)` o `(inicio, fin)`), con `Evaluate(t)`. Los puntos se ordenan por `t` (en [0, 1]); `t` fuera de rango toma el primer o último valor.
+- **Color3**: `FromRGB(0-255)`, `FromHex("#RRGGBB")`, `FromHSV(h, s, v)` (0-1), `ToHSV()` (devuelve un Vector3), `Lerp`.
+- **TefraRandom**: `new TefraRandom(semilla)`, `NextNumber()`, `NextNumber(min, max)`, `NextInteger(min, max)` (ambos extremos incluidos), `NextUnitVector()`. Se llama así y no `Random` porque los scripts importan `System`, y `Random` sería ambiguo con `System.Random`.
+
 ## Efectos (ParticleEmitter)
 Un `ParticleEmitter` bajo una Part emite partículas de verdad (billboards en GPU, ordenadas, *soft particles*, máscara reactiva para el TAA). Se ven también en modo edición.
 - `Texture`: `builtin:fire`, `smoke`, `spark`, `star`, `snow`, `ring`, `circle`.

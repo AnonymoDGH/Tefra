@@ -39,6 +39,12 @@ add_test(NAME scripting_gameplay COMMAND tefra_run
     --place ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/gameplay.tefra --frames 1800 --press E:300:3 --require-scripts
     --expect-file ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/gameplay.expect)
 set_tests_properties(scripting_gameplay PROPERTIES LABELS "scripting" SKIP_RETURN_CODE 77)
+
+# Value types (CFrame, PivotTo on a Model, UDim2, sequences, Color3 HSV/hex, TefraRandom) evaluated in a script.
+add_test(NAME scripting_mathtypes COMMAND tefra_run
+    --place ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/mathtypes.tefra --frames 3 --require-scripts
+    --expect-file ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/mathtypes.expect)
+set_tests_properties(scripting_mathtypes PROPERTIES LABELS "scripting" SKIP_RETURN_CODE 77)
 if(TEFRA_ASAN)
     # The .NET runtime keeps its heap for the life of the process; suppress only its modules (see lsan.supp).
     set(_tefra_lsan "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
