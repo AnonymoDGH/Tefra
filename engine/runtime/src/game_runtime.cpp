@@ -76,10 +76,11 @@ bool GameRuntime::start() {
     frame_ = 0;
     died_at_ = -1.0;
     physics_ = std::make_unique<physics::PhysicsWorld>(model_);
-    // Physics contacts become Touched events on both parts (scripts, kill bricks, checkpoints).
-    touched_listener_ = physics_->add_touched_listener([this](Instance& a, Instance& b) {
-        model_.fire_event(a, "Touched", &b);
-        model_.fire_event(b, "Touched", &a);
+    // Physics contacts become Touched / TouchEnded events on both parts (scripts, kill bricks, checkpoints).
+    touched_listener_ = physics_->add_touched_listener([this](Instance& a, Instance& b, bool ended) {
+        const char* name = ended ? "TouchEnded" : "Touched";
+        model_.fire_event(a, name, &b);
+        model_.fire_event(b, name, &a);
     });
     animator_ = std::make_unique<anim::AnimatorSystem>(model_);
 
@@ -98,7 +99,22 @@ bool GameRuntime::start() {
     }
     if (cfg_.spawn_character) spawn_character();
     camera_.yaw = orbit_yaw_;
-    if (cfg_.scripts && cfg_.scripts->available()) cfg_.scripts->start(model_);
+    // Bodies of the parts that exist now: a script's Start may raycast before the first step.
+    physics_->sync();
+    if (cfg_.scripts && cfg_.scripts->available()) {
+        // Scripts read the input snapshot (UserInputService) and cast rays against the physics world.
+        cfg_.scripts->set_input(&input_);
+        cfg_.scripts->set_raycaster([this](vec3 origin, vec3 direction, f32 max_distance, scripting::RayHit& out) {
+            physics::RaycastResult hit;
+            if (!physics_ || !physics_->raycast(origin, direction, max_distance, hit) || !hit.instance) return false;
+            out.instance = hit.instance;
+            out.position = hit.position;
+            out.normal = hit.normal;
+            out.distance = hit.distance;
+            return true;
+        });
+        cfg_.scripts->start(model_);
+    }
     for (auto& s : systems_)
         if (!s->start(*this)) TEFRA_LOG_WARN("runtime: system '%s' failed to start", s->name());
     return true;
@@ -139,11 +155,15 @@ void GameRuntime::spawn_character() {
     }
     orbit_yaw_ = radians(desc.yaw_deg);
     died_at_ = -1.0;
+    if (player) model_.fire_event(*player, "CharacterAdded", model);
 }
 
 void GameRuntime::despawn_character() {
     controller_.reset();
-    if (Instance* c = character()) model_.destroy(c);
+    if (Instance* c = character()) {
+        if (Instance* p = local_player()) model_.fire_event(*p, "CharacterRemoving", c);
+        model_.destroy(c);
+    }
     character_id_ = 0;
     if (Instance* p = local_player()) p->set("Character", Value::reference(0), true);
 }
@@ -167,6 +187,20 @@ void GameRuntime::step(f32 dt, const InputState& input) {
     input_ = input;
     time_ += f64(dt);
     ++frame_;
+    // UserInputService.InputBegan / InputEnded: raised on the DataModel root, text = key name (or MouseButtonN).
+    static constexpr const char* kMouseNames[] = {"MouseButton1", "MouseButton2", "MouseButton3"};
+    if (input_.keyboard) {
+        for (usize k = 1; k < static_cast<usize>(Key::Count); ++k) {
+            if (input_.pressed[k])
+                model_.fire_event(model_.root(), "InputBegan", nullptr, 0.0, key_name(static_cast<Key>(k)));
+            if (input_.released[k])
+                model_.fire_event(model_.root(), "InputEnded", nullptr, 0.0, key_name(static_cast<Key>(k)));
+        }
+    }
+    for (usize b = 0; b < 3; ++b) {
+        if (input_.mouse_pressed[b]) model_.fire_event(model_.root(), "InputBegan", nullptr, 0.0, kMouseNames[b]);
+        if (input_.mouse_released[b]) model_.fire_event(model_.root(), "InputEnded", nullptr, 0.0, kMouseNames[b]);
+    }
     if (cfg_.scripts && cfg_.scripts->running()) cfg_.scripts->step(dt);
     for (auto& s : systems_) s->pre_physics(*this, dt);
 
@@ -265,6 +299,12 @@ void GameRuntime::stop() {
     if (!running_) return;
     for (auto it = systems_.rbegin(); it != systems_.rend(); ++it) (*it)->stop(*this);
     if (cfg_.scripts && cfg_.scripts->running()) cfg_.scripts->stop();
+    // The raycaster captures this runtime and the input snapshot is a member of it: the host must not reach either
+    // after the physics world or this runtime is gone.
+    if (cfg_.scripts) {
+        cfg_.scripts->set_raycaster(nullptr);
+        cfg_.scripts->set_input(nullptr);
+    }
     controller_.reset();
     animator_.reset();
     if (physics_ && touched_listener_ != ~usize(0)) physics_->remove_touched_listener(touched_listener_);

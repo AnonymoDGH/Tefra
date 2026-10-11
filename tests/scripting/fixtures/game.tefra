@@ -1,0 +1,210 @@
+{
+ "format": "tefra-place",
+ "version": 1,
+ "services": [
+  {
+   "class": "Workspace",
+   "props": {
+    "FallenPartsDestroyHeight": -200
+   },
+   "children": [
+    {
+     "class": "Part",
+     "props": {
+      "Name": "Floor",
+      "Position": [
+       0,
+       -0.5,
+       0
+      ],
+      "Size": [
+       60,
+       1,
+       60
+      ],
+      "Anchored": true,
+      "CanCollide": true
+     }
+    },
+    {
+     "class": "SpawnLocation",
+     "props": {
+      "Name": "Spawn",
+      "Position": [
+       0,
+       0.5,
+       0
+      ],
+      "Size": [
+       6,
+       1,
+       6
+      ],
+      "Anchored": true,
+      "CanCollide": true
+     }
+    },
+    {
+     "class": "Part",
+     "props": {
+      "Name": "Sensor",
+      "Position": [
+       10,
+       3,
+       0
+      ],
+      "Size": [
+       4,
+       0.5,
+       4
+      ],
+      "Anchored": true,
+      "CanCollide": false
+     },
+     "children": [
+      {
+       "class": "Script",
+       "props": {
+        "Name": "SensorScript",
+        "Source": "public class SensorScript : TefraScript\n{\n    public override void Start()\n    {\n        var part = (BasePart)Parent;\n        part.Touched += other =>\n        {\n            if (other.Parent?.FindFirstChildOfClass(\"Humanoid\") != null) Debug.Log(\"sensor touched\");\n        };\n    }\n}\n"
+       }
+      }
+     ]
+    },
+    {
+     "class": "Part",
+     "props": {
+      "Name": "KillBrick",
+      "Position": [
+       0,
+       0.5,
+       -20
+      ],
+      "Size": [
+       8,
+       1,
+       8
+      ],
+      "Anchored": true,
+      "CanCollide": true,
+      "Color": [
+       1,
+       0.2,
+       0.1
+      ]
+     },
+     "children": [
+      {
+       "class": "Script",
+       "props": {
+        "Name": "KillScript",
+        "Source": "public class KillScript : TefraScript\n{\n    public override void Start()\n    {\n        var part = (BasePart)Parent;\n        part.Touched += other =>\n        {\n            var hum = other.Parent?.FindFirstChildOfClass(\"Humanoid\") as Humanoid;\n            if (hum != null)\n            {\n                Debug.Log(\"killed\");\n                hum.Health = 0;\n            }\n        };\n    }\n}\n"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "class": "ServerScriptService",
+   "props": {},
+   "children": [
+    {
+     "class": "Script",
+     "props": {
+      "Name": "Dropper",
+      "Source": "public class Dropper : TefraScript\n{\n    public override async void Start()\n    {\n        await Task.Wait(0.5f);\n        var root = (BasePart)Players.LocalPlayer.Character.FindFirstChild(\"HumanoidRootPart\");\n        root.Position = new Vector3(10, 3, 0);\n        await Task.Wait(0.8f);\n        root.Position = new Vector3(0, 6, -20);\n        await Task.Wait(3.0f);\n        var late = (Script)Instance.New(\"Script\", Game.Workspace);\n        late.Name = \"Late\";\n        late.Source = \"public class LateScript : TefraScript { public override void Start() { Debug.Log(\\\"late script started\\\"); } }\";\n    }\n}\n"
+     }
+    },
+    {
+     "class": "Script",
+     "props": {
+      "Name": "Greeter",
+      "Source": "public class Greeter : TefraScript\n{\n    public override void Start()\n    {\n        Debug.Log(Util.Hello(\"to \" + Parent.Name));\n    }\n}\n"
+     }
+    }
+   ]
+  },
+  {
+   "class": "ReplicatedStorage",
+   "props": {},
+   "children": [
+    {
+     "class": "ModuleScript",
+     "props": {
+      "Name": "Util",
+      "Source": "public static class Util\n{\n    public static string Hello(string who) => \"module says hello \" + who;\n}\n"
+     }
+    }
+   ]
+  },
+  {
+   "class": "StarterGui",
+   "props": {},
+   "children": [
+    {
+     "class": "ScreenGui",
+     "props": {
+      "Name": "Hud"
+     },
+     "children": [
+      {
+       "class": "TextLabel",
+       "props": {
+        "Name": "Timer",
+        "Text": "0.0s"
+       }
+      },
+      {
+       "class": "LocalScript",
+       "props": {
+        "Name": "HudScript",
+        "Source": "public class HudScript : TefraScript\n{\n    public override void Start()\n    {\n        Debug.Log(\"hud started\");\n        Players.LocalPlayer.CharacterAdded += c => Debug.Log(\"spawned \" + c.Name);\n        UserInputService.InputBegan += io =>\n        {\n            if (io.KeyCode == KeyCode.E) Debug.Log(\"key E began\");\n        };\n    }\n}\n"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "class": "StarterPlayer",
+   "props": {
+    "CharacterWalkSpeed": 6
+   },
+   "children": [
+    {
+     "class": "StarterCharacterScripts",
+     "props": {
+      "Name": "StarterCharacterScripts"
+     },
+     "children": [
+      {
+       "class": "LocalScript",
+       "props": {
+        "Name": "CharScript",
+        "Source": "public class CharScript : TefraScript\n{\n    public override void Start()\n    {\n        Debug.Log(\"character script started\");\n    }\n}\n"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "class": "Players",
+   "props": {
+    "RespawnTime": 1.0
+   },
+   "children": []
+  },
+  {
+   "class": "SoundService",
+   "props": {},
+   "children": []
+  },
+  {
+   "class": "Lighting",
+   "props": {},
+   "children": []
+  }
+ ]
+}

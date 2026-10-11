@@ -48,10 +48,27 @@ namespace Tefra
         }
 
         // Fires with the property name after the property changed (Name included). Raised by the engine loop.
-        public event Action<string> Changed;
+        public event Action<string> Changed
+        {
+            add => Subscribe(ref _changed, value);
+            remove => Handlers.Remove(_changed ??= new List<Handler>(), value);
+        }
 
         // Fires when the instance (or an ancestor) is removed from the DataModel.
-        public event Action Destroying;
+        public event Action Destroying
+        {
+            add => Subscribe(ref _destroying, value);
+            remove => Handlers.Remove(_destroying ??= new List<Handler>(), value);
+        }
+
+        private List<Handler> _changed;
+        private List<Handler> _destroying;
+
+        private static void Subscribe(ref List<Handler> list, Delegate handler)
+        {
+            list ??= new List<Handler>();
+            Handlers.Add(list, handler);
+        }
 
         private static readonly PropRef NameProp = new PropRef("Instance", "Name");
 
@@ -227,23 +244,124 @@ namespace Tefra
             Cache.Remove(inst.Id);
         }
 
-        // Called by the engine loop: change and removal notifications queued by the DataModel since the last step.
+        // Called by the engine loop: notifications queued by the DataModel since the last step (changes, structure,
+        // gameplay signals). Structure changes only mark the script set dirty; the next step re-scans it.
         internal static unsafe void DispatchEvents(TefraEvent* events, uint count)
         {
             for (uint i = 0; i < count; i++)
             {
                 TefraEvent e = events[i];
-                Instance inst;
-                if (!Cache.TryGetValue(e.id, out inst)) continue;
-                if (e.kind == 1)
+                if (e.kind == EventKind.Added || e.kind == EventKind.Reparented)
                 {
-                    string name = Native.PropName(e.id, e.prop);
-                    if (name != null) inst.RaiseChanged(name);
+                    ScriptEngine.MarkDirty();
+                    continue;
                 }
-                else if (e.kind == 2)
+                if (e.kind == EventKind.Signal)
                 {
+                    DispatchSignal(e);
+                    continue;
+                }
+                Instance inst;
+                if (e.kind == EventKind.Removing)
+                {
+                    // Also for instances already forgotten by Destroy() (called from managed code): the scripts must
+                    // be re-scanned, or a destroyed script keeps running until the next structural change.
+                    ScriptEngine.MarkDirty();
+                    if (!Cache.TryGetValue(e.id, out inst)) continue;
                     Forget(inst);
                     inst.RaiseDestroying();
+                    continue;
+                }
+                if (!Cache.TryGetValue(e.id, out inst)) continue;
+                if (e.kind == EventKind.Changed)
+                {
+                    string name = Native.PropName(e.id, e.prop);
+                    if (name == null) continue;
+                    if (inst is BaseScript && (name == "Source" || name == "Enabled")) ScriptEngine.MarkDirty();
+                    inst.RaiseChanged(name);
+                }
+            }
+        }
+
+        // Routes a gameplay signal. Input signals come from the DataModel root and go to UserInputService; everything
+        // else goes to the wrapper of its source, when a script has one (instances nobody listens to have none).
+        private static unsafe void DispatchSignal(TefraEvent e)
+        {
+            string name = e.name == null ? "" : Native.FromUtf8((byte*)e.name) ?? "";
+            if (name == "InputBegan" || name == "InputEnded")
+            {
+                string key = e.text == null ? "" : Native.FromUtf8((byte*)e.text) ?? "";
+                UserInputService.Dispatch(name == "InputBegan", key);
+                return;
+            }
+            Instance source;
+            if (!Cache.TryGetValue(e.id, out source)) return;
+            Instance other = e.other == 0 ? null : FromId(e.other);
+            string text = e.text == null ? "" : Native.FromUtf8((byte*)e.text) ?? "";
+            source.RaiseSignal(name, other, e.number, text);
+        }
+
+        // ---- Gameplay signals (Touched, Activated, Died, ...) -----------------------------------------------------
+
+        private Dictionary<string, List<Handler>> _signals;
+
+        // Subscribes a handler to a signal. The wrapper keeps its handlers until Stop, so the handlers stay alive.
+        internal void AddSignal(string name, Delegate handler)
+        {
+            if (handler == null) return;
+            if (_signals == null) _signals = new Dictionary<string, List<Handler>>();
+            List<Handler> list;
+            if (!_signals.TryGetValue(name, out list)) _signals[name] = list = new List<Handler>();
+            Handlers.Add(list, handler);
+        }
+
+        internal void RemoveSignal(string name, Delegate handler)
+        {
+            List<Handler> list;
+            if (_signals == null || handler == null || !_signals.TryGetValue(name, out list)) return;
+            Handlers.Remove(list, handler);
+        }
+
+        // Calls the handlers of a signal with the argument its signature takes (see the event declarations).
+        // Handlers of scripts that were destroyed are skipped (see Handlers.Live).
+        internal void RaiseSignal(string name, Instance other, double number, string text)
+        {
+            if (_signals == null) return;
+            List<Handler> list;
+            if (!_signals.TryGetValue(name, out list) || list.Count == 0) return;
+            foreach (Handler h in Handlers.Live(list))
+            {
+                ScriptSlot previous = ScriptEngine.Enter(h.Owner);
+                Delegate d = h.Fn;
+                try
+                {
+                    switch (name)
+                    {
+                        case "HealthChanged":
+                            ((Action<float>)d)((float)number);
+                            break;
+                        case "Touched":
+                        case "TouchEnded":
+                        case "CharacterAdded":
+                        case "CharacterRemoving":
+                            ((Action<Instance>)d)(other);
+                            break;
+                        case "InputBegan":
+                        case "InputEnded":
+                            ((Action<InputObject>)d)(new InputObject(text));
+                            break;
+                        default:
+                            ((Action)d)();
+                            break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Native.Log(Native.LogError, FullName + "." + name + " handler failed: " + ex);
+                }
+                finally
+                {
+                    ScriptEngine.Current = previous;
                 }
             }
         }
@@ -253,42 +371,51 @@ namespace Tefra
         {
             foreach (Instance inst in Cache.Values)
             {
-                inst.Changed = null;
-                inst.Destroying = null;
+                inst._changed = null;
+                inst._destroying = null;
+                inst._signals = null;
             }
             Cache.Clear();
         }
 
         private void RaiseChanged(string name)
         {
-            Action<string> handlers = Changed;
-            if (handlers == null) return;
-            foreach (Delegate d in handlers.GetInvocationList())
+            if (_changed == null || _changed.Count == 0) return;
+            foreach (Handler h in Handlers.Live(_changed))
             {
+                ScriptSlot previous = ScriptEngine.Enter(h.Owner);
                 try
                 {
-                    ((Action<string>)d)(name);
+                    ((Action<string>)h.Fn)(name);
                 }
                 catch (Exception e)
                 {
                     Native.Log(Native.LogError, FullName + ".Changed handler failed: " + e);
+                }
+                finally
+                {
+                    ScriptEngine.Current = previous;
                 }
             }
         }
 
         private void RaiseDestroying()
         {
-            Action handlers = Destroying;
-            if (handlers == null) return;
-            foreach (Delegate d in handlers.GetInvocationList())
+            if (_destroying == null || _destroying.Count == 0) return;
+            foreach (Handler h in Handlers.Live(_destroying))
             {
+                ScriptSlot previous = ScriptEngine.Enter(h.Owner);
                 try
                 {
-                    ((Action)d)();
+                    ((Action)h.Fn)();
                 }
                 catch (Exception e)
                 {
                     Native.Log(Native.LogError, "Destroying handler failed: " + e);
+                }
+                finally
+                {
+                    ScriptEngine.Current = previous;
                 }
             }
         }

@@ -18,6 +18,7 @@
 
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -65,7 +66,16 @@ struct BodyInfo {
     bool can_touch = true;
 };
 
+// A Touched (ended = false) or TouchEnded (ended = true) pair of instance ids, in the order they happened.
+struct TouchPair {
+    u64 a = 0;
+    u64 b = 0;
+    bool ended = false;
+};
+
 // Contact callbacks run on Jolt's worker threads: they only queue instance-id pairs; step() dispatches them.
+// Body-vs-body contacts: OnContactAdded queues a Touched pair (once per new pair of bodies); OnContactRemoved, the
+// matching TouchEnded. Jolt reports removal without the bodies, so the pairs in progress are remembered by body id.
 class ContactEvents final : public JPH::ContactListener {
   public:
     JPH::ValidateResult OnContactValidate(const JPH::Body&, const JPH::Body&, JPH::RVec3Arg,
@@ -74,9 +84,11 @@ class ContactEvents final : public JPH::ContactListener {
     }
     void OnContactAdded(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold&,
                         JPH::ContactSettings&) override;
+    void OnContactRemoved(const JPH::SubShapeIDPair& pair) override;
 
     std::mutex mutex;
-    std::vector<std::pair<u64, u64>> pending;
+    std::vector<TouchPair> pending;
+    std::unordered_map<u64, std::pair<u64, u64>> active;      // body pair key -> (instance a, instance b)
     const std::unordered_map<u64, BodyInfo>* infos = nullptr; // read-only while Jolt updates
 };
 
@@ -106,11 +118,12 @@ struct WorldImpl {
     void mark(world::Instance& inst, u32 flags);
     void mark_tree(world::Instance& inst);
     void on_changed(world::Instance& inst, u32 prop);
-    void sync();
+    void sync(f32 dt);
     void create_body(world::Instance& part);
     void destroy_body(u64 id);
     void write_back();
     void destroy_fallen();
+    void scan_character_touches();
     void dispatch_touched();
 
     // First member: Jolt's temp allocator (below) allocates through the registered allocator.
@@ -123,6 +136,10 @@ struct WorldImpl {
     std::vector<TouchEntry> touched;
     usize next_touch_handle = 1;
     std::vector<CharacterImpl*> characters;
+    // Anchored parts that scripts move are kinematic (not static): they carry the characters standing on them.
+    std::unordered_set<u64> kinematic_ids;
+    std::unordered_set<u64> moving_kinematic; // moved by the last sync: their velocity is cleared when they stop
+    std::vector<TouchPair> touch_queue;       // character contacts found by scan_character_touches()
     f32 accumulator = 0.0f;
     bool writing_back = false;
     bool update_error_logged = false;
@@ -149,6 +166,7 @@ struct CharacterImpl {
     f32 landed_timer = 0.0f;
     vec3 velocity{};
     vec3 last_root_pos{};
+    std::vector<u64> touching; // part ids the character touched at the last scan (Touched / TouchEnded)
 };
 
 // Defined in character.cpp.

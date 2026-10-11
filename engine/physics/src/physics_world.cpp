@@ -5,6 +5,9 @@
 
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollisionCollector.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
@@ -12,6 +15,7 @@
 #include <Jolt/Physics/Collision/Shape/ScaledShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -141,6 +145,16 @@ JPH::RefConst<JPH::Shape> make_shape(const world::Instance& part, vec3 size, f32
 
 } // namespace
 
+namespace {
+// Key of an unordered pair of bodies (both orders map to the same key).
+u64 pair_key(JPH::BodyID x, JPH::BodyID y) {
+    u64 p = x.GetIndexAndSequenceNumber();
+    u64 q = y.GetIndexAndSequenceNumber();
+    if (p > q) std::swap(p, q);
+    return (p << 32) | q;
+}
+} // namespace
+
 void ContactEvents::OnContactAdded(const JPH::Body& a, const JPH::Body& b, const JPH::ContactManifold&,
                                    JPH::ContactSettings&) {
     if (!infos) return;
@@ -149,7 +163,16 @@ void ContactEvents::OnContactAdded(const JPH::Body& a, const JPH::Body& b, const
     if (ia == infos->end() || ib == infos->end()) return;
     if (!ia->second.can_touch || !ib->second.can_touch) return;
     std::lock_guard<std::mutex> lock(mutex);
-    pending.emplace_back(a.GetUserData(), b.GetUserData());
+    pending.push_back(TouchPair{a.GetUserData(), b.GetUserData(), false});
+    active[pair_key(a.GetID(), b.GetID())] = {a.GetUserData(), b.GetUserData()};
+}
+
+void ContactEvents::OnContactRemoved(const JPH::SubShapeIDPair& pair) {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto it = active.find(pair_key(pair.GetBody1ID(), pair.GetBody2ID()));
+    if (it == active.end()) return;
+    pending.push_back(TouchPair{it->second.first, it->second.second, true});
+    active.erase(it);
 }
 
 bool ensure_jolt_initialized() {
@@ -222,14 +245,17 @@ void WorldImpl::on_changed(world::Instance& inst, u32 prop) {
     }
 }
 
-void WorldImpl::sync() {
+void WorldImpl::sync(f32 dt) {
     std::unordered_map<u64, u32> pending;
     pending.swap(dirty);
     JPH::BodyInterface& bi = system.GetBodyInterface();
+    const f32 move_dt = dt > 1e-4f ? dt : kPhysicsStep; // kinematic velocity = displacement / dt
+    std::unordered_set<u64> moved_now;
     for (const auto& [id, flags] : pending) {
         world::Instance* inst = model.find(id);
         if (!inst || !is_simulated(*inst)) {
             destroy_body(id);
+            kinematic_ids.erase(id);
             continue;
         }
         const auto it = bodies.find(id);
@@ -239,16 +265,39 @@ void WorldImpl::sync() {
             continue;
         }
         const JPH::BodyID bid = it->second;
-        const bool dynamic = bi.GetMotionType(bid) == JPH::EMotionType::Dynamic;
+        const JPH::EMotionType motion = bi.GetMotionType(bid);
+        const bool dynamic = motion == JPH::EMotionType::Dynamic;
+        const bool kinematic = motion == JPH::EMotionType::Kinematic;
         if ((flags & kDirtyTeleport) != 0) {
-            bi.SetPositionAndRotation(bid, JPH::RVec3(to_jolt(inst->get_vec3("Position"))),
-                                      to_jolt(world::orientation_to_quat(inst->get_vec3("Orientation"))),
-                                      dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+            if (motion == JPH::EMotionType::Static && inst->get_bool("Anchored")) {
+                // A script moves an anchored part: from now on it is kinematic, so the characters on it are carried.
+                kinematic_ids.insert(id);
+                destroy_body(id);
+                create_body(*inst);
+                moved_now.insert(id);
+                continue;
+            }
+            const JPH::RVec3 pos(to_jolt(inst->get_vec3("Position")));
+            const JPH::Quat rot = to_jolt(world::orientation_to_quat(inst->get_vec3("Orientation")));
+            if (kinematic) {
+                bi.MoveKinematic(bid, pos, rot, move_dt);
+                moved_now.insert(id);
+            } else {
+                bi.SetPositionAndRotation(bid, pos, rot,
+                                          dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+            }
         }
         if ((flags & kDirtyVelocity) != 0 && dynamic) {
             bi.SetLinearVelocity(bid, to_jolt(inst->get_vec3("AssemblyLinearVelocity")));
         }
     }
+    // A kinematic part that stopped moving must not keep its last velocity (characters would slide off it).
+    for (u64 id : moving_kinematic) {
+        if (moved_now.count(id) != 0) continue;
+        const auto it = bodies.find(id);
+        if (it != bodies.end()) bi.SetLinearVelocity(it->second, JPH::Vec3::sZero());
+    }
+    moving_kinematic.swap(moved_now);
 }
 
 void WorldImpl::create_body(world::Instance& part) {
@@ -261,9 +310,12 @@ void WorldImpl::create_body(world::Instance& part) {
     JPH::RefConst<JPH::Shape> shape = make_shape(part, size, density);
     if (!shape) return;
 
-    const JPH::EMotionType motion = anchored ? JPH::EMotionType::Static : JPH::EMotionType::Dynamic;
+    const bool kinematic = anchored && kinematic_ids.count(part.id()) != 0;
+    const JPH::EMotionType motion =
+        !anchored ? JPH::EMotionType::Dynamic : (kinematic ? JPH::EMotionType::Kinematic : JPH::EMotionType::Static);
+    // Kinematic bodies move, so they sit on the moving broad-phase layer like dynamic ones.
     JPH::ObjectLayer layer = kLayerDynamic;
-    if (anchored)
+    if (anchored && !kinematic)
         layer = can_collide ? kLayerStatic : kLayerStaticSensor;
     else
         layer = can_collide ? kLayerDynamic : kLayerDynamicSensor;
@@ -278,7 +330,8 @@ void WorldImpl::create_body(world::Instance& part) {
         bcs.mLinearVelocity = to_jolt(part.get_vec3("AssemblyLinearVelocity"));
         bcs.mMotionQuality = JPH::EMotionQuality::LinearCast; // no tunnelling through thin parts
     }
-    const JPH::EActivation activation = anchored ? JPH::EActivation::DontActivate : JPH::EActivation::Activate;
+    const JPH::EActivation activation =
+        motion == JPH::EMotionType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate;
     const JPH::BodyID id = system.GetBodyInterface().CreateAndAddBody(bcs, activation);
     if (id.IsInvalid()) {
         TEFRA_LOG_WARN("physics: no room for body %s", part.full_name().c_str());
@@ -325,20 +378,52 @@ void WorldImpl::destroy_fallen() {
         if (world::Instance* inst = model.find(id)) model.destroy(inst);
 }
 
+// Character contacts: the characters' capsules overlap every part that has CanTouch (solid or sensor) within a few
+// centimetres. Parts that appear in the scan are the touching set; new ones are Touched, missing ones TouchEnded.
+void WorldImpl::scan_character_touches() {
+    constexpr f32 kTouchDistance = 0.05f; // standing on a floor counts as touching it
+    for (CharacterImpl* c : characters) {
+        if (!c->cv || !c->world || model.find(c->root_id) == nullptr) continue;
+        JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> hits;
+        JPH::CollideShapeSettings settings;
+        settings.mMaxSeparationDistance = kTouchDistance;
+        system.GetNarrowPhaseQuery().CollideShape(c->cv->GetShape(), JPH::Vec3::sReplicate(1.0f),
+                                                  c->cv->GetCenterOfMassTransform(), settings, JPH::RVec3::sZero(),
+                                                  hits, system.GetDefaultBroadPhaseLayerFilter(kLayerDynamic),
+                                                  system.GetDefaultLayerFilter(kLayerDynamic));
+        std::vector<u64> now;
+        for (const JPH::CollideShapeResult& r : hits.mHits) {
+            const u64 part = system.GetBodyInterfaceNoLock().GetUserData(r.mBodyID2);
+            const auto info = infos.find(part);
+            if (info == infos.end() || !info->second.can_touch || part == c->root_id) continue;
+            if (std::find(now.begin(), now.end(), part) == now.end()) now.push_back(part);
+        }
+        for (u64 id : now)
+            if (std::find(c->touching.begin(), c->touching.end(), id) == c->touching.end())
+                touch_queue.push_back(TouchPair{c->root_id, id, false});
+        for (u64 id : c->touching)
+            if (std::find(now.begin(), now.end(), id) == now.end())
+                touch_queue.push_back(TouchPair{c->root_id, id, true});
+        c->touching = std::move(now);
+    }
+}
+
 void WorldImpl::dispatch_touched() {
-    std::vector<std::pair<u64, u64>> events;
+    std::vector<TouchPair> events;
     {
         std::lock_guard<std::mutex> lock(contacts.mutex);
         events.swap(contacts.pending);
     }
+    events.insert(events.end(), touch_queue.begin(), touch_queue.end());
+    touch_queue.clear();
     if (events.empty() || touched.empty()) return;
     const std::vector<TouchEntry> listeners = touched;
-    for (const auto& [a_id, b_id] : events) {
-        world::Instance* a = model.find(a_id);
-        world::Instance* b = model.find(b_id);
+    for (const TouchPair& p : events) {
+        world::Instance* a = model.find(p.a);
+        world::Instance* b = model.find(p.b);
         if (!a || !b) continue;
         for (const TouchEntry& e : listeners)
-            if (e.fn) e.fn(*a, *b);
+            if (e.fn) e.fn(*a, *b, p.ended);
     }
 }
 
@@ -352,11 +437,11 @@ PhysicsWorld::PhysicsWorld(world::DataModel& model) : model_(model), impl_(std::
 
 PhysicsWorld::~PhysicsWorld() = default;
 
-void PhysicsWorld::sync() { impl_->sync(); }
+void PhysicsWorld::sync() { impl_->sync(kPhysicsStep); }
 
 void PhysicsWorld::step(f32 dt) {
     WorldImpl& w = *impl_;
-    w.sync();
+    w.sync(dt);
     w.system.SetGravity(JPH::Vec3(0.0f, -w.gravity(), 0.0f));
     w.accumulator += clamp(dt, 0.0f, detail::kMaxFrameSeconds);
     u32 substeps = 0;
@@ -374,6 +459,7 @@ void PhysicsWorld::step(f32 dt) {
     w.write_back();
     for (detail::CharacterImpl* c : w.characters) detail::character_post_step(*c, w, dt);
     w.destroy_fallen();
+    w.scan_character_touches();
     w.dispatch_touched();
 }
 

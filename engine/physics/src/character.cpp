@@ -62,15 +62,18 @@ void character_pre_step(CharacterImpl& c, WorldImpl& w, f32 dt) {
     const bool ground = c.cv->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
     JPH::Vec3 v = c.cv->GetLinearVelocity();
     const f32 walk = hum->get_float("WalkSpeed", 6.0f);
-    v.SetX(c.move_dir.x * walk);
-    v.SetZ(c.move_dir.z * walk);
+    // On a moving part (a platform moved by a script, a kinematic body) the character must move with its ground: the
+    // ground velocity is part of the desired velocity (Jolt's samples do the same).
+    const JPH::Vec3 ground_v = ground ? c.cv->GetGroundVelocity() : JPH::Vec3::sZero();
+    v.SetX(c.move_dir.x * walk + ground_v.GetX());
+    v.SetZ(c.move_dir.z * walk + ground_v.GetZ());
     // CharacterVirtual does not integrate gravity itself: the caller adds it to the vertical velocity.
     if (ground) {
         if (c.jump_requested) {
-            v.SetY(std::sqrt(2.0f * g * max(hum->get_float("JumpHeight", 1.6f), 0.0f)));
+            v.SetY(std::sqrt(2.0f * g * max(hum->get_float("JumpHeight", 1.6f), 0.0f)) + ground_v.GetY());
             c.jumping = true;
-        } else if (v.GetY() < 0.0f) {
-            v.SetY(0.0f);
+        } else {
+            v.SetY(ground_v.GetY() < 0.0f ? ground_v.GetY() : max(ground_v.GetY(), 0.0f));
         }
     } else {
         v.SetY(v.GetY() - g * dt);
@@ -96,7 +99,9 @@ void character_post_step(CharacterImpl& c, WorldImpl& w, f32 dt) {
     const bool grounded = c.cv->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
     const vec3 feet = from_jolt(c.cv->GetPosition());
     const vec3 new_root = feet_to_root(feet, *hum, *root);
-    const vec3 horizontal{c.velocity.x, 0.0f, c.velocity.z};
+    // Walking speed for the animation: the motion relative to the ground (a moving platform does not make us run).
+    const vec3 ground_v = grounded ? from_jolt(c.cv->GetGroundVelocity()) : vec3{};
+    const vec3 horizontal{c.velocity.x - ground_v.x, 0.0f, c.velocity.z - ground_v.z};
     const f32 speed = length(horizontal);
 
     u32 state = 0;

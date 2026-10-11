@@ -2,7 +2,7 @@
 tefra_add_executable(tefra_unit_tests
     SOURCES unit/main.cpp unit/test_math.cpp unit/test_memory.cpp unit/test_jobs.cpp unit/test_json.cpp
             unit/test_stats.cpp unit/test_image.cpp unit/test_environment.cpp unit/test_foliage.cpp unit/test_palm.cpp unit/test_world.cpp unit/test_studio.cpp unit/test_projects.cpp unit/test_anim.cpp
-            unit/test_mcp.cpp unit/test_physics.cpp unit/test_scripting.cpp unit/test_rbx.cpp
+            unit/test_mcp.cpp unit/test_physics.cpp unit/test_scripting.cpp unit/test_rbx.cpp unit/test_gameplay.cpp
     DEPS tefra_renderer tefra_world tefra_studio_core tefra_runtime tefra_anim tefra_mcp tefra_physics tefra_scripting tefra_rbx tefra_doctest)
 add_test(NAME unit COMMAND tefra_unit_tests)
 set_tests_properties(unit PROPERTIES LABELS "unit")
@@ -16,10 +16,26 @@ add_test(NAME scripting_run COMMAND tefra_run
     --place ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/spin.tefra --frames 60 --require-scripts
     --out ${CMAKE_BINARY_DIR}/tests/scripting_run_out.tefra)
 set_tests_properties(scripting_run PROPERTIES LABELS "unit" SKIP_RETURN_CODE 77)
+
+# Game runtime end to end (M3b): a place with a sensor, a kill brick that kills the dropped character, a respawn, a
+# ModuleScript used by a Script, a LocalScript in PlayerGui, a script created during Play, an InputBegan from a synthetic
+# key press, and a StarterCharacterScripts clone. --expect-file: every line of the file must appear in the log.
+add_test(NAME scripting_game COMMAND tefra_run
+    --place ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/game.tefra --frames 600 --press E:120:3 --require-scripts
+    --expect-file ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/game.expect)
+set_tests_properties(scripting_game PROPERTIES LABELS "scripting" SKIP_RETURN_CODE 77)
+
+# Gameplay regressions (M3b): Workspace.Raycast from a TefraScript (also in Start), a respawned HUD that receives
+# CharacterAdded, a kill brick and a sensor that kill the character, a destroyed script's handlers no longer running
+# (the "E began" from the HUD is printed once per press), and StarterCharacterScripts. Output lines must appear.
+add_test(NAME scripting_gameplay COMMAND tefra_run
+    --place ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/gameplay.tefra --frames 1800 --press E:300:3 --require-scripts
+    --expect-file ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/gameplay.expect)
+set_tests_properties(scripting_gameplay PROPERTIES LABELS "scripting" SKIP_RETURN_CODE 77)
 if(TEFRA_ASAN)
     # The .NET runtime keeps its heap for the life of the process; suppress only its modules (see lsan.supp).
     set(_tefra_lsan "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
-    set_tests_properties(unit scripting_run PROPERTIES ENVIRONMENT "${_tefra_lsan}")
+    set_tests_properties(unit scripting_run scripting_game scripting_gameplay PROPERTIES ENVIRONMENT "${_tefra_lsan}")
 endif()
 
 # MCP end-to-end (ADR-015): starts tefra_mcp_demo, speaks Streamable HTTP to it, then drives the stdio bridge.

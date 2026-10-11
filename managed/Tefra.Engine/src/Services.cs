@@ -15,6 +15,9 @@ namespace Tefra
         public static Instance ServerScriptService => GetService("ServerScriptService");
         public static Instance StarterPlayer => GetService("StarterPlayer");
         public static Instance StarterGui => GetService("StarterGui");
+        /// <summary>The Players service instance (RespawnTime, children). The static helpers are Tefra.Players.</summary>
+        public static PlayersService Players => GetService("Players") as PlayersService;
+        public static SoundService SoundService => GetService("SoundService") as SoundService;
 
         public static Instance GetService(string name)
         {
@@ -22,34 +25,176 @@ namespace Tefra
             if (id == 0) throw new ArgumentException("Game.GetService: no service named '" + name + "'");
             return Instance.FromId(id);
         }
+
+        // The service, or null when the DataModel has no service of that name (the engine uses this while scanning).
+        public static Instance TryService(string name)
+        {
+            ulong id = Native.IsReady ? Native.Service(name ?? "") : 0UL;
+            return id == 0 ? null : Instance.FromId(id);
+        }
     }
 
-    /// <summary>Per-frame events. Handlers run on the engine loop, after the scheduled tasks resume.</summary>
-    public static class RunService
+    /// <summary>
+    /// Shortcuts over the Players service, as in Roblox scripts: Players.LocalPlayer, Players.GetPlayerFromCharacter.
+    /// </summary>
+    public static class Players
     {
-        /// <summary>Fires once per engine step with the frame time in seconds.</summary>
-        public static event Action<float> Heartbeat;
+        private static PlayersService Service => Game.TryService("Players") as PlayersService;
 
-        internal static void Fire(float dt)
+        /// <summary>The local player (the first Player). Null outside Play mode.</summary>
+        public static Player LocalPlayer => Service?.LocalPlayer;
+
+        public static Player[] GetPlayers() => Service?.GetPlayers() ?? new Player[0];
+
+        /// <summary>The player whose character is the given model, or null.</summary>
+        public static Player GetPlayerFromCharacter(Instance character) => Service?.GetPlayerFromCharacter(character);
+    }
+
+    /// <summary>Keys of the keyboard. The order and names match tefra::Key (engine/core/input.h).</summary>
+    public enum KeyCode
+    {
+        Unknown,
+        A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+        Zero, One, Two, Three, Four, Five, Six, Seven, Eight, Nine,
+        Space, Return, Escape, Tab, Backspace, Delete, Insert, Home, End, PageUp, PageDown,
+        Left, Right, Up, Down,
+        LeftShift, RightShift, LeftControl, RightControl, LeftAlt, RightAlt,
+        F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12
+    }
+
+    /// <summary>Which input produced an InputObject.</summary>
+    public enum UserInputType
+    {
+        Keyboard, MouseButton1, MouseButton2, MouseButton3
+    }
+
+    /// <summary>One key or mouse button press / release, passed to UserInputService.InputBegan / InputEnded.</summary>
+    public sealed class InputObject
+    {
+        public KeyCode KeyCode { get; }
+        public UserInputType UserInputType { get; }
+
+        internal InputObject(string text)
         {
-            Action<float> handlers = Heartbeat;
-            if (handlers == null) return;
-            foreach (Delegate d in handlers.GetInvocationList())
+            KeyCode key;
+            if (text != null && Enum.TryParse(text, out key)) KeyCode = key;
+            else KeyCode = KeyCode.Unknown;
+            UserInputType type;
+            if (text != null && text.StartsWith("MouseButton", StringComparison.Ordinal) &&
+                Enum.TryParse(text, out type))
+                UserInputType = type;
+            else
+                UserInputType = UserInputType.Keyboard;
+        }
+    }
+
+    /// <summary>Keyboard and mouse state. IsKeyDown reads the snapshot of the current frame; the events come from the
+    /// engine loop.</summary>
+    public static class UserInputService
+    {
+        /// <summary>Fires when a key or mouse button goes down. Use `io.KeyCode == KeyCode.E` to filter.</summary>
+        public static event Action<InputObject> InputBegan
+        {
+            add => Handlers.Add(BeganHandlers, value);
+            remove => Handlers.Remove(BeganHandlers, value);
+        }
+
+        /// <summary>Fires when a key or mouse button goes up.</summary>
+        public static event Action<InputObject> InputEnded
+        {
+            add => Handlers.Add(EndedHandlers, value);
+            remove => Handlers.Remove(EndedHandlers, value);
+        }
+
+        private static readonly List<Handler> BeganHandlers = new List<Handler>();
+        private static readonly List<Handler> EndedHandlers = new List<Handler>();
+
+        public static bool IsKeyDown(KeyCode key) => Native.IsReady && Native.KeyDown((int)key);
+
+        public static bool IsMouseButtonPressed(UserInputType button)
+        {
+            if (!Native.IsReady || button == UserInputType.Keyboard) return false;
+            return Native.MouseDown((int)button - (int)UserInputType.MouseButton1);
+        }
+
+        /// <summary>Pointer position in pixels of the game view (top-left origin).</summary>
+        public static Vector2 MouseLocation
+        {
+            get
             {
+                double x, y;
+                if (Native.IsReady) Native.MouseLocation(out x, out y);
+                else { x = 0; y = 0; }
+                return new Vector2((float)x, (float)y);
+            }
+        }
+
+        internal static void Dispatch(bool began, string text)
+        {
+            List<Handler> handlers = Handlers.Live(began ? BeganHandlers : EndedHandlers);
+            if (handlers.Count == 0) return;
+            var io = new InputObject(text);
+            foreach (Handler h in handlers)
+            {
+                ScriptSlot previous = ScriptEngine.Enter(h.Owner);
                 try
                 {
-                    ((Action<float>)d)(dt);
+                    ((Action<InputObject>)h.Fn)(io);
                 }
                 catch (Exception e)
                 {
-                    Native.Log(Native.LogError, "RunService.Heartbeat handler failed: " + e);
+                    Native.Log(Native.LogError, (began ? "InputBegan" : "InputEnded") + " handler failed: " + e);
+                }
+                finally
+                {
+                    ScriptEngine.Current = previous;
                 }
             }
         }
 
         internal static void Clear()
         {
-            Heartbeat = null;
+            BeganHandlers.Clear();
+            EndedHandlers.Clear();
+        }
+    }
+
+    /// <summary>Per-frame events. Handlers run on the engine loop, after the scheduled tasks resume.</summary>
+    public static class RunService
+    {
+        /// <summary>Fires once per engine step with the frame time in seconds.</summary>
+        public static event Action<float> Heartbeat
+        {
+            add => Handlers.Add(HeartbeatHandlers, value);
+            remove => Handlers.Remove(HeartbeatHandlers, value);
+        }
+
+        private static readonly List<Handler> HeartbeatHandlers = new List<Handler>();
+
+        internal static void Fire(float dt)
+        {
+            if (HeartbeatHandlers.Count == 0) return;
+            foreach (Handler h in Handlers.Live(HeartbeatHandlers))
+            {
+                ScriptSlot previous = ScriptEngine.Enter(h.Owner);
+                try
+                {
+                    ((Action<float>)h.Fn)(dt);
+                }
+                catch (Exception e)
+                {
+                    Native.Log(Native.LogError, "RunService.Heartbeat handler failed: " + e);
+                }
+                finally
+                {
+                    ScriptEngine.Current = previous;
+                }
+            }
+        }
+
+        internal static void Clear()
+        {
+            HeartbeatHandlers.Clear();
         }
     }
 
@@ -71,6 +216,7 @@ namespace Tefra
 
         private float _remaining;
         private Action _continuation;
+        private ScriptSlot _owner; // the script that awaited it: a retired script is never resumed
 
         internal Yield(float seconds)
         {
@@ -84,6 +230,7 @@ namespace Tefra
         public void OnCompleted(Action continuation)
         {
             _continuation = continuation;
+            _owner = ScriptEngine.Current;
             Waiting.Add(this);
         }
 
@@ -111,15 +258,22 @@ namespace Tefra
             // Resume in the order the waits were started.
             for (int i = ready.Count - 1; i >= 0; i--)
             {
-                Action c = ready[i]._continuation;
-                ready[i]._continuation = null;
+                Yield y = ready[i];
+                Action c = y._continuation;
+                y._continuation = null;
+                if (c == null || !ScriptEngine.IsLive(y._owner)) continue; // the script was destroyed meanwhile
+                ScriptSlot previous = ScriptEngine.Enter(y._owner);
                 try
                 {
-                    c?.Invoke();
+                    c.Invoke();
                 }
                 catch (Exception e)
                 {
                     Native.Log(Native.LogError, "Task resumed with an exception: " + e);
+                }
+                finally
+                {
+                    ScriptEngine.Current = previous;
                 }
             }
         }

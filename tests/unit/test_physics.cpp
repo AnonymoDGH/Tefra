@@ -75,7 +75,9 @@ TEST_CASE("physics: Touched fires for a landing pair and for a sensor") {
     s.part("Floor", {0, -0.5f, 0}, {40, 1, 40}, true);
     s.part("Box", {0, 5, 0}, {2, 1, 2}, false);
     std::vector<std::string> pairs;
-    s.pw.add_touched_listener([&](Instance& a, Instance& b) { pairs.push_back(a.name() + "+" + b.name()); });
+    s.pw.add_touched_listener([&](Instance& a, Instance& b, bool ended) {
+        if (!ended) pairs.push_back(a.name() + "+" + b.name());
+    });
     s.run(2.0f);
     bool landed = false;
     for (const std::string& p : pairs) landed = landed || p == "Box+Floor" || p == "Floor+Box";
@@ -87,7 +89,9 @@ TEST_CASE("physics: Touched fires for a landing pair and for a sensor") {
     t.part("Gate", {0, 2, 0}, {4, 0.2f, 4}, true, kBlock, false);
     Instance* ball = t.part("Ball", {0, 4, 0}, {1, 1, 1}, false, kBall);
     std::vector<std::string> sensor_pairs;
-    t.pw.add_touched_listener([&](Instance& a, Instance& b) { sensor_pairs.push_back(a.name() + "+" + b.name()); });
+    t.pw.add_touched_listener([&](Instance& a, Instance& b, bool ended) {
+        if (!ended) sensor_pairs.push_back(a.name() + "+" + b.name());
+    });
     t.run(2.5f);
     bool sensed = false;
     for (const std::string& p : sensor_pairs) sensed = sensed || p == "Gate+Ball" || p == "Ball+Gate";

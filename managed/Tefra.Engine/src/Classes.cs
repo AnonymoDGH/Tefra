@@ -22,6 +22,37 @@ namespace Tefra
         Server, Client
     }
 
+    // Enums below mirror the order of classes.cpp (add_enum).
+    public enum HumanoidState
+    {
+        Idle, Walking, Running, Jumping, Freefall, Landed, Dead, Seated, Climbing, Swimming
+    }
+
+    public enum RigType
+    {
+        R15, Custom
+    }
+
+    public enum TextXAlignment
+    {
+        Left, Center, Right
+    }
+
+    public enum TextYAlignment
+    {
+        Top, Center, Bottom
+    }
+
+    public enum ScaleType
+    {
+        Stretch, Fit, Crop
+    }
+
+    public enum Font
+    {
+        Default, Bold, Mono
+    }
+
     public class BasePart : Instance
     {
         private static readonly PropRef PositionP = new PropRef("BasePart", "Position");
@@ -64,6 +95,21 @@ namespace Tefra
         public float Friction { get => GetFloat(FrictionP); set => SetFloat(FrictionP, value); }
         public float Elasticity { get => GetFloat(ElasticityP); set => SetFloat(ElasticityP, value); }
         public Vector3 AssemblyLinearVelocity { get => GetVector3(VelocityP); set => SetVector3(VelocityP, value); }
+
+        /// <summary>Fires once when another part (or a character) starts touching this one. The argument is the other part.
+        /// Characters report the touch with their HumanoidRootPart; sensors (CanCollide = false, CanTouch = true) report too.</summary>
+        public event Action<Instance> Touched
+        {
+            add => AddSignal("Touched", value);
+            remove => RemoveSignal("Touched", value);
+        }
+
+        /// <summary>Fires when a contact that was reported by Touched ends.</summary>
+        public event Action<Instance> TouchEnded
+        {
+            add => AddSignal("TouchEnded", value);
+            remove => RemoveSignal("TouchEnded", value);
+        }
     }
 
     public class Part : BasePart
@@ -125,6 +171,43 @@ namespace Tefra
         /// <summary>Gravitational acceleration (m/s^2).</summary>
         public float Gravity { get => GetFloat(GravityP); set => SetFloat(GravityP, value); }
         public float FallenPartsDestroyHeight { get => GetFloat(FallenP); set => SetFloat(FallenP, value); }
+
+        /// <summary>
+        /// Closest solid part along the ray from origin in direction (sensors are ignored, like CanCollide = false).
+        /// Returns null on a miss or outside Play mode.
+        /// </summary>
+        public RaycastResult Raycast(Vector3 origin, Vector3 direction, float maxDistance = 1000f)
+        {
+            double[] hit;
+            ulong id = Native.Raycast(origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z, maxDistance, out hit);
+            if (id == 0) return null;
+            return new RaycastResult(
+                Instance.FromId(id),
+                new Vector3((float)hit[0], (float)hit[1], (float)hit[2]),
+                new Vector3((float)hit[3], (float)hit[4], (float)hit[5]),
+                (float)hit[6]);
+        }
+    }
+
+    /// <summary>Answer of Workspace.Raycast.</summary>
+    public sealed class RaycastResult
+    {
+        /// <summary>The part that was hit.</summary>
+        public Instance Instance { get; }
+        /// <summary>Hit point (m).</summary>
+        public Vector3 Position { get; }
+        /// <summary>Unit surface normal at the hit.</summary>
+        public Vector3 Normal { get; }
+        /// <summary>Distance from the origin (m).</summary>
+        public float Distance { get; }
+
+        internal RaycastResult(Instance instance, Vector3 position, Vector3 normal, float distance)
+        {
+            Instance = instance;
+            Position = position;
+            Normal = normal;
+            Distance = distance;
+        }
     }
 
     public class Lighting : Instance
@@ -178,6 +261,427 @@ namespace Tefra
         public string Source { get => GetString(SourceP); set => SetString(SourceP, value); }
     }
 
+    // ---- Players and characters ------------------------------------------------------------------------------
+
+    /// <summary>A character: health, walking and jumping (classes.cpp: Humanoid). Its Model is the character.</summary>
+    public class Humanoid : Instance
+    {
+        private static readonly PropRef HealthP = new PropRef("Humanoid", "Health");
+        private static readonly PropRef MaxHealthP = new PropRef("Humanoid", "MaxHealth");
+        private static readonly PropRef WalkSpeedP = new PropRef("Humanoid", "WalkSpeed");
+        private static readonly PropRef JumpHeightP = new PropRef("Humanoid", "JumpHeight");
+        private static readonly PropRef HipHeightP = new PropRef("Humanoid", "HipHeight");
+        private static readonly PropRef AutoRotateP = new PropRef("Humanoid", "AutoRotate");
+        private static readonly PropRef RigTypeP = new PropRef("Humanoid", "RigType");
+        private static readonly PropRef DisplayNameP = new PropRef("Humanoid", "DisplayName");
+        private static readonly PropRef StateP = new PropRef("Humanoid", "State");
+        private static readonly PropRef MoveDirectionP = new PropRef("Humanoid", "MoveDirection");
+
+        internal Humanoid(ulong id) : base(id) { }
+
+        /// <summary>Current health. Setting it to 0 or less kills the character (Died, then a respawn).</summary>
+        public float Health { get => GetFloat(HealthP); set => SetFloat(HealthP, value); }
+        public float MaxHealth { get => GetFloat(MaxHealthP); set => SetFloat(MaxHealthP, value); }
+        /// <summary>Walking speed (m/s).</summary>
+        public float WalkSpeed { get => GetFloat(WalkSpeedP); set => SetFloat(WalkSpeedP, value); }
+        /// <summary>Jump height (m).</summary>
+        public float JumpHeight { get => GetFloat(JumpHeightP); set => SetFloat(JumpHeightP, value); }
+        public float HipHeight { get => GetFloat(HipHeightP); set => SetFloat(HipHeightP, value); }
+        public bool AutoRotate { get => GetBool(AutoRotateP); set => SetBool(AutoRotateP, value); }
+        public RigType RigType { get => (RigType)GetInt(RigTypeP); set => SetEnum(RigTypeP, (int)value); }
+        public string DisplayName { get => GetString(DisplayNameP); set => SetString(DisplayNameP, value); }
+        /// <summary>Read-only: maintained by the engine (Idle, Running, Jumping, Freefall, Landed, Dead...).</summary>
+        public HumanoidState State => (HumanoidState)GetInt(StateP);
+        public Vector3 MoveDirection { get => GetVector3(MoveDirectionP); set => SetVector3(MoveDirectionP, value); }
+
+        /// <summary>Fires once when the health reaches zero.</summary>
+        public event Action Died
+        {
+            add => AddSignal("Died", value);
+            remove => RemoveSignal("Died", value);
+        }
+
+        /// <summary>Fires with the new health when it changes.</summary>
+        public event Action<float> HealthChanged
+        {
+            add => AddSignal("HealthChanged", value);
+            remove => RemoveSignal("HealthChanged", value);
+        }
+
+        /// <summary>Removes health (never below zero). Use it for hits; it fires HealthChanged and, at zero, Died.</summary>
+        public void TakeDamage(float amount)
+        {
+            if (amount <= 0f) return;
+            Health = Math.Max(0f, Health - amount);
+        }
+    }
+
+    /// <summary>A person in the game (classes.cpp: Player). Created by the engine at Play start.</summary>
+    public class Player : Instance
+    {
+        private static readonly PropRef DisplayNameP = new PropRef("Player", "DisplayName");
+        private static readonly PropRef CharacterP = new PropRef("Player", "Character");
+        private static readonly PropRef UserIdP = new PropRef("Player", "UserId");
+        private static readonly PropRef RespawnP = new PropRef("Player", "RespawnLocation");
+
+        internal Player(ulong id) : base(id) { }
+
+        public string DisplayName { get => GetString(DisplayNameP); set => SetString(DisplayNameP, value); }
+        /// <summary>The avatar Model; null while the character is dead.</summary>
+        public Model Character => GetRef(CharacterP) as Model;
+        /// <summary>Read-only: 1 for the local player.</summary>
+        public int UserId => GetInt(UserIdP);
+        /// <summary>Where the character appears after a respawn (set it at a checkpoint).</summary>
+        public SpawnLocation RespawnLocation
+        {
+            get => GetRef(RespawnP) as SpawnLocation;
+            set => SetRef(RespawnP, value);
+        }
+
+        /// <summary>Fires when the character is created (the argument is the Model).</summary>
+        public event Action<Instance> CharacterAdded
+        {
+            add => AddSignal("CharacterAdded", value);
+            remove => RemoveSignal("CharacterAdded", value);
+        }
+
+        /// <summary>Fires just before the character is destroyed (the argument is the Model).</summary>
+        public event Action<Instance> CharacterRemoving
+        {
+            add => AddSignal("CharacterRemoving", value);
+            remove => RemoveSignal("CharacterRemoving", value);
+        }
+    }
+
+    /// <summary>The Players service: the players of the running game (one, the local player, in Studio).</summary>
+    public class PlayersService : Instance
+    {
+        private static readonly PropRef RespawnTimeP = new PropRef("Players", "RespawnTime");
+
+        internal PlayersService(ulong id) : base(id) { }
+
+        /// <summary>Seconds before a dead character respawns.</summary>
+        public float RespawnTime { get => GetFloat(RespawnTimeP); set => SetFloat(RespawnTimeP, value); }
+
+        /// <summary>The local player (the first Player). Null outside Play mode.</summary>
+        public Player LocalPlayer
+        {
+            get
+            {
+                foreach (Instance child in GetChildren())
+                {
+                    Player p = child as Player;
+                    if (p != null) return p;
+                }
+                return null;
+            }
+        }
+
+        public Player[] GetPlayers()
+        {
+            var list = new List<Player>();
+            foreach (Instance child in GetChildren())
+            {
+                Player p = child as Player;
+                if (p != null) list.Add(p);
+            }
+            return list.ToArray();
+        }
+
+        /// <summary>The player whose Character is the given model, or null (characters of NPCs have no player).</summary>
+        public Player GetPlayerFromCharacter(Instance character)
+        {
+            if (character == null) return null;
+            foreach (Player p in GetPlayers())
+            {
+                Model c = p.Character;
+                if (c != null && c.Id == character.Id) return p;
+            }
+            return null;
+        }
+    }
+
+    public class PlayerGui : Instance
+    {
+        internal PlayerGui(ulong id) : base(id) { }
+    }
+
+    public class PlayerScripts : Instance
+    {
+        internal PlayerScripts(ulong id) : base(id) { }
+    }
+
+    public class StarterPlayerScripts : Instance
+    {
+        internal StarterPlayerScripts(ulong id) : base(id) { }
+    }
+
+    public class StarterCharacterScripts : Instance
+    {
+        internal StarterCharacterScripts(ulong id) : base(id) { }
+    }
+
+    /// <summary>An object from another tool that Tefra does not support yet (read-only).</summary>
+    public class ImportedInstance : Instance
+    {
+        private static readonly PropRef OriginalClassP = new PropRef("ImportedInstance", "OriginalClass");
+        private static readonly PropRef OriginalPropertiesP = new PropRef("ImportedInstance", "OriginalProperties");
+
+        internal ImportedInstance(ulong id) : base(id) { }
+
+        public string OriginalClass => GetString(OriginalClassP);
+        public string OriginalProperties => GetString(OriginalPropertiesP);
+    }
+
+    // ---- In-game UI (positions: fraction of the parent (X, Y) plus pixel offsets) ----------------------------
+
+    public class GuiBase : Instance
+    {
+        private static readonly PropRef VisibleP = new PropRef("GuiBase", "Visible");
+        private static readonly PropRef ZIndexP = new PropRef("GuiBase", "ZIndex");
+
+        internal GuiBase(ulong id) : base(id) { }
+
+        public bool Visible { get => GetBool(VisibleP); set => SetBool(VisibleP, value); }
+        /// <summary>Higher draws on top of its siblings.</summary>
+        public int ZIndex { get => GetInt(ZIndexP); set => SetInt(ZIndexP, value); }
+    }
+
+    /// <summary>A layer of UI drawn over the 3D view. StarterGui holds the templates; each player gets copies.</summary>
+    public class ScreenGui : GuiBase
+    {
+        private static readonly PropRef EnabledP = new PropRef("ScreenGui", "Enabled");
+        private static readonly PropRef DisplayOrderP = new PropRef("ScreenGui", "DisplayOrder");
+        private static readonly PropRef ResetOnSpawnP = new PropRef("ScreenGui", "ResetOnSpawn");
+
+        internal ScreenGui(ulong id) : base(id) { }
+
+        public bool Enabled { get => GetBool(EnabledP); set => SetBool(EnabledP, value); }
+        public int DisplayOrder { get => GetInt(DisplayOrderP); set => SetInt(DisplayOrderP, value); }
+        public bool ResetOnSpawn { get => GetBool(ResetOnSpawnP); set => SetBool(ResetOnSpawnP, value); }
+    }
+
+    /// <summary>A rectangle of UI (base class of the visible elements).</summary>
+    public class GuiObject : GuiBase
+    {
+        private static readonly PropRef PositionP = new PropRef("GuiObject", "Position");
+        private static readonly PropRef PositionOffsetP = new PropRef("GuiObject", "PositionOffset");
+        private static readonly PropRef SizeP = new PropRef("GuiObject", "Size");
+        private static readonly PropRef SizeOffsetP = new PropRef("GuiObject", "SizeOffset");
+        private static readonly PropRef AnchorPointP = new PropRef("GuiObject", "AnchorPoint");
+        private static readonly PropRef RotationP = new PropRef("GuiObject", "Rotation");
+        private static readonly PropRef BackgroundColorP = new PropRef("GuiObject", "BackgroundColor");
+        private static readonly PropRef BackgroundTransparencyP = new PropRef("GuiObject", "BackgroundTransparency");
+        private static readonly PropRef CornerRadiusP = new PropRef("GuiObject", "CornerRadius");
+        private static readonly PropRef BorderColorP = new PropRef("GuiObject", "BorderColor");
+        private static readonly PropRef BorderSizeP = new PropRef("GuiObject", "BorderSize");
+
+        internal GuiObject(ulong id) : base(id) { }
+
+        /// <summary>Fraction of the parent's size (X, Y, 0 to 1).</summary>
+        public Vector2 Position { get => ToV2(GetVector3(PositionP)); set => SetVector3(PositionP, FromV2(value)); }
+        /// <summary>Pixel offset added to Position.</summary>
+        public Vector2 PositionOffset { get => ToV2(GetVector3(PositionOffsetP)); set => SetVector3(PositionOffsetP, FromV2(value)); }
+        /// <summary>Fraction of the parent's size (X, Y).</summary>
+        public Vector2 Size { get => ToV2(GetVector3(SizeP)); set => SetVector3(SizeP, FromV2(value)); }
+        /// <summary>Pixel size added to Size.</summary>
+        public Vector2 SizeOffset { get => ToV2(GetVector3(SizeOffsetP)); set => SetVector3(SizeOffsetP, FromV2(value)); }
+        /// <summary>Pivot inside the object (0 to 1 on each axis).</summary>
+        public Vector2 AnchorPoint { get => ToV2(GetVector3(AnchorPointP)); set => SetVector3(AnchorPointP, FromV2(value)); }
+        /// <summary>Rotation (degrees).</summary>
+        public float Rotation { get => GetFloat(RotationP); set => SetFloat(RotationP, value); }
+        public Color3 BackgroundColor { get => GetColor3(BackgroundColorP); set => SetColor3(BackgroundColorP, value); }
+        /// <summary>0 = opaque, 1 = invisible.</summary>
+        public float BackgroundTransparency { get => GetFloat(BackgroundTransparencyP); set => SetFloat(BackgroundTransparencyP, value); }
+        /// <summary>Rounded corners (pixels).</summary>
+        public float CornerRadius { get => GetFloat(CornerRadiusP); set => SetFloat(CornerRadiusP, value); }
+        public Color3 BorderColor { get => GetColor3(BorderColorP); set => SetColor3(BorderColorP, value); }
+        /// <summary>Outline thickness (pixels).</summary>
+        public float BorderSize { get => GetFloat(BorderSizeP); set => SetFloat(BorderSizeP, value); }
+
+        internal static Vector2 ToV2(Vector3 v) => new Vector2(v.X, v.Y);
+        internal static Vector3 FromV2(Vector2 v) => new Vector3(v.X, v.Y, 0f);
+    }
+
+    public class Frame : GuiObject
+    {
+        internal Frame(ulong id) : base(id) { }
+    }
+
+    public class TextLabel : GuiObject
+    {
+        private static readonly PropRef TextP = new PropRef("TextLabel", "Text");
+        private static readonly PropRef TextColorP = new PropRef("TextLabel", "TextColor");
+        private static readonly PropRef TextSizeP = new PropRef("TextLabel", "TextSize");
+        private static readonly PropRef TextScaledP = new PropRef("TextLabel", "TextScaled");
+        private static readonly PropRef TextTransparencyP = new PropRef("TextLabel", "TextTransparency");
+        private static readonly PropRef TextStrokeTransparencyP = new PropRef("TextLabel", "TextStrokeTransparency");
+        private static readonly PropRef TextXAlignmentP = new PropRef("TextLabel", "TextXAlignment");
+        private static readonly PropRef TextYAlignmentP = new PropRef("TextLabel", "TextYAlignment");
+        private static readonly PropRef FontP = new PropRef("TextLabel", "Font");
+
+        internal TextLabel(ulong id) : base(id) { }
+
+        public string Text { get => GetString(TextP); set => SetString(TextP, value); }
+        public Color3 TextColor { get => GetColor3(TextColorP); set => SetColor3(TextColorP, value); }
+        /// <summary>Font size (pixels).</summary>
+        public float TextSize { get => GetFloat(TextSizeP); set => SetFloat(TextSizeP, value); }
+        /// <summary>Grows the text to fill the box.</summary>
+        public bool TextScaled { get => GetBool(TextScaledP); set => SetBool(TextScaledP, value); }
+        public float TextTransparency { get => GetFloat(TextTransparencyP); set => SetFloat(TextTransparencyP, value); }
+        /// <summary>Outline around the letters (1 = none).</summary>
+        public float TextStrokeTransparency { get => GetFloat(TextStrokeTransparencyP); set => SetFloat(TextStrokeTransparencyP, value); }
+        public TextXAlignment TextXAlignment { get => (TextXAlignment)GetInt(TextXAlignmentP); set => SetEnum(TextXAlignmentP, (int)value); }
+        public TextYAlignment TextYAlignment { get => (TextYAlignment)GetInt(TextYAlignmentP); set => SetEnum(TextYAlignmentP, (int)value); }
+        public Font Font { get => (Font)GetInt(FontP); set => SetEnum(FontP, (int)value); }
+    }
+
+    public class TextButton : TextLabel
+    {
+        private static readonly PropRef AutoButtonColorP = new PropRef("TextButton", "AutoButtonColor");
+
+        internal TextButton(ulong id) : base(id) { }
+
+        /// <summary>Darkens when hovered or pressed.</summary>
+        public bool AutoButtonColor { get => GetBool(AutoButtonColorP); set => SetBool(AutoButtonColorP, value); }
+
+        /// <summary>Fires when the button is clicked (after MouseButton1Click).</summary>
+        public event Action Activated
+        {
+            add => AddSignal("Activated", value);
+            remove => RemoveSignal("Activated", value);
+        }
+
+        public event Action MouseButton1Click
+        {
+            add => AddSignal("MouseButton1Click", value);
+            remove => RemoveSignal("MouseButton1Click", value);
+        }
+
+        public event Action MouseEnter
+        {
+            add => AddSignal("MouseEnter", value);
+            remove => RemoveSignal("MouseEnter", value);
+        }
+
+        public event Action MouseLeave
+        {
+            add => AddSignal("MouseLeave", value);
+            remove => RemoveSignal("MouseLeave", value);
+        }
+    }
+
+    public class ImageLabel : GuiObject
+    {
+        private static readonly PropRef ImageP = new PropRef("ImageLabel", "Image");
+        private static readonly PropRef ImageColorP = new PropRef("ImageLabel", "ImageColor");
+        private static readonly PropRef ImageTransparencyP = new PropRef("ImageLabel", "ImageTransparency");
+        private static readonly PropRef ScaleTypeP = new PropRef("ImageLabel", "ScaleType");
+
+        internal ImageLabel(ulong id) : base(id) { }
+
+        /// <summary>Image file path (.png or .jpg), relative to the project.</summary>
+        public string Image { get => GetString(ImageP); set => SetString(ImageP, value); }
+        public Color3 ImageColor { get => GetColor3(ImageColorP); set => SetColor3(ImageColorP, value); }
+        public float ImageTransparency { get => GetFloat(ImageTransparencyP); set => SetFloat(ImageTransparencyP, value); }
+        public ScaleType ScaleType { get => (ScaleType)GetInt(ScaleTypeP); set => SetEnum(ScaleTypeP, (int)value); }
+    }
+
+    public class ImageButton : ImageLabel
+    {
+        private static readonly PropRef AutoButtonColorP = new PropRef("ImageButton", "AutoButtonColor");
+
+        internal ImageButton(ulong id) : base(id) { }
+
+        public bool AutoButtonColor { get => GetBool(AutoButtonColorP); set => SetBool(AutoButtonColorP, value); }
+
+        public event Action Activated
+        {
+            add => AddSignal("Activated", value);
+            remove => RemoveSignal("Activated", value);
+        }
+
+        public event Action MouseButton1Click
+        {
+            add => AddSignal("MouseButton1Click", value);
+            remove => RemoveSignal("MouseButton1Click", value);
+        }
+
+        public event Action MouseEnter
+        {
+            add => AddSignal("MouseEnter", value);
+            remove => RemoveSignal("MouseEnter", value);
+        }
+
+        public event Action MouseLeave
+        {
+            add => AddSignal("MouseLeave", value);
+            remove => RemoveSignal("MouseLeave", value);
+        }
+    }
+
+    // ---- Audio -------------------------------------------------------------------------------------------------
+
+    /// <summary>Global sound settings.</summary>
+    public class SoundService : Instance
+    {
+        private static readonly PropRef VolumeP = new PropRef("SoundService", "Volume");
+        private static readonly PropRef RolloffP = new PropRef("SoundService", "RolloffScale");
+
+        internal SoundService(ulong id) : base(id) { }
+
+        /// <summary>Master volume (0 to 1).</summary>
+        public float Volume { get => GetFloat(VolumeP); set => SetFloat(VolumeP, value); }
+        /// <summary>Scales the distance attenuation of every 3D sound.</summary>
+        public float RolloffScale { get => GetFloat(RolloffP); set => SetFloat(RolloffP, value); }
+    }
+
+    /// <summary>Plays an audio file; 3D when parented to a part. Play and Stop set Playing.</summary>
+    public class Sound : Instance
+    {
+        private static readonly PropRef SoundIdP = new PropRef("Sound", "SoundId");
+        private static readonly PropRef VolumeP = new PropRef("Sound", "Volume");
+        private static readonly PropRef PlaybackSpeedP = new PropRef("Sound", "PlaybackSpeed");
+        private static readonly PropRef LoopedP = new PropRef("Sound", "Looped");
+        private static readonly PropRef PlayingP = new PropRef("Sound", "Playing");
+        private static readonly PropRef PlayOnRemoveP = new PropRef("Sound", "PlayOnRemove");
+        private static readonly PropRef RollOffMinP = new PropRef("Sound", "RollOffMinDistance");
+        private static readonly PropRef RollOffMaxP = new PropRef("Sound", "RollOffMaxDistance");
+        private static readonly PropRef TimePositionP = new PropRef("Sound", "TimePosition");
+        private static readonly PropRef TimeLengthP = new PropRef("Sound", "TimeLength");
+
+        internal Sound(ulong id) : base(id) { }
+
+        /// <summary>Audio file path (.wav, .ogg, .mp3, .flac), relative to the project.</summary>
+        public string SoundId { get => GetString(SoundIdP); set => SetString(SoundIdP, value); }
+        /// <summary>Loudness (0 to 10).</summary>
+        public float Volume { get => GetFloat(VolumeP); set => SetFloat(VolumeP, value); }
+        public float PlaybackSpeed { get => GetFloat(PlaybackSpeedP); set => SetFloat(PlaybackSpeedP, value); }
+        public bool Looped { get => GetBool(LoopedP); set => SetBool(LoopedP, value); }
+        /// <summary>True while playing. Setting it starts or stops the sound.</summary>
+        public bool Playing { get => GetBool(PlayingP); set => SetBool(PlayingP, value); }
+        public bool PlayOnRemove { get => GetBool(PlayOnRemoveP); set => SetBool(PlayOnRemoveP, value); }
+        public float RollOffMinDistance { get => GetFloat(RollOffMinP); set => SetFloat(RollOffMinP, value); }
+        public float RollOffMaxDistance { get => GetFloat(RollOffMaxP); set => SetFloat(RollOffMaxP, value); }
+        /// <summary>Current position (s).</summary>
+        public float TimePosition { get => GetFloat(TimePositionP); set => SetFloat(TimePositionP, value); }
+        /// <summary>Length of the file (s). Read-only.</summary>
+        public float TimeLength => GetFloat(TimeLengthP);
+
+        public void Play() => Playing = true;
+
+        public void Stop() => Playing = false;
+
+        public bool IsPlaying => Playing;
+
+        /// <summary>Fires when a non-looped sound reaches its end.</summary>
+        public event Action Ended
+        {
+            add => AddSignal("Ended", value);
+            remove => RemoveSignal("Ended", value);
+        }
+    }
+
     // Factory table: the most derived wrapper for each class name. Classes without a wrapper use Instance.
     internal static class ClassMap
     {
@@ -196,6 +700,24 @@ namespace Tefra
                 ["Script"] = id => new Script(id),
                 ["LocalScript"] = id => new LocalScript(id),
                 ["ModuleScript"] = id => new ModuleScript(id),
+                ["Humanoid"] = id => new Humanoid(id),
+                ["Player"] = id => new Player(id),
+                ["Players"] = id => new PlayersService(id),
+                ["PlayerGui"] = id => new PlayerGui(id),
+                ["PlayerScripts"] = id => new PlayerScripts(id),
+                ["StarterPlayerScripts"] = id => new StarterPlayerScripts(id),
+                ["StarterCharacterScripts"] = id => new StarterCharacterScripts(id),
+                ["ImportedInstance"] = id => new ImportedInstance(id),
+                ["GuiBase"] = id => new GuiBase(id),
+                ["ScreenGui"] = id => new ScreenGui(id),
+                ["GuiObject"] = id => new GuiObject(id),
+                ["Frame"] = id => new Frame(id),
+                ["TextLabel"] = id => new TextLabel(id),
+                ["TextButton"] = id => new TextButton(id),
+                ["ImageLabel"] = id => new ImageLabel(id),
+                ["ImageButton"] = id => new ImageButton(id),
+                ["SoundService"] = id => new SoundService(id),
+                ["Sound"] = id => new Sound(id),
             };
     }
 }
