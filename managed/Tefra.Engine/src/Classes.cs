@@ -843,6 +843,122 @@ namespace Tefra
         }
     }
 
+    // ---- Messaging (Events category). The handlers are in EventTables (Events.cs), keyed by the instance id. ----
+
+    /// <summary>Fires an event to the scripts connected to it. Handlers run inside Fire, with its arguments.</summary>
+    public class BindableEvent : Instance
+    {
+        internal BindableEvent(ulong id) : base(id) { }
+
+        /// <summary>Called by Fire with its arguments, in the order the handlers were added.</summary>
+        public event Action<object[]> Event
+        {
+            add => EventTables.BindableEvents.Add(Id, value);
+            remove => EventTables.BindableEvents.Remove(Id, value);
+        }
+
+        /// <summary>Same as adding a handler to Event.</summary>
+        public void Connect(Action<object[]> handler) => EventTables.BindableEvents.Add(Id, handler);
+
+        /// <summary>Runs every handler now. A destroyed BindableEvent fires nothing.</summary>
+        public void Fire(params object[] args)
+        {
+            if (!Native.Exists(Id)) return;
+            EventTables.BindableEvents.Each(Id, "BindableEvent.Event", fn => ((Action<object[]>)fn)(args));
+        }
+    }
+
+    /// <summary>A function other scripts call with Invoke. Set OnInvoke to answer.</summary>
+    public class BindableFunction : Instance
+    {
+        internal BindableFunction(ulong id) : base(id) { }
+
+        /// <summary>Receives the arguments of Invoke and returns the result.</summary>
+        public Func<object[], object> OnInvoke
+        {
+            get => EventTables.BindableFunctions.Get(Id).Fn as Func<object[], object>;
+            set => EventTables.BindableFunctions.Set(Id, value);
+        }
+
+        /// <summary>Calls OnInvoke now and returns its result (null when OnInvoke is not set).</summary>
+        public object Invoke(params object[] args) =>
+            EventTables.BindableFunctions.Call(Id, fn => ((Func<object[], object>)fn)(args));
+    }
+
+    /// <summary>Events between the server and the client. Both run in this process: the message is queued and
+    /// delivered at the next script step, as it would be over a network.</summary>
+    public class RemoteEvent : Instance
+    {
+        internal RemoteEvent(ulong id) : base(id) { }
+
+        /// <summary>Server side. Gets the sending player (the local player) and the arguments of FireServer.</summary>
+        public event Action<Player, object[]> OnServerEvent
+        {
+            add => EventTables.ServerRemotes.Add(Id, value);
+            remove => EventTables.ServerRemotes.Remove(Id, value);
+        }
+
+        /// <summary>Client side. Gets the arguments of FireClient or FireAllClients.</summary>
+        public event Action<object[]> OnClientEvent
+        {
+            add => EventTables.ClientRemotes.Add(Id, value);
+            remove => EventTables.ClientRemotes.Remove(Id, value);
+        }
+
+        /// <summary>Queues the arguments for OnServerEvent, with the local player as the sender.</summary>
+        public void FireServer(params object[] args) => Remoting.Enqueue(Id, true, Players.LocalPlayer, args);
+
+        /// <summary>Queues the arguments for OnClientEvent. A single process has one client, so every player
+        /// receives it.</summary>
+        public void FireClient(Player player, params object[] args)
+        {
+            if (player == null)
+            {
+                Native.Log(Native.LogWarn, "RemoteEvent.FireClient: no player given, the event was dropped");
+                return;
+            }
+            Remoting.Enqueue(Id, false, null, args);
+        }
+
+        /// <summary>Queues the arguments for OnClientEvent of the client.</summary>
+        public void FireAllClients(params object[] args) => Remoting.Enqueue(Id, false, null, args);
+    }
+
+    /// <summary>A call with an answer. Set OnServerInvoke / OnClientInvoke to answer the other side.</summary>
+    public class RemoteFunction : Instance
+    {
+        internal RemoteFunction(ulong id) : base(id) { }
+
+        /// <summary>Answers InvokeServer. Gets the calling player (the local player) and the arguments.</summary>
+        public Func<Player, object[], object> OnServerInvoke
+        {
+            get => EventTables.ServerInvokers.Get(Id).Fn as Func<Player, object[], object>;
+            set => EventTables.ServerInvokers.Set(Id, value);
+        }
+
+        /// <summary>Answers InvokeClient. Gets the arguments.</summary>
+        public Func<object[], object> OnClientInvoke
+        {
+            get => EventTables.ClientInvokers.Get(Id).Fn as Func<object[], object>;
+            set => EventTables.ClientInvokers.Set(Id, value);
+        }
+
+        /// <summary>Calls OnServerInvoke now, as the local player, and returns its result (null when unset).</summary>
+        public object InvokeServer(params object[] args) =>
+            EventTables.ServerInvokers.Call(Id, fn => ((Func<Player, object[], object>)fn)(Players.LocalPlayer, args));
+
+        /// <summary>Calls OnClientInvoke now and returns its result (null when unset or when no player is given).</summary>
+        public object InvokeClient(Player player, params object[] args)
+        {
+            if (player == null)
+            {
+                Native.Log(Native.LogWarn, "RemoteFunction.InvokeClient: no player given");
+                return null;
+            }
+            return EventTables.ClientInvokers.Call(Id, fn => ((Func<object[], object>)fn)(args));
+        }
+    }
+
     // Factory table: the most derived wrapper for each class name. Classes without a wrapper use Instance.
 
     public enum HorizontalAlignment { Left, Center, Right }
@@ -1038,6 +1154,10 @@ namespace Tefra
                 ["SoundService"] = id => new SoundService(id),
                 ["Sound"] = id => new Sound(id),
                 ["ParticleEmitter"] = id => new ParticleEmitter(id),
+                ["BindableEvent"] = id => new BindableEvent(id),
+                ["BindableFunction"] = id => new BindableFunction(id),
+                ["RemoteEvent"] = id => new RemoteEvent(id),
+                ["RemoteFunction"] = id => new RemoteFunction(id),
             };
     }
 }
