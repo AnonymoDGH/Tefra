@@ -152,7 +152,10 @@ void SceneSync::rebuild() {
     for (Instance* i : ws->descendants()) {
         if (!is_visible_part(*i, ws)) continue;
         if (i->is_a("MeshPart")) {
-            const std::string& path = i->get_string("MeshId");
+            std::string path = i->get_string("MeshId");
+            if (!asset_root_.empty() && !path.empty() && path[0] != '/' && path[0] != '\\' &&
+                !(path.size() > 1 && path[1] == ':'))
+                path = path_join(asset_root_, path);
             if (path.empty() || !file_exists(path.c_str())) continue;
             std::vector<GltfPrim> prims;
             if (auto sk = skinned_parts_.find(i->id()); sk != skinned_parts_.end() && sk->second.path == path) {

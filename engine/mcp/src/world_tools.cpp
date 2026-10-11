@@ -397,6 +397,75 @@ ToolResult tool_create_instance(DataModel& dm, const JsonValue& args) {
     return ToolResult::json(describe(dm, *inst, false));
 }
 
+// Many instances in one call (the same rules as create_instance, applied to each item; items may also omit the
+// parent and inherit the call's parent_path).
+ToolResult tool_create_instances(DataModel& dm, const JsonValue& args) {
+    const JsonValue& items = args["instances"];
+    if (!items.is_array() || items.items().empty()) return ToolResult::error("'instances' must be a non-empty array");
+    if (items.items().size() > 5000) return ToolResult::error("at most 5000 instances per call");
+    u32 created = 0;
+    JsonValue failures = JsonValue::array();
+    JsonValue ids = JsonValue::array();
+    for (usize i = 0; i < items.items().size(); ++i) {
+        JsonValue item = items.items()[i];
+        if (!item.is_object()) {
+            JsonValue f = JsonValue::object();
+            f.set("index", JsonValue(static_cast<f64>(i)));
+            f.set("error", JsonValue(std::string("not an object")));
+            failures.push(std::move(f));
+            continue;
+        }
+        if (!has_arg(item, "parent_path") && !has_arg(item, "parent_id"))
+            item.set("parent_path",
+                     JsonValue(has_arg(args, "parent_path") ? str_arg(args, "parent_path") : std::string("Workspace")));
+        const ToolResult r = tool_create_instance(dm, item);
+        if (r.is_error) {
+            JsonValue f = JsonValue::object();
+            f.set("index", JsonValue(static_cast<f64>(i)));
+            f.set("error", JsonValue(r.content.empty() ? std::string("?") : r.content[0].text));
+            failures.push(std::move(f));
+            if (failures.items().size() >= 20) break;
+            continue;
+        }
+        ++created;
+        JsonValue d;
+        if (!r.content.empty() && JsonValue::parse(r.content[0].text, d)) ids.push(d["id"]);
+    }
+    JsonValue out = JsonValue::object();
+    out.set("created", JsonValue(static_cast<f64>(created)));
+    out.set("ids", std::move(ids));
+    out.set("failures", std::move(failures));
+    return ToolResult::json(out);
+}
+
+// What the engine can do, for an AI that has never seen Tefra.
+ToolResult tool_engine_guide(DataModel&, const JsonValue&) {
+    return ToolResult::text(R"(Tefra engine guide (units: metres, +Y up; Orientation in degrees Y-X-Z; Color3 0..1)
+
+LANDSCAPES - do not build terrain or grass from parts. Create ONE Terrain under Workspace and set Kind:
+  Kind = "Plains": rolling meadow covered in tall, wind-animated grass and wildflowers, lone trees.
+  Kind = "Valley": misty forest valley (conifers, river, lake, undergrowth, grass).
+  Kind = "Coast":  tropical beach with palms and rocks; add an Ocean instance under Workspace for animated sea.
+  Seed changes the shape; Vegetation=false removes trees. Use terrain_height(x, z) / raycast to place things on it.
+  The templates tool (new_place_from_template) builds these with a spawn: meadow, beach, valley, obby, baseplate...
+
+PARTS: Part (Shape Block/Ball/Cylinder/Wedge), MeshPart (MeshId = path of a .glb/.gltf; see import_model),
+  SpawnLocation (where players appear), Model / Folder to group. Material: Plastic, SmoothPlastic, Wood,
+  WoodPlanks, Metal, Concrete, Brick, Cobblestone, Granite, Marble, Slate, Sand, Grass, Ground, Rock, Ice, Glass,
+  Neon (emissive), Fabric, Foil. Anchored=true for static scenery. Lights: PointLight / SpotLight under a part.
+
+MANY OBJECTS: use create_instances with an array (up to 5000 per call) instead of create_instance in a loop.
+
+SCRIPTS: Script / LocalScript / ModuleScript hold C# (.NET 8) compiled when Play starts. A script is a class
+  deriving from TefraScript with Start() / Update(float dt). API: Instance.New, FindFirstChild, Game.Workspace,
+  Players.LocalPlayer, BasePart.Touched, Humanoid.Health/Died, UserInputService, Sound.Play, RunService.Heartbeat,
+  Task.Wait, TextLabel.Text... Scripts do not run in edit mode: generate edit-time content with create_instances.
+
+UI: ScreenGui under StarterGui with Frame / TextLabel / TextButton / ImageLabel (Position/Size = scale + offset).
+AUDIO: Sound (SoundId = file path or builtin:click/jump/checkpoint/win/coin/wind_loop...).
+PLAY: play / stop / get_output (script errors) / capture_viewport (see the result) / set_camera.)");
+}
+
 ToolResult tool_set_properties(DataModel& dm, const JsonValue& args) {
     std::string err;
     Instance* inst = find_arg(dm, args, "path", "id", err);
@@ -663,6 +732,20 @@ int register_world_tools(Server& server, std::function<DataModel&()> model) {
                 prop("properties", "object", "Property values by name, for example {\"Size\": [4, 1, 4]}.")},
                {"class"}),
         tool_create_instance);
+
+    add("create_instances",
+        "Creates many instances in one call (up to 5000): an array of {class, name, properties, parent_path} with the "
+        "same rules as create_instance. Items without a parent go under the call's parent_path (default Workspace). "
+        "Returns the ids created and the first failures. Use it for scattering scenery instead of one call per part.",
+        schema({prop("instances", "array", "Array of {class, name, properties, parent_path | parent_id}."),
+                prop("parent_path", "string", "Default parent for items that do not give one (default Workspace).")},
+               {"instances"}),
+        tool_create_instances);
+
+    add("engine_guide",
+        "Read this first: what Tefra can do (landscapes with real animated grass via Terrain.Kind, parts, materials, "
+        "batch creation, C# scripts, UI, audio) and which tools to use for common requests.",
+        schema({}), tool_engine_guide);
 
     add("set_properties",
         "Sets several properties of one instance at once. All values are checked first; if any is invalid nothing "

@@ -132,10 +132,14 @@ Studio sirve MCP en `http://127.0.0.1:44755/mcp`. Con Claude Code:
 claude mcp add --transport http tefra http://127.0.0.1:44755/mcp
 ```
 Herramientas disponibles:
+- engine_guide (léela primero: qué sabe hacer el motor);
 - get_tree, get_instance, list_classes;
-- create_instance, set_properties, delete_instance, reparent, clone, find;
+- create_instance, create_instances (lote de hasta 5000), set_properties, delete_instance, reparent, clone, find;
 - get_script, set_script;
 - save_place, load_place;
-- play, stop, get_output, capture_viewport, set_camera.
+- play, stop, get_output, capture_viewport, set_camera;
+- terrain_height, raycast (medir el terreno y apoyar objetos en el suelo);
+- new_place_from_template (meadow, beach, valley, obby...), save_project;
+- import_model (glTF/GLB → MeshPart, copiado a `assets/` del proyecto), import_roblox.
 
 Para clientes que solo hablan stdio (Claude Desktop) hay un puente, `tefra_mcp`; ver `docs/research/m3-mcp/REPORT.md`.

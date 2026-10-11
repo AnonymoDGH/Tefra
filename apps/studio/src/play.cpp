@@ -8,14 +8,17 @@
 #include "tefra/core/log.h"
 #include "tefra/mcp/server.h"
 #include "tefra/mcp/world_tools.h"
+#include "tefra/rbx/importer.h"
 #include "tefra/rhi/commands.h"
 #include "tefra/rhi/device.h"
 #include "tefra/rhi/frame.h"
 #include "tefra/rhi/readback.h"
 #include "tefra/runtime/game_runtime.h"
 #include "tefra/scripting/script_host.h"
+#include "tefra/studio/templates.h"
 #include "tefra/ui/game_gui.h"
 #include "tefra/ui/imgui_input.h"
+#include "tefra/world/environment_sync.h"
 #include "tefra/world/scene_sync.h"
 
 #include <imgui.h>
@@ -213,6 +216,231 @@ void App::setup_mcp() {
                        camera_.pitch = std::asin(clamp(d.y, -1.0f, 1.0f));
                        return mcp::ToolResult::text("ok");
                    });
+
+    // ---- Landscape measurement, places from templates and asset import (for agents that build places) ----
+    mcp_->add_tool("terrain_height",
+                   "Height (metres) of the procedural Terrain at points [[x,z],...] (up to 10000). Use it to put "
+                   "parts on the ground: Position.y = height + Size.y/2.",
+                   R"({"type":"object","properties":{"points":{"type":"array","description":"[[x,z],...]"}},)"
+                   R"("required":["points"]})",
+                   [this](const JsonValue& a) {
+                       const Instance* terrain = world::find_terrain(session_.model());
+                       if (!terrain)
+                           return mcp::ToolResult::error("the place has no Terrain with a Kind other than None");
+                       const JsonValue& pts = a["points"];
+                       if (!pts.is_array() || pts.size() == 0 || pts.size() > 10000)
+                           return mcp::ToolResult::error("points: 1..10000 pairs [x,z]");
+                       JsonValue out = JsonValue::array();
+                       for (usize i = 0; i < pts.size(); ++i) {
+                           const JsonValue& q = pts.at(i);
+                           const f32 x = f32(q.at(0).as_number()), z = f32(q.at(1).as_number());
+                           out.push(JsonValue(f64(world::terrain_height(*terrain, x, z))));
+                       }
+                       JsonValue r = JsonValue::object();
+                       r.set("heights", std::move(out));
+                       return mcp::ToolResult::json(r);
+                   });
+    mcp_->add_tool("raycast",
+                   "Casts a ray against parts and the Terrain. Returns the first hit: position, normal, distance and "
+                   "the part (path) or \"Terrain\".",
+                   R"({"type":"object","properties":{"origin":{"type":"array"},"direction":{"type":"array"},)"
+                   R"("max_distance":{"type":"number"}},"required":["origin","direction"]})",
+                   [this](const JsonValue& a) {
+                       const JsonValue &o = a["origin"], &d = a["direction"];
+                       if (o.size() != 3 || d.size() != 3)
+                           return mcp::ToolResult::error("origin and direction: [x,y,z]");
+                       const vec3 org{f32(o.at(0).as_number()), f32(o.at(1).as_number()), f32(o.at(2).as_number())};
+                       vec3 dir{f32(d.at(0).as_number()), f32(d.at(1).as_number()), f32(d.at(2).as_number())};
+                       if (length(dir) < 1e-6f) return mcp::ToolResult::error("direction is zero");
+                       dir = normalize(dir);
+                       const f32 maxd = clamp(f32(a["max_distance"].as_number(5000.0)), 0.1f, 20000.0f);
+                       world::RayHit hit;
+                       if (sync_) hit = sync_->raycast(org, dir, maxd);
+                       f32 best = hit.instance ? hit.distance : maxd;
+                       JsonValue r = JsonValue::object();
+                       bool any = hit.instance != nullptr;
+                       vec3 pos = hit.position, nrm = hit.normal;
+                       std::string what = hit.instance ? hit.instance->full_name() : std::string();
+                       // Terrain: march in 0.5 m steps, then bisect the crossing.
+                       if (const Instance* terrain = world::find_terrain(session_.model())) {
+                           auto above = [&](f32 t) {
+                               const vec3 p = org + dir * t;
+                               return p.y - world::terrain_height(*terrain, p.x, p.z);
+                           };
+                           f32 prev = 0.0f, prev_h = above(0.0f);
+                           const f32 step = 0.5f;
+                           for (f32 t = step; t <= best && prev_h > 0.0f; t += step) {
+                               const f32 h = above(t);
+                               if (h <= 0.0f) {
+                                   f32 lo = prev, hi = t;
+                                   for (int k = 0; k < 20; ++k) {
+                                       const f32 m = 0.5f * (lo + hi);
+                                       (above(m) > 0.0f ? lo : hi) = m;
+                                   }
+                                   best = hi;
+                                   pos = org + dir * hi;
+                                   const f32 e = 0.25f, hx = world::terrain_height(*terrain, pos.x + e, pos.z) -
+                                                             world::terrain_height(*terrain, pos.x - e, pos.z);
+                                   const f32 hz = world::terrain_height(*terrain, pos.x, pos.z + e) -
+                                                  world::terrain_height(*terrain, pos.x, pos.z - e);
+                                   nrm = normalize(vec3{-hx, 2.0f * e, -hz});
+                                   what = "Terrain";
+                                   any = true;
+                                   break;
+                               }
+                               prev = t;
+                               prev_h = h;
+                           }
+                       }
+                       r.set("hit", JsonValue(any));
+                       if (any) {
+                           auto v3 = [](vec3 v) {
+                               JsonValue j = JsonValue::array();
+                               j.push(JsonValue(f64(v.x)));
+                               j.push(JsonValue(f64(v.y)));
+                               j.push(JsonValue(f64(v.z)));
+                               return j;
+                           };
+                           r.set("position", v3(pos));
+                           r.set("normal", v3(nrm));
+                           r.set("distance", JsonValue(f64(what == "Terrain" ? best : hit.distance)));
+                           r.set("instance", JsonValue(what));
+                       }
+                       return mcp::ToolResult::json(r);
+                   });
+    {
+        std::string ids;
+        for (const TemplateInfo& t : templates()) ids += std::string(ids.empty() ? "" : ", ") + t.id;
+        const std::string desc = "Replaces the open place with a new one built from a template (" + ids +
+                                 "). meadow = grassy plain with wind-animated grass, beach = coast with ocean, "
+                                 "valley = forest valley, obby = complete obstacle game. project_name saves it as a "
+                                 "new project. Refused when the place has unsaved changes unless discard=true.";
+        mcp_->add_tool(
+            "new_place_from_template", desc,
+            R"({"type":"object","properties":{"template":{"type":"string"},"project_name":{"type":"string"},)"
+            R"("discard":{"type":"boolean"}},"required":["template"]})",
+            [this](const JsonValue& a) {
+                const TemplateInfo* t = find_template(a["template"].as_string());
+                if (!t) return mcp::ToolResult::error("unknown template");
+                if (session_.modified() && !a["discard"].as_bool(false))
+                    return mcp::ToolResult::error("the place has unsaved changes: save it or pass discard=true");
+                if (session_.play_state() != PlayState::Edit) session_.stop();
+                auto m = std::make_unique<world::DataModel>();
+                build_template(t->id, *m);
+                std::string path;
+                const std::string name = a["project_name"].as_string();
+                if (!name.empty()) path = projects_.create_project(name);
+                session_.adopt(std::move(m), path);
+                if (!path.empty() && session_.save()) projects_.touch_recent(path);
+                screen_ = Screen::Editor;
+                frame_camera_for_template(t->id);
+                projects_dirty_ = true;
+                return mcp::ToolResult::text(std::string("new place from ") + t->name +
+                                             (path.empty() ? " (untitled)" : ": " + path));
+            });
+    }
+    mcp_->add_tool(
+        "import_model",
+        "Inserts a glTF model (.glb/.gltf file path on this computer) as a MeshPart. In a saved project the file is "
+        "copied into its assets folder. scale multiplies the model's own size (glTF metres).",
+        R"({"type":"object","properties":{"path":{"type":"string"},"name":{"type":"string"},)"
+        R"("position":{"type":"array"},"scale":{"type":"number"},"orientation":{"type":"array"},)"
+        R"("parent_path":{"type":"string"}},"required":["path"]})",
+        [this](const JsonValue& a) {
+            const std::string src = a["path"].as_string();
+            const std::string ext = path_extension(src);
+            if (ext != ".glb" && ext != ".gltf") return mcp::ToolResult::error("path must be a .glb or .gltf file");
+            if (!file_exists(src.c_str())) return mcp::ToolResult::error("file not found: " + src);
+            std::string mesh_id = src;
+            if (!session_.path().empty()) {
+                const std::string project = path_parent(session_.path());
+                const std::string rel = "assets/" + path_stem(src) + "/" + path_filename(src);
+                const std::string dst = path_join(project, rel);
+                bool ok = make_dirs(path_parent(dst).c_str());
+                if (ext == ".gltf")
+                    ok = ok && copy_tree(path_parent(src), path_parent(dst)); // buffers and textures
+                else
+                    ok = ok && copy_file(src, dst);
+                if (!ok) return mcp::ToolResult::error("cannot copy the model into " + project);
+                mesh_id = rel;
+            }
+            world::DataModel& dm = session_.model();
+            Instance* parent = dm.workspace();
+            if (a["parent_path"].is_string()) {
+                parent = dm.find_path(a["parent_path"].as_string());
+                if (!parent) return mcp::ToolResult::error("parent not found");
+            }
+            const std::string name = a["name"].is_string() ? a["name"].as_string() : path_stem(src);
+            Instance* mp = dm.create("MeshPart", parent, name);
+            if (!mp) return mcp::ToolResult::error("cannot create the MeshPart");
+            const f32 s = clamp(f32(a["scale"].as_number(1.0)), 0.001f, 1000.0f);
+            mp->set("MeshId", Value::string(mesh_id));
+            mp->set("Size", Value::vector3({s, s, s}));
+            mp->set("Anchored", Value::boolean(true));
+            const JsonValue& p = a["position"];
+            if (p.size() == 3)
+                mp->set("Position",
+                        Value::vector3({f32(p.at(0).as_number()), f32(p.at(1).as_number()), f32(p.at(2).as_number())}));
+            const JsonValue& o = a["orientation"];
+            if (o.size() == 3)
+                mp->set("Orientation",
+                        Value::vector3({f32(o.at(0).as_number()), f32(o.at(1).as_number()), f32(o.at(2).as_number())}));
+            JsonValue r = JsonValue::object();
+            r.set("id", JsonValue(f64(mp->id())));
+            r.set("path", JsonValue(mp->full_name()));
+            r.set("MeshId", JsonValue(mesh_id));
+            return mcp::ToolResult::json(r);
+        });
+    mcp_->add_tool(
+        "import_roblox",
+        "Imports a Roblox file the user owns. .rbxm/.rbxmx models go into the open place (under parent_path or the "
+        "Workspace); .rbxl/.rbxlx places become a new project (discard=true needed when there are unsaved changes). "
+        "Luau scripts are kept disabled in LuauSource.",
+        R"({"type":"object","properties":{"path":{"type":"string"},"parent_path":{"type":"string"},)"
+        R"("discard":{"type":"boolean"}},"required":["path"]})",
+        [this](const JsonValue& a) {
+            const std::string path = a["path"].as_string();
+            const std::string ext = path_extension(path);
+            if (!file_exists(path.c_str())) return mcp::ToolResult::error("file not found: " + path);
+            rbx::ImportOptions opt;
+            rbx::ImportReport rep;
+            std::string err;
+            if (ext == ".rbxm" || ext == ".rbxmx") {
+                Instance* parent = session_.model().workspace();
+                if (a["parent_path"].is_string()) parent = session_.model().find_path(a["parent_path"].as_string());
+                if (!parent) return mcp::ToolResult::error("parent not found");
+                if (!rbx::import_model(path.c_str(), parent, opt, &rep, &err, nullptr))
+                    return mcp::ToolResult::error("cannot import: " + err);
+            } else if (ext == ".rbxl" || ext == ".rbxlx") {
+                if (session_.modified() && !a["discard"].as_bool(false))
+                    return mcp::ToolResult::error("the place has unsaved changes: save it or pass discard=true");
+                if (session_.play_state() != PlayState::Edit) session_.stop();
+                auto dm = std::make_unique<world::DataModel>();
+                if (!rbx::import_place(path.c_str(), *dm, opt, &rep, &err))
+                    return mcp::ToolResult::error("cannot import: " + err);
+                const std::string place = projects_.create_project(path_stem(path));
+                session_.adopt(std::move(dm), place);
+                if (session_.save()) projects_.touch_recent(place);
+                screen_ = Screen::Editor;
+                projects_dirty_ = true;
+            } else {
+                return mcp::ToolResult::error("expected .rbxl, .rbxlx, .rbxm or .rbxmx");
+            }
+            std::string text = rbx::report_summary(rep);
+            for (usize i = 0; i < rep.warnings.size() && i < 30; ++i) text += "\n- " + rep.warnings[i];
+            return mcp::ToolResult::text(text);
+        });
+    mcp_->add_tool(
+        "save_project",
+        "Saves the open place in Studio (to its project file, or to path when given) and clears the unsaved flag.",
+        R"({"type":"object","properties":{"path":{"type":"string"}}})", [this](const JsonValue& a) {
+            const std::string p = a["path"].as_string();
+            if (p.empty() && session_.path().empty())
+                return mcp::ToolResult::error("the place is untitled: pass a path ending in .tefra");
+            if (!session_.save(p)) return mcp::ToolResult::error("cannot save");
+            projects_.touch_recent(session_.path());
+            return mcp::ToolResult::text("saved " + session_.path());
+        });
     if (mcp_->start(cfg_.mcp_port))
         TEFRA_LOG_INFO("MCP server: http://127.0.0.1:%u/mcp  (claude mcp add --transport http tefra "
                        "http://127.0.0.1:%u/mcp)",

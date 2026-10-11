@@ -387,6 +387,7 @@ void App::sync_world() {
         open_scripts_.clear();
         update_lighting(true);
     }
+    sync_->set_asset_root(session_.path().empty() ? std::string() : path_parent(session_.path()));
     update_lighting(false);
     sync_environment();
     sync_->update();

@@ -38,6 +38,11 @@ class SceneSync {
     // Applies pending changes (call once per frame before rendering). Returns true if the render scene changed.
     bool update();
     void mark_all_dirty() { structure_dirty_ = true; }
+    // Base folder of relative MeshId paths (the project folder; empty = working directory).
+    void set_asset_root(const std::string& dir) {
+        if (dir != asset_root_) structure_dirty_ = true;
+        asset_root_ = dir;
+    }
 
     // Closest BasePart hit by the ray (world space). ignore: skipped (e.g. the dragged part).
     RayHit raycast(vec3 origin, vec3 dir, f32 max_distance = 1e4f, const Instance* ignore = nullptr) const;
@@ -59,6 +64,7 @@ class SceneSync {
     DataModel* model_;
     usize listener_ = 0;
     bool structure_dirty_ = true;
+    std::string asset_root_;
     bool materials_dirty_ = false;
     std::vector<u64> dirty_parts_;
     std::vector<PartEntry> parts_;
