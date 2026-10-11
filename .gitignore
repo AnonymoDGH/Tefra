@@ -7,3 +7,12 @@
 compile_commands.json
 /captures/
 /bench-*.json
+/assets/cache/
+/.claude/worktrees/
+__pycache__/
+/docs/research/calibration/refs/*.jpg
+/docs/research/calibration/views/
+/managed/**/bin/
+/managed/**/obj/
+tefra_studio.ini
+test_tmp/

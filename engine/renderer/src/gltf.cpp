@@ -1,4 +1,5 @@
 #include "tefra/renderer/gltf.h"
+#include "tefra/renderer/gltf_skeleton.h"
 #include "tefra/renderer/scene.h"
 
 #include "tefra/core/fs.h"
@@ -22,9 +23,12 @@ struct Loader {
     const rhi::Device& dev;
     std::string base_dir;
     cgltf_data* data = nullptr;
+    mat4
+        placement{}; // asset placement (GltfLoadOptions): where skinned meshes go, joints already carry their ancestors
     std::map<std::pair<const cgltf_image*, bool>, u32> texture_cache; // (image, srgb) -> bindless
     std::map<const cgltf_material*, u32> material_cache;
     std::map<const cgltf_primitive*, u32> mesh_cache;
+    std::map<const cgltf_skin*, u32> skin_cache; // scene skin index per glTF skin
     GltfLoadResult result;
 
     bool decode_image(const cgltf_image* img, ImageRGBA8& out) {
@@ -75,7 +79,8 @@ struct Loader {
             return texture(mr, false, scene.white_texture());
         ImageRGBA8 orm, occ_px;
         if (!decode_image(occ.texture->image, occ_px)) return texture(mr, false, scene.white_texture());
-        if (has_mr && decode_image(mr.texture->image, orm) && orm.width == occ_px.width && orm.height == occ_px.height) {
+        if (has_mr && decode_image(mr.texture->image, orm) && orm.width == occ_px.width &&
+            orm.height == occ_px.height) {
             for (usize i = 0; i < orm.pixels.size(); i += 4) orm.pixels[i] = occ_px.pixels[i];
         } else {
             orm = occ_px;
@@ -137,15 +142,35 @@ struct Loader {
         return true;
     }
 
+    // Scene skin of a glTF skin: palette size = joint count, starting at the rest pose.
+    u32 skin(const cgltf_skin* sk) {
+        if (auto it = skin_cache.find(sk); it != skin_cache.end()) return it->second;
+        GltfSkeleton skel;
+        if (!read_gltf_skin(data, sk, skel)) return kNoSkin;
+        const u32 index = scene.add_skin(static_cast<u32>(skel.joints.size()));
+        scene.set_skin_palette(index, rest_palette(skel));
+        ++result.skins;
+        return skin_cache[sk] = index;
+    }
+
     u32 mesh(const cgltf_primitive& prim) {
         if (auto it = mesh_cache.find(&prim); it != mesh_cache.end()) return it->second;
         const cgltf_accessor *pos = nullptr, *nrm = nullptr, *tan = nullptr, *uv = nullptr;
+        const cgltf_accessor *joints = nullptr, *weights = nullptr;
         for (cgltf_size i = 0; i < prim.attributes_count; ++i) {
             const cgltf_attribute& a = prim.attributes[i];
-            if (a.type == cgltf_attribute_type_position) pos = a.data;
-            else if (a.type == cgltf_attribute_type_normal) nrm = a.data;
-            else if (a.type == cgltf_attribute_type_tangent) tan = a.data;
-            else if (a.type == cgltf_attribute_type_texcoord && a.index == 0) uv = a.data;
+            if (a.type == cgltf_attribute_type_position)
+                pos = a.data;
+            else if (a.type == cgltf_attribute_type_normal)
+                nrm = a.data;
+            else if (a.type == cgltf_attribute_type_tangent)
+                tan = a.data;
+            else if (a.type == cgltf_attribute_type_texcoord && a.index == 0)
+                uv = a.data;
+            else if (a.type == cgltf_attribute_type_joints && a.index == 0)
+                joints = a.data;
+            else if (a.type == cgltf_attribute_type_weights && a.index == 0)
+                weights = a.data;
         }
         if (!pos) return ~0u;
         struct F3 {
@@ -199,6 +224,20 @@ struct Loader {
             for (usize i = 0; i < md.vertices.size(); ++i) md.vertices[i].normal = oct_encode(normalize(acc[i]));
         }
         if (!tan) compute_tangents(md);
+        if (joints && weights && joints->count == md.vertices.size() && weights->count == md.vertices.size()) {
+            md.skin.resize(md.vertices.size());
+            for (usize i = 0; i < md.vertices.size(); ++i) {
+                f32 w[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                cgltf_uint j[4] = {0, 0, 0, 0};
+                cgltf_accessor_read_uint(joints, i, j, 4);
+                cgltf_accessor_read_float(weights, i, w, 4);
+                const f32 sum = w[0] + w[1] + w[2] + w[3];
+                for (int k = 0; k < 4; ++k) {
+                    md.skin[i].joints[k] = static_cast<u32>(j[k]);
+                    md.skin[i].weights[k] = sum > 1e-6f ? w[k] / sum : (k == 0 ? 1.0f : 0.0f);
+                }
+            }
+        }
         result.triangles += md.indices.size() / 3;
         ++result.meshes;
         return mesh_cache[&prim] = scene.add_mesh(md);
@@ -209,7 +248,8 @@ struct Loader {
         cgltf_node_transform_local(nd, local);
         mat4 l;
         for (int c = 0; c < 4; ++c) l.c[c] = {local[c * 4 + 0], local[c * 4 + 1], local[c * 4 + 2], local[c * 4 + 3]};
-        const mat4 world = world_from_asset * l;
+        // glTF: the transform of a skinned mesh node is ignored; its vertices are in the skeleton's space.
+        const mat4 world = nd->skin ? placement : world_from_asset * l;
         if (nd->mesh) {
             // Decompose TRS (assumes no shear, as glTF node transforms are TRS).
             const vec3 t = world.c[3].xyz();
@@ -224,16 +264,20 @@ struct Loader {
             quat q;
             if (tr > 0.0f) {
                 const f32 k = std::sqrt(tr + 1.0f) * 2.0f;
-                q = {(r.at(2, 1) - r.at(1, 2)) / k, (r.at(0, 2) - r.at(2, 0)) / k, (r.at(1, 0) - r.at(0, 1)) / k, 0.25f * k};
+                q = {(r.at(2, 1) - r.at(1, 2)) / k, (r.at(0, 2) - r.at(2, 0)) / k, (r.at(1, 0) - r.at(0, 1)) / k,
+                     0.25f * k};
             } else if (r.at(0, 0) > r.at(1, 1) && r.at(0, 0) > r.at(2, 2)) {
                 const f32 k = std::sqrt(1.0f + r.at(0, 0) - r.at(1, 1) - r.at(2, 2)) * 2.0f;
-                q = {0.25f * k, (r.at(0, 1) + r.at(1, 0)) / k, (r.at(0, 2) + r.at(2, 0)) / k, (r.at(2, 1) - r.at(1, 2)) / k};
+                q = {0.25f * k, (r.at(0, 1) + r.at(1, 0)) / k, (r.at(0, 2) + r.at(2, 0)) / k,
+                     (r.at(2, 1) - r.at(1, 2)) / k};
             } else if (r.at(1, 1) > r.at(2, 2)) {
                 const f32 k = std::sqrt(1.0f + r.at(1, 1) - r.at(0, 0) - r.at(2, 2)) * 2.0f;
-                q = {(r.at(0, 1) + r.at(1, 0)) / k, 0.25f * k, (r.at(1, 2) + r.at(2, 1)) / k, (r.at(0, 2) - r.at(2, 0)) / k};
+                q = {(r.at(0, 1) + r.at(1, 0)) / k, 0.25f * k, (r.at(1, 2) + r.at(2, 1)) / k,
+                     (r.at(0, 2) - r.at(2, 0)) / k};
             } else {
                 const f32 k = std::sqrt(1.0f + r.at(2, 2) - r.at(0, 0) - r.at(1, 1)) * 2.0f;
-                q = {(r.at(0, 2) + r.at(2, 0)) / k, (r.at(1, 2) + r.at(2, 1)) / k, 0.25f * k, (r.at(1, 0) - r.at(0, 1)) / k};
+                q = {(r.at(0, 2) + r.at(2, 0)) / k, (r.at(1, 2) + r.at(2, 1)) / k, 0.25f * k,
+                     (r.at(1, 0) - r.at(0, 1)) / k};
             }
             for (cgltf_size i = 0; i < nd->mesh->primitives_count; ++i) {
                 const cgltf_primitive& prim = nd->mesh->primitives[i];
@@ -241,6 +285,7 @@ struct Loader {
                 const u32 m = mesh(prim);
                 if (m == ~0u) continue;
                 Instance inst;
+                inst.skin = nd->skin && scene.meshes()[m].skinned ? skin(nd->skin) : kNoSkin;
                 inst.position = {static_cast<f64>(t.x), static_cast<f64>(t.y), static_cast<f64>(t.z)};
                 inst.rotation = normalize(q);
                 inst.scale = s;
@@ -250,7 +295,7 @@ struct Loader {
                 ++result.instances;
             }
         }
-        for (cgltf_size i = 0; i < nd->children_count; ++i) node(nd->children[i], world);
+        for (cgltf_size i = 0; i < nd->children_count; ++i) node(nd->children[i], world_from_asset * l);
     }
 };
 
@@ -270,6 +315,7 @@ GltfLoadResult load_gltf(Scene& scene, const char* path, const GltfLoadOptions& 
     }
     // Asset placement: world position is applied in double precision on the instances afterwards.
     const mat4 root = mat4_from_quat(options.rotation) * scale(vec3{options.scale});
+    L.placement = root;
     const usize first_instance = scene.instances().size();
     const cgltf_scene* sc = L.data->scene ? L.data->scene : (L.data->scenes_count ? &L.data->scenes[0] : nullptr);
     if (sc) {

@@ -8,11 +8,29 @@
 #include "tefra/rhi/device.h"
 #include "tefra/rhi/swapchain.h"
 
+#include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
+namespace tefra::render {
+class Scene;
+class Environment;
+class Atmosphere;
+} // namespace tefra::render
+
 namespace tefra::app {
+
+struct SceneSetup;
+
+// A 3D scene supplied by a tool (tefra_avatar_demo) instead of one of the named scenes. `build` runs once, in place of
+// the named scene builders, and fills the scene and the settings. `frame` runs before every frame is recorded: the
+// tool updates its DataModel, animation and SceneSync there.
+struct CustomScene {
+    std::function<void(render::Scene&, render::Environment&, const render::Atmosphere&, SceneSetup&)> build;
+    std::function<void(u64 frame_index)> frame;
+};
 
 // Default view: 1.7 m eye height, 6 m behind the origin so both axis markers are visible.
 inline render::TestPatternParams default_scene_params() {
@@ -31,13 +49,40 @@ struct RunConfig {
     bool validation = false;
     bool strict_baseline = false;
     rhi::PresentMode present = rhi::PresentMode::Fifo;
-    std::string capture_path;       // write the last frame as PNG
-    bool capture_to_memory = false; // keep the last frame in RunResult::capture
-    bool fly_camera = false;        // interactive camera (window mode)
-    bool animate = false;           // advance time/camera between frames
-    std::string scene = "testpattern";
-    std::string tier = "low";
+    std::string capture_path;          // write the last frame as PNG
+    bool capture_to_memory = false;    // keep the last frame in RunResult::capture
+    bool fly_camera = false;           // interactive camera (window mode)
+    bool animate = false;              // advance time/camera between frames
+    std::string scene = "testpattern"; // testpattern | materials | gltf
+    std::string gltf_path;
+    std::string hdr_path;
+    f32 ev100 = -1.0f;           // < 0: scene default
+    std::string tier = "native"; // native | low | medium | high
+    bool no_taa = false;
+    bool terrain_detail = true; // terrain POM / stochastic tiling / macro variation
+    bool has_pitch = false;     // --pitch: overrides the scene camera pitch
+    f32 pitch_deg = 0.0f;
+    bool camera_override = false; // --camera x,y,z,yaw_deg,pitch_deg (scene3d)
+    f64 camera_xyz[3] = {0.0, 0.0, 0.0};
+    f32 camera_yaw_pitch[2] = {0.0f, 0.0f};
+    bool no_volumetric = false;  // disable volumetric fog (analytic height fog only)
+    bool has_camera_yaw = false; // --yaw DEG overrides the scene camera
+    f32 camera_yaw_deg = 0.0f;
+    bool no_bloom = false;
+    bool auto_exposure = false; // on for this run (scene default is off)
+    bool no_film = false;
+    bool no_canopy = false; // disable the canopy occlusion map (--no-canopy)
+    bool no_grass = false;
+    bool grass_stats = false; // count the grass blades drawn (reported as grass_blades)
+    bool no_pcss = false;
+    bool no_contact_shadows = false;
+    bool debug_sun_shadow = false;
     render::TestPatternParams params = default_scene_params();
+    std::shared_ptr<CustomScene> custom_scene; // when set, scene is only a label and the custom build is used
+    // scene == "custom" (used by tefra_physics_demo): build_custom fills the scene once before the first frame and
+    // on_frame runs before each frame is recorded (update the instances there; the renderer reads them every frame).
+    std::function<void(render::Scene&, render::Environment&, render::Atmosphere&, SceneSetup&)> build_custom;
+    std::function<void(u64 frame_index)> on_frame;
 };
 
 struct RunStats {
@@ -58,6 +103,7 @@ struct RunResult {
     rhi::AdapterInfo adapter;
     f64 gpu_mem_used_mb = 0, gpu_mem_budget_mb = 0, cpu_rss_mb = 0;
     u32 draw_calls = 0;
+    u32 grass_blades = 0; // last read-back count (lags by the frames in flight)
     std::string present_used = "headless";
     u32 frames_rendered = 0;
 };

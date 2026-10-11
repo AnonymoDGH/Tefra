@@ -1,0 +1,51 @@
+{
+ "format": "tefra-place",
+ "version": 1,
+ "services": [
+  {
+   "class": "Workspace",
+   "props": {},
+   "children": [
+    {
+     "class": "Terrain",
+     "id": 10,
+     "props": {
+      "Name": "Terrain",
+      "Kind": "Coast",
+      "Seed": 1337,
+      "SeaLevel": 0.0,
+      "Vegetation": true
+     }
+    },
+    {
+     "class": "Ocean",
+     "id": 11,
+     "props": {
+      "Name": "Ocean",
+      "SwellHeight": 0.9,
+      "SurfHeight": 0.7,
+      "WindDirection": [0.18, 0.0, 1.0]
+     }
+    },
+    {
+     "class": "SpawnLocation",
+     "id": 12,
+     "props": {
+      "Name": "Start",
+      "Position": [0.0, 0.9, 17.5],
+      "Size": [6.0, 0.4, 6.0],
+      "Anchored": true
+     }
+    }
+   ]
+  },
+  {
+   "class": "Lighting",
+   "props": {
+    "ClockTime": 14.5,
+    "CloudCover": 0.38,
+    "FogDensity": 0.0
+   }
+  }
+ ]
+}

@@ -28,6 +28,10 @@ jobs:
           sudo apt-get install -y -qq ninja-build glslang-tools mesa-vulkan-drivers vulkan-validationlayers \
             libvulkan1 libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxkbcommon-dev \
             libwayland-dev wayland-protocols
+      - name: Set up .NET 8 SDK (C# scripting)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
       - name: Format check
         if: matrix.name == 'gcc-debug'
         run: clang-format --dry-run --Werror $(git ls-files 'engine/*.cpp' 'engine/*.h' 'apps/*.cpp' 'apps/*.h' 'tests/*.cpp')
@@ -55,6 +59,10 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
+      - name: Set up .NET 8 SDK (C# scripting)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
       - uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -75,7 +83,13 @@ jobs:
           mkdir -p tefra-windows
           cp build/windows-mingw-release/bin/*.exe tefra-windows/
           cp -r build/windows-mingw-release/bin/shaders tefra-windows/
+          # Studio / player resources (fonts, template thumbnails, built-in sounds).
+          cp -r build/windows-mingw-release/bin/resources tefra-windows/
           cp scripts/bench-windows.bat tefra-windows/
+          mkdir -p tefra-windows/scripts
+          cp scripts/fetch_assets.py tefra-windows/scripts/
+          # C# scripting runtime (managed Tefra.Engine + Roslyn), next to the executables.
+          if [ -d build/windows-mingw-release/bin/managed ]; then cp -r build/windows-mingw-release/bin/managed tefra-windows/; fi
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:

@@ -1,0 +1,12 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common/gpu_types.glsl"
+layout(push_constant) uniform Push {
+    FrameBuffer frame; VertexBuffer vertices; InstanceBuffer instances; MaterialBuffer materials; uint cascade;
+} pc;
+void main() {
+    Instance inst = pc.instances.i[gl_InstanceIndex];
+    vec4 p = vec4(pc.vertices.v[gl_VertexIndex].pos, 1.0);
+    vec3 wp = vec3(dot(inst.model_rows[0], p), dot(inst.model_rows[1], p), dot(inst.model_rows[2], p));
+    gl_Position = pc.frame.f.cascade_view_proj[pc.cascade] * vec4(wp, 1.0);
+}

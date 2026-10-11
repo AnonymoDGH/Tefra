@@ -74,6 +74,7 @@ constexpr vec3 operator*(vec3 a, vec3 b) { return {a.x * b.x, a.y * b.y, a.z * b
 constexpr vec3 operator*(vec3 a, f32 s) { return {a.x * s, a.y * s, a.z * s}; }
 constexpr vec3 operator*(f32 s, vec3 a) { return a * s; }
 constexpr vec3 operator/(vec3 a, f32 s) { return {a.x / s, a.y / s, a.z / s}; }
+constexpr vec3 operator/(vec3 a, vec3 b) { return {a.x / b.x, a.y / b.y, a.z / b.z}; }
 inline vec3& operator+=(vec3& a, vec3 b) { return a = a + b; }
 inline vec3& operator-=(vec3& a, vec3 b) { return a = a - b; }
 inline vec3& operator*=(vec3& a, f32 s) { return a = a * s; }

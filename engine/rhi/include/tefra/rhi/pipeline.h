@@ -60,6 +60,7 @@ struct GraphicsPipelineDesc {
     VkCompareOp depth_compare = VK_COMPARE_OP_GREATER_OR_EQUAL; // reverse-Z
     bool depth_clamp = false;
     bool alpha_blend = false;
+    bool premultiplied_blend = false; // src + dst * (1 - src.a)
     const VkSpecializationInfo* specialization = nullptr;
     const char* name = nullptr;
 };

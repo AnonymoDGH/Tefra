@@ -172,7 +172,8 @@ void BindlessHeap::flush(u32 slot) {
         w.applied_mask |= bit;
     }
     for (usize i = 0; i < writes.size(); ++i) writes[i].pImageInfo = &infos[i];
-    if (!writes.empty()) vkUpdateDescriptorSets(dev_.device(), static_cast<u32>(writes.size()), writes.data(), 0, nullptr);
+    if (!writes.empty())
+        vkUpdateDescriptorSets(dev_.device(), static_cast<u32>(writes.size()), writes.data(), 0, nullptr);
     const u32 all = (1u << frames_) - 1u;
     usize keep = 0;
     for (usize i = 0; i < pending_.size(); ++i)

@@ -1,0 +1,13 @@
+ray hit Checkpoint
+hits 2
+checkpoint set
+damaged, hp=90
+died event
+after kill, alive=True
+clone destroy ok
+playing=True
+E held
+E began
+spawned Player
+heartbeat ok
+sensor step done

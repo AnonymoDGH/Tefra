@@ -34,10 +34,10 @@ struct TextureDesc {
 enum class PassType : u8 { Raster, Compute, Transfer };
 
 enum class Access : u8 {
-    ColorWrite,   // color attachment
-    DepthWrite,   // depth attachment, test + write
-    DepthRead,    // depth attachment, test only (read-only layout, can be sampled at the same time)
-    Sampled,      // sampled in shaders of the pass stage
+    ColorWrite, // color attachment
+    DepthWrite, // depth attachment, test + write
+    DepthRead,  // depth attachment, test only (read-only layout, can be sampled at the same time)
+    Sampled,    // sampled in shaders of the pass stage
     TransferSrc,
     TransferDst,
 };

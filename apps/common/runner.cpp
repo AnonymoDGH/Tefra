@@ -1,4 +1,7 @@
 #include "runner.h"
+#include "scenes.h"
+
+#include <cstdio>
 
 #include "tefra/core/fs.h"
 #include "tefra/core/json.h"
@@ -6,6 +9,7 @@
 #include "tefra/core/stats.h"
 #include "tefra/core/sysinfo.h"
 #include "tefra/core/time.h"
+#include "tefra/rhi/bindless.h"
 #include "tefra/rhi/commands.h"
 #include "tefra/rhi/frame.h"
 #include "tefra/rhi/gpu_timer.h"
@@ -145,6 +149,113 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
     auto testpattern = std::make_unique<render::TestPattern>(*device, target_format, target_usage);
 
     render::TestPatternParams params = cfg.params;
+    const bool scene3d = cfg.scene != "testpattern";
+    std::unique_ptr<rhi::BindlessHeap> heap;
+    std::unique_ptr<render::Scene> scene;
+    std::unique_ptr<render::Environment> env;
+    std::unique_ptr<render::Atmosphere> atmosphere;
+    std::unique_ptr<render::Terrain> terrain;
+    std::unique_ptr<render::Vegetation> vegetation;
+    std::unique_ptr<render::Water> water;
+    std::unique_ptr<render::Ocean> ocean;
+    std::unique_ptr<render::Renderer> renderer;
+    SceneSetup setup;
+    if (scene3d) {
+        heap = std::make_unique<rhi::BindlessHeap>(*device, kFramesInFlight);
+        scene = std::make_unique<render::Scene>(*device, *heap);
+        env = std::make_unique<render::Environment>(*device, *heap);
+        atmosphere = std::make_unique<render::Atmosphere>(*device, *heap);
+        bool built = false;
+        if (cfg.custom_scene && cfg.custom_scene->build) {
+            cfg.custom_scene->build(*scene, *env, *atmosphere, setup);
+            built = true;
+        } else if (cfg.scene == "materials") {
+            build_materials_scene(*scene, *env, setup);
+            built = true;
+        } else if (cfg.scene == "materials_sky") {
+            build_materials_sky_scene(*scene, *env, *atmosphere, setup);
+            built = true;
+        } else if (cfg.scene == "valley") {
+            render::TerrainDesc td;
+            td.texture_dir = file_exists("assets/cache/textures") ? "assets/cache/textures" : "";
+            terrain = std::make_unique<render::Terrain>(*device, *heap, td);
+            vegetation = std::make_unique<render::Vegetation>(*device, *scene);
+            build_valley_scene(*scene, *env, *atmosphere, *terrain, *vegetation, setup);
+            water = std::make_unique<render::Water>(*device, *terrain);
+            built = true;
+        } else if (cfg.scene == "coast") {
+            render::TerrainDesc td;
+            td.texture_dir = file_exists("assets/cache/textures") ? "assets/cache/textures" : "";
+            td.kind = render::TerrainKind::Coast;
+            td.sea_level = 0.0f;
+            terrain = std::make_unique<render::Terrain>(*device, *heap, td);
+            vegetation = std::make_unique<render::Vegetation>(*device, *scene);
+            build_coast_scene(*scene, *env, *atmosphere, *terrain, *vegetation, setup);
+            render::OceanDesc od;
+            od.level = td.sea_level;
+            od.wind_dir = {0.18f, 1.0f};
+            ocean = std::make_unique<render::Ocean>(*device, od);
+            built = true;
+        } else if (cfg.scene == "palms") {
+            vegetation = std::make_unique<render::Vegetation>(*device, *scene);
+            build_palms_scene(*scene, *env, *atmosphere, *vegetation, setup);
+            built = true;
+        } else if (cfg.scene == "gltf") {
+            built = build_gltf_scene(*scene, *env, setup, cfg.gltf_path, cfg.hdr_path);
+        } else if (cfg.scene == "custom" && cfg.build_custom) {
+            cfg.build_custom(*scene, *env, *atmosphere, setup);
+            built = true;
+        }
+        if (!built) {
+            result.error = "unknown scene or failed to load: " + cfg.scene;
+            renderer.reset();
+            vegetation.reset();
+            env.reset();
+            atmosphere.reset();
+            terrain.reset();
+            scene.reset();
+            heap.reset();
+            rhi::destroy_image(*device, offscreen);
+            return;
+        }
+        if (cfg.ev100 >= 0.0f) setup.settings.ev100 = cfg.ev100;
+        // Quality tier (spec 0 §5): renderer knobs. Vegetation density moves to the streaming system (M3).
+        if (cfg.tier == "low") {
+            setup.settings.render_scale = 0.75f; // 960x540 -> 1280x720 via TAAU
+            setup.settings.cascades = min(setup.settings.cascades, 2u);
+            setup.settings.shadow_resolution = 1024;
+            setup.settings.shadow_distance = min(setup.settings.shadow_distance, 120.0f);
+        } else if (cfg.tier == "medium") {
+            setup.settings.render_scale = 1.0f;
+            setup.settings.shadow_resolution = 2048;
+        } else if (cfg.tier == "high") {
+            setup.settings.render_scale = 1.0f;
+            setup.settings.cascades = 4;
+            setup.settings.shadow_resolution = 2048;
+            setup.settings.shadow_distance = max(setup.settings.shadow_distance, 300.0f);
+        }
+        if (cfg.no_taa) setup.settings.taa = false;
+        setup.settings.terrain_detail = cfg.terrain_detail;
+        if (cfg.has_pitch) setup.camera.pitch = radians(cfg.pitch_deg);
+        if (cfg.camera_override) {
+            setup.camera.position = {cfg.camera_xyz[0], cfg.camera_xyz[1], cfg.camera_xyz[2]};
+            setup.camera.yaw = cfg.camera_yaw_pitch[0];
+            setup.camera.pitch = cfg.camera_yaw_pitch[1];
+        }
+        if (cfg.no_volumetric) setup.settings.volumetric_fog = false;
+        if (cfg.has_camera_yaw) setup.camera.yaw = radians(cfg.camera_yaw_deg);
+        if (cfg.no_bloom) setup.settings.bloom = false;
+        if (cfg.auto_exposure) setup.settings.auto_exposure = true;
+        if (cfg.no_film) setup.settings.film_effects = false;
+        if (cfg.no_canopy) setup.settings.canopy_occlusion = false;
+        if (cfg.no_grass) setup.settings.grass = false;
+        setup.settings.grass_stats = cfg.grass_stats;
+        if (cfg.no_pcss) setup.settings.pcss_shadows = false;
+        if (cfg.no_contact_shadows) setup.settings.contact_shadows = false;
+        if (cfg.debug_sun_shadow) setup.settings.debug_sun_shadow = true;
+        renderer = std::make_unique<render::Renderer>(*device, *heap, kFramesInFlight);
+        params.camera = setup.camera;
+    }
     const u32 total_frames = cfg.frames;
     u64 prev_start = 0;
     u64 frame_index = 0;
@@ -168,8 +279,10 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
 #endif
         if (cfg.animate) {
             params.time = static_cast<f32>(frame_index) / 60.0f;
-            params.camera.yaw = cfg.params.camera.yaw + params.time * 0.2f;
+            params.camera.yaw = (scene3d ? setup.camera.yaw : cfg.params.camera.yaw) + params.time * 0.2f;
         }
+
+        if (cfg.custom_scene && cfg.custom_scene->frame) cfg.custom_scene->frame(frame_index);
 
         // Swapchain acquire (with recreate on resize/out-of-date).
         u32 image_index = 0;
@@ -211,18 +324,44 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
         const VkImage target_image = swapchain ? swapchain->image(image_index) : offscreen.image;
         const VkImageView target_view = swapchain ? swapchain->view(image_index) : offscreen.view;
 
-        rhi::ImageBarrier to_color;
-        to_color.image = target_image;
-        to_color.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-        to_color.new_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        to_color.src_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_COPY_BIT;
-        to_color.src_access = swapchain ? VK_ACCESS_2_NONE : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-        to_color.dst_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        to_color.dst_access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-        rhi::cmd_image_barrier(cmd, to_color);
-
-        testpattern->record(cmd, &timer, target_view, extent, params);
-        result.draw_calls = testpattern->draw_calls_last_frame();
+        const VkPipelineStageFlags2 prev_stage =
+            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_COPY_BIT;
+        const VkAccessFlags2 prev_access = swapchain ? VK_ACCESS_2_NONE : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        if (scene3d) {
+            render::OutputTarget out;
+            out.image = target_image;
+            out.view = target_view;
+            out.format = target_format;
+            out.extent = extent;
+            out.usage = target_usage;
+            out.final_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            out.initial_stage = prev_stage;
+            out.initial_access = prev_access;
+            render::RenderWorld world;
+            world.scene = scene.get();
+            world.env = env.get();
+            world.atmosphere = setup.use_atmosphere ? atmosphere.get() : nullptr;
+            world.terrain = setup.use_terrain ? terrain.get() : nullptr;
+            world.vegetation = vegetation.get();
+            world.water = water.get();
+            world.ocean = ocean.get();
+            if (cfg.on_frame) cfg.on_frame(frame_index);
+            renderer->render(cmd, fc.slot, frame_index, &timer, world, params.camera, params.time, setup.settings, out);
+            result.draw_calls = renderer->draw_calls();
+            result.grass_blades = renderer->grass_blades();
+        } else {
+            rhi::ImageBarrier to_color;
+            to_color.image = target_image;
+            to_color.old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            to_color.new_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            to_color.src_stage = prev_stage;
+            to_color.src_access = prev_access;
+            to_color.dst_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            to_color.dst_access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            rhi::cmd_image_barrier(cmd, to_color);
+            testpattern->record(cmd, &timer, target_view, extent, params);
+            result.draw_calls = testpattern->draw_calls_last_frame();
+        }
 
         const bool can_capture = (target_usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
         const bool capture_now = can_capture && ((last_frame && (!cfg.capture_path.empty() || cfg.capture_to_memory)) ||
@@ -246,7 +385,7 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
             to_present.new_layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             to_present.src_stage = last_stage;
             to_present.src_access = last_access;
-            to_present.dst_stage = VK_PIPELINE_STAGE_2_NONE;
+            to_present.dst_stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; // before the present semaphore signal
             to_present.dst_access = VK_ACCESS_2_NONE;
             rhi::cmd_image_barrier(cmd, to_present);
             frames.end(swapchain->acquire_semaphore(fc.slot), VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -303,6 +442,15 @@ void run_impl(const RunConfig& cfg, RunResult& result) {
     device->memory_usage_mb(result.gpu_mem_used_mb, result.gpu_mem_budget_mb);
     result.cpu_rss_mb = process_rss_mb();
 
+    renderer.reset();
+    water.reset();
+    ocean.reset();
+    vegetation.reset();
+    env.reset();
+    atmosphere.reset();
+    terrain.reset();
+    scene.reset();
+    heap.reset();
     testpattern.reset();
     rhi::destroy_image(*device, offscreen);
     swapchain.reset();
@@ -391,6 +539,7 @@ bool write_bench_json(const char* path, const RunConfig& cfg, const RunResult& r
         .kv("gpu_budget_mb", r.gpu_mem_budget_mb)
         .end_object();
     j.kv("draw_calls", r.draw_calls);
+    j.kv("grass_blades", r.grass_blades);
     j.begin_object("validation")
         .kv("enabled", r.validation_enabled)
         .kv("errors", r.validation_errors)

@@ -535,7 +535,8 @@ void Device::memory_usage_mb(f64& used, f64& budget) const {
     vmaGetMemoryProperties(allocator_, &mp);
     for (u32 i = 0; i < mp->memoryHeapCount; ++i) {
         if (!(mp->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)) continue;
-        used += static_cast<f64>(budgets[i].usage) / (1024.0 * 1024.0);
+        // Bytes actually allocated (VMA block slack excluded) - what the content really costs.
+        used += static_cast<f64>(budgets[i].statistics.allocationBytes) / (1024.0 * 1024.0);
         budget += static_cast<f64>(budgets[i].budget) / (1024.0 * 1024.0);
     }
 }

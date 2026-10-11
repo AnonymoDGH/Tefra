@@ -38,6 +38,8 @@ class Window {
     // Vulkan integration.
     static std::vector<const char*> required_instance_extensions();
     VkSurfaceKHR create_surface(VkInstance instance) const;
+    // GLFWwindow* for backends that need it (Dear ImGui GLFW). Owned by the Window.
+    void* native_handle() const { return handle_; }
 
   private:
     Window() = default;

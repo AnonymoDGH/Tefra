@@ -1,0 +1,403 @@
+{
+ "format": "tefra-place",
+ "version": 1,
+ "services": [
+  {
+   "class": "Workspace",
+   "props": {},
+   "children": [
+    {
+     "class": "Part",
+     "props": {
+      "Name": "Ground",
+      "Position": [0, -0.5, 0],
+      "Size": [200, 1, 200],
+      "Anchored": true,
+      "Color": [0.36, 0.42, 0.33]
+     }
+    },
+    {
+     "class": "SpawnLocation",
+     "props": {
+      "Name": "Spawn",
+      "Position": [0, 0.5, 0],
+      "Size": [12, 1, 12],
+      "Anchored": true,
+      "Color": [0.55, 0.5, 0.42]
+     }
+    },
+    {
+     "class": "Part",
+     "props": {
+      "Name": "Crate",
+      "Position": [0, 2, -10],
+      "Size": [3, 3, 3],
+      "Anchored": true,
+      "Color": [0.8, 0.35, 0.2]
+     },
+     "children": [
+      {
+       "class": "BillboardGui",
+       "props": {
+        "Name": "Tag",
+        "Size": [260, 64, 0],
+        "StudsOffset": [0, 2.5, 0],
+        "MaxDistance": 120
+       },
+       "children": [
+        {
+         "class": "Frame",
+         "props": {
+          "Name": "Panel",
+          "Size": [1, 1, 0],
+          "SizeOffset": [0, 0, 0],
+          "BackgroundColor": [0.05, 0.06, 0.08],
+          "BackgroundTransparency": 0.25
+         },
+         "children": [
+          {
+           "class": "UICorner",
+           "props": {
+            "CornerRadius": 10
+           }
+          },
+          {
+           "class": "TextLabel",
+           "props": {
+            "Name": "Caption",
+            "BackgroundTransparency": 1,
+            "Size": [1, 1, 0],
+            "SizeOffset": [-24, -16, 0],
+            "PositionOffset": [12, 8, 0],
+            "Text": "Caja de suministros",
+            "TextScaled": true,
+            "TextColor": [1, 0.85, 0.4],
+            "Font": "Bold",
+            "TextXAlignment": "Center",
+            "TextYAlignment": "Center"
+           }
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "class": "StarterGui",
+   "props": {},
+   "children": [
+    {
+     "class": "ScreenGui",
+     "props": {
+      "Name": "HUD"
+     },
+     "children": [
+      {
+       "class": "Frame",
+       "props": {
+        "Name": "TopBar",
+        "Position": [0, 0, 0],
+        "Size": [1, 0, 0],
+        "SizeOffset": [0, 44, 0],
+        "BackgroundColor": [0.09, 0.1, 0.12],
+        "BackgroundTransparency": 0.1,
+        "ClipsDescendants": true,
+        "ZIndex": 1
+       },
+       "children": [
+        {
+         "class": "UIGradient",
+         "props": {
+          "Name": "Shade",
+          "Color0": [0.2, 0.26, 0.36],
+          "Color1": [0.08, 0.09, 0.11],
+          "Rotation": 90
+         }
+        },
+        {
+         "class": "TextLabel",
+         "props": {
+          "Name": "Title",
+          "SizeOffset": [320, 44, 0],
+          "PositionOffset": [16, 0, 0],
+          "BackgroundTransparency": 1,
+          "Text": "Valle de Ceniza",
+          "TextColor": [0.95, 0.93, 0.9],
+          "TextSize": 22,
+          "Font": "Bold",
+          "TextXAlignment": "Left",
+          "TextStrokeTransparency": 0.6
+         }
+        },
+        {
+         "class": "TextLabel",
+         "props": {
+          "Name": "Clock",
+          "Position": [1, 0, 0],
+          "AnchorPoint": [1, 0, 0],
+          "PositionOffset": [-16, 0, 0],
+          "SizeOffset": [140, 44, 0],
+          "BackgroundTransparency": 1,
+          "Text": "12:00",
+          "TextSize": 18,
+          "Font": "Mono",
+          "TextColor": [0.8, 0.85, 0.9],
+          "TextXAlignment": "Right"
+         }
+        }
+       ]
+      },
+      {
+       "class": "Frame",
+       "props": {
+        "Name": "HealthBar",
+        "PositionOffset": [16, 60, 0],
+        "SizeOffset": [260, 22, 0],
+        "BackgroundColor": [0.12, 0.12, 0.13],
+        "CornerRadius": 11
+       },
+       "children": [
+        {
+         "class": "UIStroke",
+         "props": {
+          "Color": [1, 1, 1],
+          "Thickness": 2,
+          "Transparency": 0.25
+         }
+        },
+        {
+         "class": "Frame",
+         "props": {
+          "Name": "Fill",
+          "PositionOffset": [3, 3, 0],
+          "Size": [0.72, 1, 0],
+          "SizeOffset": [0, -6, 0],
+          "BackgroundColor": [0.85, 0.22, 0.2],
+          "CornerRadius": 8
+         }
+        },
+        {
+         "class": "TextLabel",
+         "props": {
+          "Name": "HealthText",
+          "BackgroundTransparency": 1,
+          "Size": [1, 1, 0],
+          "SizeOffset": [0, 0, 0],
+          "Text": "72 / 100",
+          "TextSize": 14,
+          "Font": "Bold",
+          "TextColor": [1, 1, 1],
+          "TextStrokeTransparency": 0.4
+         }
+        }
+       ]
+      },
+      {
+       "class": "TextLabel",
+       "props": {
+        "Name": "Banner",
+        "Position": [0.5, 0, 0],
+        "AnchorPoint": [0.5, 0, 0],
+        "PositionOffset": [0, 60, 0],
+        "Size": [0.4, 0, 0],
+        "SizeOffset": [0, 56, 0],
+        "Text": "TEFRA",
+        "TextScaled": true,
+        "TextColor": [1, 0.8, 0.4],
+        "Font": "Bold",
+        "TextStrokeTransparency": 0.2,
+        "BackgroundTransparency": 1
+       }
+      },
+      {
+       "class": "Frame",
+       "props": {
+        "Name": "ButtonList",
+        "PositionOffset": [16, 100, 0],
+        "SizeOffset": [220, 300, 0],
+        "BackgroundTransparency": 1
+       },
+       "children": [
+        {
+         "class": "UIListLayout",
+         "props": {
+          "Padding": 8,
+          "FillDirection": "Vertical",
+          "HorizontalAlignment": "Left",
+          "VerticalAlignment": "Top",
+          "SortOrder": "LayoutOrder"
+         }
+        },
+        {
+         "class": "TextBox",
+         "props": {
+          "Name": "NameBox",
+          "LayoutOrder": 0,
+          "SizeOffset": [220, 36, 0],
+          "BackgroundColor": [0.12, 0.13, 0.15],
+          "CornerRadius": 6,
+          "PlaceholderText": "Tu nombre",
+          "Text": "",
+          "TextSize": 16,
+          "TextXAlignment": "Left",
+          "TextColor": [0.95, 0.95, 0.95]
+         },
+         "children": [
+          {
+           "class": "UIPadding",
+           "props": {
+            "PaddingLeft": 10,
+            "PaddingRight": 10
+           }
+          },
+          {
+           "class": "UIStroke",
+           "props": {
+            "Color": [0.25, 0.5, 0.9],
+            "Thickness": 1.5
+           }
+          }
+         ]
+        },
+        {
+         "class": "TextButton",
+         "props": {
+          "Name": "Play",
+          "LayoutOrder": 1,
+          "SizeOffset": [220, 44, 0],
+          "Text": "Jugar",
+          "TextSize": 18,
+          "Font": "Bold",
+          "TextColor": [1, 1, 1],
+          "BackgroundColor": [0.2, 0.5, 1.0],
+          "CornerRadius": 8
+         }
+        },
+        {
+         "class": "TextButton",
+         "props": {
+          "Name": "Shop",
+          "LayoutOrder": 2,
+          "SizeOffset": [220, 44, 0],
+          "Text": "Tienda",
+          "TextSize": 18,
+          "TextColor": [1, 1, 1],
+          "BackgroundColor": [0.25, 0.27, 0.31]
+         },
+         "children": [
+          {
+           "class": "UICorner",
+           "props": {
+            "CornerRadius": 22
+           }
+          }
+         ]
+        },
+        {
+         "class": "TextButton",
+         "props": {
+          "Name": "Quit",
+          "LayoutOrder": 3,
+          "SizeOffset": [220, 44, 0],
+          "Text": "Salir",
+          "TextSize": 18,
+          "TextColor": [1, 1, 1],
+          "BackgroundColor": [0.5, 0.2, 0.2],
+          "CornerRadius": 8
+         }
+        }
+       ]
+      },
+      {
+       "class": "ImageLabel",
+       "props": {
+        "Name": "Icon",
+        "Position": [1, 0, 0],
+        "AnchorPoint": [1, 0, 0],
+        "PositionOffset": [-16, 60, 0],
+        "SizeOffset": [72, 72, 0],
+        "Image": "ui_icon.png",
+        "ScaleType": "Fit",
+        "BackgroundColor": [0.1, 0.1, 0.12],
+        "BackgroundTransparency": 0.3,
+        "CornerRadius": 36
+       }
+      },
+      {
+       "class": "Frame",
+       "props": {
+        "Name": "Grid",
+        "Position": [1, 0, 0],
+        "AnchorPoint": [1, 0, 0],
+        "PositionOffset": [-16, 150, 0],
+        "SizeOffset": [220, 150, 0],
+        "BackgroundTransparency": 1
+       },
+       "children": [
+        {
+         "class": "UIGridLayout",
+         "props": {
+          "CellSize": [64, 44, 0],
+          "CellPadding": [8, 8, 0],
+          "FillDirection": "Horizontal",
+          "SortOrder": "LayoutOrder"
+         }
+        },
+        {
+         "class": "Frame",
+         "props": {"Name": "Slot1", "LayoutOrder": 1, "BackgroundColor": [0.9, 0.5, 0.2], "CornerRadius": 6},
+         "children": [{"class": "TextLabel", "props": {"Size": [1, 1, 0], "SizeOffset": [0, 0, 0], "BackgroundTransparency": 1, "Text": "1", "TextSize": 16, "TextColor": [1, 1, 1]}}]
+        },
+        {
+         "class": "Frame",
+         "props": {"Name": "Slot2", "LayoutOrder": 2, "BackgroundColor": [0.3, 0.7, 0.4], "CornerRadius": 6},
+         "children": [{"class": "TextLabel", "props": {"Size": [1, 1, 0], "SizeOffset": [0, 0, 0], "BackgroundTransparency": 1, "Text": "2", "TextSize": 16, "TextColor": [1, 1, 1]}}]
+        },
+        {
+         "class": "Frame",
+         "props": {"Name": "Slot3", "LayoutOrder": 3, "BackgroundColor": [0.3, 0.5, 0.9], "CornerRadius": 6},
+         "children": [{"class": "TextLabel", "props": {"Size": [1, 1, 0], "SizeOffset": [0, 0, 0], "BackgroundTransparency": 1, "Text": "3", "TextSize": 16, "TextColor": [1, 1, 1]}}]
+        },
+        {
+         "class": "Frame",
+         "props": {"Name": "Slot4", "LayoutOrder": 4, "BackgroundColor": [0.6, 0.3, 0.8], "CornerRadius": 6},
+         "children": [{"class": "TextLabel", "props": {"Size": [1, 1, 0], "SizeOffset": [0, 0, 0], "BackgroundTransparency": 1, "Text": "4", "TextSize": 16, "TextColor": [1, 1, 1]}}]
+        },
+        {
+         "class": "Frame",
+         "props": {"Name": "Slot5", "LayoutOrder": 5, "BackgroundColor": [0.8, 0.8, 0.3], "CornerRadius": 6},
+         "children": [{"class": "TextLabel", "props": {"Size": [1, 1, 0], "SizeOffset": [0, 0, 0], "BackgroundTransparency": 1, "Text": "5", "TextSize": 16, "TextColor": [0.1, 0.1, 0.1]}}]
+        },
+        {
+         "class": "Frame",
+         "props": {"Name": "Slot6", "LayoutOrder": 6, "BackgroundColor": [0.4, 0.4, 0.45], "CornerRadius": 6},
+         "children": [{"class": "TextLabel", "props": {"Size": [1, 1, 0], "SizeOffset": [0, 0, 0], "BackgroundTransparency": 1, "Text": "6", "TextSize": 16, "TextColor": [1, 1, 1]}}]
+        }
+       ]
+      },
+      {
+       "class": "TextLabel",
+       "props": {
+        "Name": "Tilt",
+        "Position": [0.5, 0.5, 0],
+        "AnchorPoint": [0.5, 0.5, 0],
+        "SizeOffset": [240, 40, 0],
+        "Rotation": 15,
+        "BackgroundColor": [0.9, 0.6, 0.1],
+        "BackgroundTransparency": 0.2,
+        "CornerRadius": 6,
+        "Text": "Rotado 15 grados",
+        "TextSize": 18,
+        "Font": "Bold",
+        "TextColor": [0.1, 0.1, 0.1]
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -1,4 +1,5 @@
 tefra_add_library(tefra_renderer
-    SOURCES src/testpattern.cpp src/camera.cpp
-    PUBLIC_DEPS tefra_rhi tefra_rendergraph)
+    SOURCES src/testpattern.cpp src/camera.cpp src/mesh.cpp src/scene.cpp src/gltf.cpp src/environment.cpp src/renderer.cpp src/atmosphere.cpp src/terrain.cpp src/terrain_field.cpp src/vegetation.cpp src/water.cpp src/ocean.cpp src/canopy.cpp src/palm.cpp src/gltf_skeleton.cpp src/skin.cpp
+    PUBLIC_DEPS tefra_rhi tefra_rendergraph
+    PRIVATE_DEPS tefra_cgltf)
 target_precompile_headers(tefra_renderer PRIVATE <volk.h>)

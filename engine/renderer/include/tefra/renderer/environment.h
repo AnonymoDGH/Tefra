@@ -16,8 +16,8 @@ namespace tefra::render {
 
 struct ProceduralSky {
     vec3 sun_direction = normalize(vec3{0.35f, 0.17f, -0.92f}); // towards the sun
-    f32 zenith_nits = 3500.0f;  // luminance at the zenith (cd/m^2)
-    f32 horizon_nits = 6500.0f; // luminance at the horizon (hazy)
+    f32 zenith_nits = 3500.0f;                                  // luminance at the zenith (cd/m^2)
+    f32 horizon_nits = 6500.0f;                                 // luminance at the horizon (hazy)
     vec3 ground_albedo{0.12f, 0.11f, 0.09f};
     f32 sun_illuminance = 30000.0f; // lux, used for the ground and the glow around the sun
 };
@@ -44,6 +44,7 @@ class Environment {
     u32 cube() const { return cube_index_; }
     u32 mips() const { return settings_.specular_mips; }
     u32 brdf_lut() const { return lut_index_; }
+    u32 background() const { return background_index_; }
     const vec4* sh() const { return sh_; } // 9 coefficients, cosine-convolved irradiance (rgb)
     // Brightest direction found in the source (sun for most HDRIs) and its estimated illuminance.
     vec3 dominant_direction() const { return dominant_dir_; }
@@ -61,6 +62,8 @@ class Environment {
     EnvironmentSettings settings_;
     rhi::Image prefiltered_;
     rhi::Image lut_;
+    rhi::Image background_;
+    u32 background_index_ = ~0u;
     u32 cube_index_ = ~0u;
     u32 lut_index_ = ~0u;
     vec4 sh_[9] = {};
@@ -70,9 +73,9 @@ class Environment {
 
 // Exposed for unit tests.
 void sh9_project_equirect(const ImageRGBA32F& equirect, vec4 out_sh[9]); // radiance -> SH (not convolved)
-void sh9_convolve_cosine(vec4 sh[9]);                                     // radiance SH -> irradiance SH
+void sh9_convolve_cosine(vec4 sh[9]);                                    // radiance SH -> irradiance SH
 vec3 sh9_eval(const vec4 sh[9], vec3 n);
-vec3 equirect_direction(f32 u, f32 v);                                    // u,v in [0,1]
-vec2 brdf_lut_integrate(f32 n_dot_v, f32 roughness, u32 samples);         // (scale, bias) for F0
+vec3 equirect_direction(f32 u, f32 v);                            // u,v in [0,1]
+vec2 brdf_lut_integrate(f32 n_dot_v, f32 roughness, u32 samples); // (scale, bias) for F0
 
 } // namespace tefra::render

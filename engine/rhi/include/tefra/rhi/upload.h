@@ -14,6 +14,9 @@ struct TextureUpload {
     u32 width = 0, height = 0;
     VkFormat format = VK_FORMAT_R8G8B8A8_SRGB; // R8G8B8A8_{SRGB,UNORM}, R16G16B16A16_SFLOAT, R32G32B32A32_SFLOAT
     bool generate_mips = true;
+    // > 0: RGBA8 only. Mips are built on the CPU and their alpha is rescaled so the fraction of texels passing
+    // this alpha-test cutoff matches level 0 (Castano 2010). Keeps alpha-tested foliage from thinning out.
+    f32 alpha_coverage_cutoff = 0.0f;
     const char* name = nullptr;
 };
 

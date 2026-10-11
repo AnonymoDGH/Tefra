@@ -172,7 +172,15 @@ VkPipeline create_graphics_pipeline(const Device& dev, const GraphicsPipelineDes
         b = {};
         b.colorWriteMask =
             VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        if (d.alpha_blend) {
+        if (d.premultiplied_blend) {
+            b.blendEnable = VK_TRUE;
+            b.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            b.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            b.colorBlendOp = VK_BLEND_OP_ADD;
+            b.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            b.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            b.alphaBlendOp = VK_BLEND_OP_ADD;
+        } else if (d.alpha_blend) {
             b.blendEnable = VK_TRUE;
             b.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
             b.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;

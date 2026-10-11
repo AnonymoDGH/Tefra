@@ -1,0 +1,39 @@
+{
+ "format": "tefra-place",
+ "version": 1,
+ "services": [
+  {
+   "class": "Workspace",
+   "props": {},
+   "children": [
+    {
+     "class": "Part",
+     "id": 100,
+     "props": {
+      "Name": "Watched",
+      "Position": [
+       0,
+       0,
+       0
+      ]
+     },
+     "children": [
+      {
+       "class": "Script",
+       "id": 101,
+       "props": {
+        "Name": "Watcher",
+        "Source": "public class Watcher : TefraScript {\n    public override void Start() {\n        var p = (Part)Parent;\n        p.Changed += name => { if (name == \"Position\") print(\"moved\", p.Name); };\n        p.Position = new Vector3(1, 2, 3);\n        var folder = Instance.New(\"Folder\", Game.Workspace);\n        folder.Name = \"Box\";\n        var child = Instance.New(\"Part\", folder);\n        child.Name = \"Inner\";\n        child.Destroying += () => print(\"inner destroying\");\n        folder.Destroy();\n    }\n}\n"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "class": "ServerScriptService",
+   "props": {},
+   "children": []
+  }
+ ]
+}
