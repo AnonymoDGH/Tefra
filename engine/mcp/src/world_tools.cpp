@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cmath>
 #include <initializer_list>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -247,6 +248,13 @@ JsonValue describe(DataModel& dm, const Instance& inst, bool full) {
     }
     j.set("properties", std::move(props));
 
+    JsonValue attrs = JsonValue::object();
+    for (const auto& [name, v] : inst.attributes()) attrs.set(name, DataModel::attribute_to_json(v));
+    j.set("attributes", std::move(attrs));
+    JsonValue tags = JsonValue::array();
+    for (const std::string& t : inst.tags()) tags.push(JsonValue(t));
+    j.set("tags", std::move(tags));
+
     JsonValue kids = JsonValue::array();
     for (const Instance* c : inst.children()) {
         JsonValue cj = JsonValue::object();
@@ -477,18 +485,97 @@ AUDIO: Sound (SoundId = file path or builtin:click/jump/checkpoint/win/coin/wind
 PLAY: play / stop / get_output (script errors) / capture_viewport (see the result) / set_camera.)");
 }
 
+// One attribute to set (remove = true for a null in the request) or a validated attribute value.
+struct AttributeChange {
+    std::string name;
+    bool remove = false;
+    Value value;
+};
+
 ToolResult tool_set_properties(DataModel& dm, const JsonValue& args) {
     std::string err;
     Instance* inst = find_arg(dm, args, "path", "id", err);
     if (!inst) return ToolResult::error(err);
-    if (!has_arg(args, "properties"))
-        return ToolResult::error("'properties' is required, an object such as {\"Anchored\": true}");
-    std::vector<Assignment> list;
+    const bool has_props = has_arg(args, "properties");
+    const bool has_attrs = has_arg(args, "attributes");
+    const bool has_tags = has_arg(args, "tags");
+    if (!has_props && !has_attrs && !has_tags)
+        return ToolResult::error("Give 'properties' (an object such as {\"Anchored\": true}), 'attributes' (such as "
+                                 "{\"Health\": 100}) or 'tags' (such as [\"Enemy\"]).");
+
+    // Everything is checked before anything changes.
     std::vector<std::string> problems;
-    if (!convert_properties(dm, inst->cls(), args["properties"], list, problems))
-        return problems_error("Properties not set; nothing was changed:", problems);
+    std::vector<Assignment> list;
+    const JsonValue none = JsonValue::object();
+    convert_properties(dm, inst->cls(), has_props ? args["properties"] : none, list, problems);
+
+    std::vector<AttributeChange> changes;
+    if (has_attrs) {
+        const JsonValue& attrs = args["attributes"];
+        if (!attrs.is_object()) {
+            problems.push_back("'attributes' must be an object such as {\"Health\": 100}");
+        } else {
+            for (const auto& [name, json] : attrs.members()) {
+                if (name.empty()) {
+                    problems.push_back("attribute names must not be empty");
+                    continue;
+                }
+                AttributeChange c;
+                c.name = name;
+                if (json.is_null()) {
+                    c.remove = true;
+                } else if (!DataModel::attribute_from_json(json, c.value)) {
+                    problems.push_back("'attributes." + name +
+                                       "' expects a bool, number, string, [x, y, z] or "
+                                       "{\"Color3\": [r, g, b]}, got " +
+                                       describe_json(json));
+                    continue;
+                }
+                changes.push_back(std::move(c));
+            }
+        }
+    }
+
+    std::set<std::string> tags;
+    if (has_tags) {
+        const JsonValue& list_json = args["tags"];
+        if (!list_json.is_array()) {
+            problems.push_back("'tags' must be an array of names such as [\"Enemy\"]");
+        } else {
+            for (const JsonValue& t : list_json.items()) {
+                if (!t.is_string() || t.as_string().empty()) {
+                    problems.push_back("tags must be non-empty strings, got " + describe_json(t));
+                    continue;
+                }
+                tags.insert(t.as_string());
+            }
+        }
+    }
+    if (!problems.empty()) return problems_error("Properties not set; nothing was changed:", problems);
+
     JsonValue out = describe(dm, *inst, false);
     out.set("updated", apply_assignments(*inst, list));
+    if (has_attrs) {
+        for (const AttributeChange& c : changes) {
+            if (c.remove)
+                inst->remove_attribute(c.name);
+            else
+                inst->set_attribute(c.name, c.value);
+        }
+    }
+    if (has_tags) {
+        // The tag list is replaced: tags not listed are removed, listed ones added.
+        const std::set<std::string> current(inst->tags().begin(), inst->tags().end());
+        for (const std::string& t : current)
+            if (!tags.count(t)) inst->remove_tag(t);
+        for (const std::string& t : tags) inst->add_tag(t);
+    }
+    JsonValue attrs_now = JsonValue::object();
+    for (const auto& [name, v] : inst->attributes()) attrs_now.set(name, DataModel::attribute_to_json(v));
+    out.set("attributes", std::move(attrs_now));
+    JsonValue tags_now = JsonValue::array();
+    for (const std::string& t : inst->tags()) tags_now.push(JsonValue(t));
+    out.set("tags", std::move(tags_now));
     return ToolResult::json(out);
 }
 
@@ -721,7 +808,8 @@ int register_world_tools(Server& server, std::function<DataModel&()> model) {
         tool_get_tree);
 
     add("get_instance",
-        "Returns every property of an instance with its type and current value, its path, parent id and children.",
+        "Returns every property of an instance with its type and current value, its path, parent id and children, "
+        "plus its attributes (name -> value) and tags.",
         schema({prop("path", "string", kPathDoc), prop("id", "integer", kIdDoc)}), tool_get_instance);
 
     add("list_classes",
@@ -759,11 +847,17 @@ int register_world_tools(Server& server, std::function<DataModel&()> model) {
         schema({}), tool_engine_guide);
 
     add("set_properties",
-        "Sets several properties of one instance at once. All values are checked first; if any is invalid nothing "
-        "changes and every problem is listed.",
+        "Sets several properties of one instance at once, and optionally its attributes and tags. Attributes are "
+        "merged "
+        "into the existing ones (null removes one); tags replace the whole tag list. Everything is checked first; if "
+        "any "
+        "value is invalid nothing changes and every problem is listed.",
         schema({prop("path", "string", kPathDoc), prop("id", "integer", kIdDoc),
-                prop("properties", "object", "Property values by name, for example {\"Position\": [0, 5, 0]}.")},
-               {"properties"}),
+                prop("properties", "object", "Property values by name, for example {\"Position\": [0, 5, 0]}."),
+                prop("attributes", "object",
+                     "Attributes to set, for example {\"Health\": 100, \"Tint\": [1, 0, 0]}; null removes one."),
+                prop("tags", "array", "The complete tag list, for example [\"Enemy\", \"Breakable\"].")},
+               {}),
         tool_set_properties);
 
     add("delete_instance", "Deletes an instance and all its descendants. Services and the DataModel cannot be deleted.",

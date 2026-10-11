@@ -129,6 +129,10 @@ public class Hud : TefraScript   // LocalScript dentro de un ScreenGui de Starte
 ### Animar propiedades (TweenService)
 ```csharp
 public class Lift : TefraScript
+### Atributos y etiquetas
+Cualquier instancia puede llevar atributos (pares nombre-valor libres, como en Roblox) y etiquetas (CollectionService).
+```csharp
+public class Breakable : TefraScript
 {
     public override void Start()
     {
@@ -186,6 +190,23 @@ string json = HttpService.JSONEncode(new Dictionary<string, object> { { "a", 1 }
 - `FireClient(player, ...)` llega al único cliente del proceso aunque `player` no sea el local.
 - `DataStore`: un fichero JSON por almacén en `%APPDATA%/Tefra/datastores` (o `~/.config/Tefra/datastores`); `TEFRA_DATASTORE_DIR` cambia la carpeta. Cada operación lee y escribe el fichero, así que no hay caché entre llamadas. El almacén se identifica solo por su nombre: dos juegos con el mismo nombre comparten el fichero. Las llamadas son síncronas (no hay `await`).
 - Al parar Play se olvidan todos los manejadores de estos mensajes y la cola de Debris.
+        part.SetAttribute("Health", 3);            // bool, número, string, Vector3 o Color3; null lo borra
+        part.AddTag("Breakable");
+        part.GetAttributeChangedSignal("Health").Connect(() =>
+        {
+            if (Convert.ToInt32(part.GetAttribute("Health")) <= 0) part.Destroy();
+        });
+        foreach (var other in CollectionService.GetTagged("Breakable")) { /* ... */ }
+        CollectionService.GetInstanceAddedSignal("Breakable").Connect(i => Debug.Log("nuevo: " + i.Name));
+    }
+}
+```
+- `GetAttribute` devuelve `double` para cualquier número (usa `Convert.ToInt32` para enteros); `SetAttribute` guarda `int`/`long` como entero y `float`/`double` como real.
+- `AttributeChanged` y `GetAttributeChangedSignal(nombre)`, igual que `Changed`, llegan en el paso siguiente del motor, no dentro de `SetAttribute`.
+- `CollectionService.GetTagged(etiqueta)` devuelve las instancias conectadas al DataModel. `GetInstanceAddedSignal` / `GetInstanceRemovedSignal` avisan por etiqueta. Al destruir una instancia no se emite `InstanceRemoved`.
+- Persistencia: se guardan en `.tefra` como `"attributes": {...}` y `"tags": [...]` por instancia (opcionales). Un número entero en un atributo se recarga como entero; un Color3 se guarda como `{"Color3": [r, g, b]}`.
+- Los cambios de atributos y etiquetas no entran en el historial de deshacer (Ctrl+Z) de Studio. El panel Properties los muestra en solo lectura.
+- MCP: `get_instance` devuelve `attributes` y `tags`; `set_properties` acepta `attributes` (se fusionan, `null` borra) y `tags` (reemplaza la lista).
 
 ## Efectos (ParticleEmitter)
 Un `ParticleEmitter` bajo una Part emite partículas de verdad (billboards en GPU, ordenadas, *soft particles*, máscara reactiva para el TAA). Se ven también en modo edición.

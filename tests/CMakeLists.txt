@@ -52,10 +52,17 @@ add_test(NAME scripting_services COMMAND tefra_run
     --expect-file ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/services.expect)
 set_tests_properties(scripting_services PROPERTIES LABELS "scripting" SKIP_RETURN_CODE 77
     ENVIRONMENT "TEFRA_DATASTORE_DIR=${CMAKE_BINARY_DIR}/tests/datastores")
+# Attributes and tags (ABI 3): SetAttribute / GetAttribute / AttributeChanged / GetAttributeChangedSignal, AddTag /
+# RemoveTag / GetTags, CollectionService.GetTagged and the InstanceAdded / InstanceRemoved signals of one tag.
+add_test(NAME scripting_attributes COMMAND tefra_run
+    --place ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/attributes.tefra --frames 10 --require-scripts
+    --expect-file ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/attributes.expect)
+set_tests_properties(scripting_attributes PROPERTIES LABELS "scripting" SKIP_RETURN_CODE 77)
 if(TEFRA_ASAN)
     # The .NET runtime keeps its heap for the life of the process; suppress only its modules (see lsan.supp).
     set(_tefra_lsan "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
-    set_tests_properties(unit scripting_run scripting_game scripting_gameplay PROPERTIES ENVIRONMENT "${_tefra_lsan}")
+    set_tests_properties(unit scripting_run scripting_game scripting_gameplay scripting_mathtypes scripting_attributes
+        PROPERTIES ENVIRONMENT "${_tefra_lsan}")
     set_tests_properties(scripting_services PROPERTIES ENVIRONMENT
         "${_tefra_lsan};TEFRA_DATASTORE_DIR=${CMAKE_BINARY_DIR}/tests/datastores")
 endif()

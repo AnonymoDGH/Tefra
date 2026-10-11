@@ -340,3 +340,39 @@ TEST_CASE("scripting: DataStore keeps values in JSON files, HttpService encodes 
     CHECK(text.find("\"name\"") == std::string::npos); // removed
     std::filesystem::remove_all(dir, ec);
 }
+
+TEST_CASE("scripting: attributes, tags and CollectionService from C#") {
+    scripting::ScriptHost host;
+    std::string err;
+    if (!host.init(&err)) {
+        MESSAGE("scripting unavailable, skipped: " << err);
+        return;
+    }
+    DataModel model;
+    REQUIRE(model.load(fixture("attributes.tefra").c_str(), &err));
+
+    std::vector<std::string> logs;
+    host.set_log_callback([&logs](LogLevel, std::string_view message) { logs.emplace_back(message); });
+    REQUIRE(host.start(model));
+    run_frames(host, 10);
+    host.stop();
+
+    // The same lines as attributes.expect (checked by tefra_run in CTest).
+    CHECK(contains(logs, "health\t100"));
+    CHECK(contains(logs, "tags\tBreakable,Solid"));
+    CHECK(contains(logs, "lamp watts\t40"));
+    CHECK(contains(logs, "tagged\t2"));
+    CHECK(contains(logs, "added\tCrate"));
+    CHECK(contains(logs, "removed\tCrate"));
+    CHECK(contains(logs, "health changed to\t75"));
+    CHECK(contains(logs, "changed\tArmed"));
+
+    Instance* crate = model.find_path("Workspace.Crate");
+    REQUIRE(crate != nullptr);
+    REQUIRE(crate->get_attribute("Health") != nullptr);
+    CHECK(crate->get_attribute("Health")->as_int() == 75);
+    CHECK(crate->get_attribute("Armed") == nullptr);
+    CHECK(crate->has_tag("Solid"));
+    CHECK_FALSE(crate->has_tag("Breakable"));
+    CHECK(model.tagged("Breakable").size() == 1);
+}

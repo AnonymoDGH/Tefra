@@ -1,0 +1,69 @@
+{
+ "format": "tefra-place",
+ "version": 1,
+ "services": [
+  {
+   "class": "Workspace",
+   "props": {},
+   "children": [
+    {
+     "class": "Part",
+     "id": 100,
+     "props": {
+      "Name": "Crate",
+      "Position": [
+       0,
+       0,
+       0
+      ]
+     },
+     "children": [
+      {
+       "class": "Script",
+       "id": 101,
+       "props": {
+        "Name": "Tagger",
+        "Source": "public class Tagger : TefraScript {\n    public override void Start() {\n        var crate = (Part)Parent;\n        crate.SetAttribute(\"Health\", 100);\n        crate.SetAttribute(\"Speed\", 2.5);\n        crate.SetAttribute(\"Label\", \"crate\");\n        crate.SetAttribute(\"Offset\", new Vector3(1, 2, 3));\n        crate.SetAttribute(\"Armed\", true);\n        print(\"health\", crate.GetAttribute(\"Health\"));\n        print(\"offset\", ((Vector3)crate.GetAttribute(\"Offset\")).Z);\n        crate.AttributeChanged += name => print(\"changed\", name);\n        crate.GetAttributeChangedSignal(\"Health\").Connect(() => print(\"health changed to\", crate.GetAttribute(\"Health\")));\n        CollectionService.GetInstanceAddedSignal(\"Breakable\").Connect(i => print(\"added\", i.Name));\n        CollectionService.GetInstanceRemovedSignal(\"Breakable\").Connect(i => print(\"removed\", i.Name));\n        crate.SetAttribute(\"Health\", 75);\n        crate.SetAttribute(\"Armed\", null);\n        print(\"armed\", crate.GetAttribute(\"Armed\") == null);\n        crate.AddTag(\"Breakable\");\n        crate.AddTag(\"Solid\");\n        print(\"tags\", string.Join(\",\", crate.GetTags()));\n        print(\"has\", crate.HasTag(\"Breakable\"));\n        var lamp = Game.Workspace.FindFirstChild(\"Lamp\");\n        print(\"lamp watts\", lamp.GetAttribute(\"Watts\"));\n        print(\"attrs\", crate.GetAttributes().Count);\n        print(\"tagged\", CollectionService.GetTagged(\"Breakable\").Length);\n        crate.RemoveTag(\"Breakable\");\n    }\n}\n"
+       }
+      }
+     ]
+    },
+    {
+     "class": "Part",
+     "id": 102,
+     "props": {
+      "Name": "Lamp",
+      "Position": [
+       5,
+       0,
+       0
+      ]
+     },
+     "attributes": {
+      "Watts": 40
+     },
+     "tags": [
+      "Breakable"
+     ]
+    },
+    {
+     "class": "Part",
+     "id": 103,
+     "props": {
+      "Name": "Plain",
+      "Position": [
+       10,
+       0,
+       0
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "class": "ServerScriptService",
+   "props": {},
+   "children": []
+  }
+ ]
+}

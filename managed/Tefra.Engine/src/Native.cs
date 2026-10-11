@@ -1,4 +1,4 @@
-// Mirror of engine/scripting/include/tefra/scripting/abi.h. Keep the layouts identical; ABI version 2.
+// Mirror of engine/scripting/include/tefra/scripting/abi.h. Keep the layouts identical; ABI version 3.
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -66,6 +66,18 @@ namespace Tefra
         public delegate* unmanaged<int, int> input_mouse_down;
         public delegate* unmanaged<double*, int> input_mouse_location;
         public delegate* unmanaged<ulong> root;
+        public delegate* unmanaged<ulong, int> attr_count;
+        public delegate* unmanaged<ulong, int, byte*> attr_name_at;
+        public delegate* unmanaged<ulong, byte*, TefraValue*, int> attr_get;
+        public delegate* unmanaged<ulong, byte*, TefraValue*, int> attr_set;
+        public delegate* unmanaged<ulong, byte*, int> attr_remove;
+        public delegate* unmanaged<ulong, byte*, int> tag_add;
+        public delegate* unmanaged<ulong, byte*, int> tag_remove;
+        public delegate* unmanaged<ulong, byte*, int> tag_has;
+        public delegate* unmanaged<ulong, int> tag_count;
+        public delegate* unmanaged<ulong, int, byte*> tag_at;
+        public delegate* unmanaged<byte*, int> tagged_count;
+        public delegate* unmanaged<byte*, int, ulong> tagged_at;
     }
 
     // Managed function table (C: TefraManagedApi), filled by Bridge.Init.
@@ -84,7 +96,7 @@ namespace Tefra
     // copied out on the way back, so no pointer outlives the call that produced it.
     internal static unsafe class Native
     {
-        public const uint AbiVersion = 2;
+        public const uint AbiVersion = 3;
         public static NativeApi* Api;
 
         public static bool IsReady => Api != null;
@@ -207,6 +219,68 @@ namespace Tefra
             o[0] = ox; o[1] = oy; o[2] = oz;
             d[0] = dx; d[1] = dy; d[2] = dz;
             fixed (double* h = hit) return Api->raycast(o, d, maxDistance, h);
+        }
+
+        // ---- Attributes and tags (ABI 3). Strings returned by the native side are copied out at once. ----------------
+
+        public static int AttrCount(ulong id) => Api->attr_count(id);
+
+        public static string AttrNameAt(ulong id, int index) => FromUtf8(Api->attr_name_at(id, index));
+
+        public static bool AttrGet(ulong id, string name, out TefraValue value)
+        {
+            TefraValue v = default;
+            int ok;
+            fixed (byte* n = Z(name)) ok = Api->attr_get(id, n, &v);
+            value = v;
+            return ok != 0;
+        }
+
+        // The value's string payload (if any) is `text`; both the name and the text are pinned for the call.
+        public static bool AttrSet(ulong id, string name, TefraValue value, byte[] text)
+        {
+            text ??= new byte[0];
+            fixed (byte* n = Z(name))
+            fixed (byte* s = text)
+            {
+                value.str = s;
+                value.strLen = (uint)text.Length;
+                return Api->attr_set(id, n, &value) != 0;
+            }
+        }
+
+        public static bool AttrRemove(ulong id, string name)
+        {
+            fixed (byte* n = Z(name)) return Api->attr_remove(id, n) != 0;
+        }
+
+        public static bool TagAdd(ulong id, string tag)
+        {
+            fixed (byte* t = Z(tag)) return Api->tag_add(id, t) != 0;
+        }
+
+        public static bool TagRemove(ulong id, string tag)
+        {
+            fixed (byte* t = Z(tag)) return Api->tag_remove(id, t) != 0;
+        }
+
+        public static bool TagHas(ulong id, string tag)
+        {
+            fixed (byte* t = Z(tag)) return Api->tag_has(id, t) != 0;
+        }
+
+        public static int TagCount(ulong id) => Api->tag_count(id);
+
+        public static string TagAt(ulong id, int index) => FromUtf8(Api->tag_at(id, index));
+
+        public static int TaggedCount(string tag)
+        {
+            fixed (byte* t = Z(tag)) return Api->tagged_count(t);
+        }
+
+        public static ulong TaggedAt(string tag, int index)
+        {
+            fixed (byte* t = Z(tag)) return Api->tagged_at(t, index);
         }
 
         public static bool KeyDown(int keyCode) => Api->input_key_down(keyCode) != 0;
