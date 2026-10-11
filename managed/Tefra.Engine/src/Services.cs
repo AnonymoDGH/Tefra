@@ -284,6 +284,60 @@ namespace Tefra
         }
     }
 
+    /// <summary>
+    /// Destroys instances after a delay, as in Roblox: `Debris.AddItem(part, 5f);`. The delay counts game time, in
+    /// the script loop; an item destroyed before its time is skipped.
+    /// </summary>
+    public static class Debris
+    {
+        private struct Entry
+        {
+            public ulong Id;
+            public float Remaining;
+        }
+
+        private static readonly List<Entry> Items = new List<Entry>();
+
+        /// <summary>Destroys item after lifetime seconds of game time.</summary>
+        public static void AddItem(Instance item, float lifetime = 10f)
+        {
+            if (item == null) return;
+            Items.Add(new Entry { Id = item.Id, Remaining = lifetime });
+        }
+
+        // Called by the script loop, once per step.
+        internal static void Advance(float dt)
+        {
+            if (Items.Count == 0) return;
+            var due = new List<ulong>();
+            for (int i = Items.Count - 1; i >= 0; i--)
+            {
+                Entry e = Items[i];
+                if (!Native.Exists(e.Id))
+                {
+                    Items.RemoveAt(i); // destroyed by someone else
+                    continue;
+                }
+                e.Remaining -= dt;
+                if (e.Remaining > 0f)
+                {
+                    Items[i] = e;
+                    continue;
+                }
+                due.Add(e.Id);
+                Items.RemoveAt(i);
+            }
+            // The loop above went newest first; destroy oldest first.
+            for (int i = due.Count - 1; i >= 0; i--)
+                Instance.FromId(due[i])?.Destroy();
+        }
+
+        internal static void Clear()
+        {
+            Items.Clear();
+        }
+    }
+
     /// <summary>Output (the Studio Output panel or the tefra_run console).</summary>
     public static class Debug
     {

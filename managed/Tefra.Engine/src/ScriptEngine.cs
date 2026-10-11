@@ -178,7 +178,9 @@ namespace Tefra
         {
             if (!_running) return;
             if (_dirty) Sync(null);
+            Remoting.Deliver(); // RemoteEvent messages sent during the previous step
             Yield.Advance(dt);
+            Debris.Advance(dt);
             RunService.Fire(dt);
             foreach (ScriptSlot s in Slots.ToArray())
             {
@@ -423,6 +425,8 @@ namespace Tefra
             RunService.Clear();
             UserInputService.Clear();
             Yield.Clear();
+            EventTables.Clear();
+            Debris.Clear();
             Instance.ClearAll();
             foreach (ScriptSlot s in Slots)
             {

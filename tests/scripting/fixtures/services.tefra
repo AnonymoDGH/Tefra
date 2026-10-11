@@ -1,0 +1,90 @@
+{
+ "format": "tefra-place",
+ "version": 1,
+ "services": [
+  {
+   "class": "Workspace",
+   "props": {},
+   "children": [
+    {
+     "class": "BindableEvent",
+     "props": {
+      "Name": "Bus"
+     },
+     "children": []
+    },
+    {
+     "class": "BindableFunction",
+     "props": {
+      "Name": "Adder"
+     },
+     "children": []
+    },
+    {
+     "class": "RemoteEvent",
+     "props": {
+      "Name": "Net"
+     },
+     "children": []
+    },
+    {
+     "class": "RemoteFunction",
+     "props": {
+      "Name": "Ask"
+     },
+     "children": []
+    },
+    {
+     "class": "Part",
+     "props": {
+      "Name": "Crate",
+      "Position": [
+       0,
+       3,
+       0
+      ],
+      "Anchored": true
+     },
+     "children": []
+    },
+    {
+     "class": "Script",
+     "props": {
+      "Name": "Messaging",
+      "Source": "public class Messaging : TefraScript\n{\n    private int _frame;\n\n    public override void Start()\n    {\n        var bus = (BindableEvent)Game.Workspace.FindFirstChild(\"Bus\");\n        bus.Event += args => print(\"bus got\", args[0], args[1]);\n        bus.Connect(args => print(\"bus connected\", args.Length));\n        var adder = (BindableFunction)Game.Workspace.FindFirstChild(\"Adder\");\n        adder.OnInvoke = args => Convert.ToInt32(args[0]) + Convert.ToInt32(args[1]);\n        var net = (RemoteEvent)Game.Workspace.FindFirstChild(\"Net\");\n        net.OnServerEvent += (player, args) => print(\"server got\", args[0], args[1]);\n        net.OnClientEvent += args => print(\"client got\", args[0]);\n        var ask = (RemoteFunction)Game.Workspace.FindFirstChild(\"Ask\");\n        ask.OnServerInvoke = (player, args) => \"pong \" + args[0];\n        ask.OnClientInvoke = args => \"client \" + args[0];\n    }\n\n    public override void Update(float dt)\n    {\n        _frame++;\n        if (_frame != 1) return;\n        var bus = (BindableEvent)Game.Workspace.FindFirstChild(\"Bus\");\n        bus.Fire(\"hello\", 2);\n        print(\"bus fired\");\n        var adder = (BindableFunction)Game.Workspace.FindFirstChild(\"Adder\");\n        print(\"invoke\", adder.Invoke(2, 3));\n        var net = (RemoteEvent)Game.Workspace.FindFirstChild(\"Net\");\n        net.FireServer(\"ping\", 1);\n        net.FireAllClients(\"news\");\n        print(\"queued\");\n        var ask = (RemoteFunction)Game.Workspace.FindFirstChild(\"Ask\");\n        print(\"ask\", ask.InvokeServer(\"x\"));\n    }\n}\n"
+     },
+     "children": []
+    },
+    {
+     "class": "Script",
+     "props": {
+      "Name": "Janitor",
+      "Source": "public class Janitor : TefraScript\n{\n    public override void Start()\n    {\n        var crate = (Part)Game.Workspace.FindFirstChild(\"Crate\");\n        crate.Destroying += () => print(\"crate removed\");\n        Debris.AddItem(crate, 0.5f);\n        var stray = Instance.New(\"Part\", Game.Workspace);\n        stray.Name = \"Stray\";\n        Debris.AddItem(stray, 0.1f);\n        stray.Destroy(); // already gone when its time comes: skipped\n        print(\"debris queued\");\n    }\n}\n"
+     },
+     "children": []
+    },
+    {
+     "class": "Script",
+     "props": {
+      "Name": "Saver",
+      "Source": "public class Saver : TefraScript\n{\n    public override void Start()\n    {\n        var store = DataStoreService.GetDataStore(\"PlayerData\");\n        store.SetAsync(\"coins\", 42);\n        store.SetAsync(\"name\", \"Ana\");\n        store.SetAsync(\"inventory\", new Dictionary<string, object> { { \"sword\", true }, { \"slots\", 4 } });\n        print(\"coins\", store.GetAsync(\"coins\"));\n        print(\"after increment\", store.IncrementAsync(\"coins\", 8));\n        print(\"updated\", store.UpdateAsync(\"name\", old => (string)old + \"!\"));\n        var inv = (Dictionary<string, object>)store.GetAsync(\"inventory\");\n        print(\"inventory\", inv[\"sword\"], inv[\"slots\"]);\n        store.RemoveAsync(\"name\");\n        print(\"removed\", store.GetAsync(\"name\") == null);\n\n        var board = DataStoreService.GetOrderedDataStore(\"Scores\");\n        board.SetAsync(\"ana\", 30);\n        board.SetAsync(\"bo\", 75);\n        board.SetAsync(\"cy\", 50);\n        foreach (var entry in board.GetSortedAsync(false, 2))\n            print(\"top\", entry.Key, entry.Value);\n    }\n}\n"
+     },
+     "children": []
+    },
+    {
+     "class": "Script",
+     "props": {
+      "Name": "JsonCheck",
+      "Source": "public class JsonCheck : TefraScript\n{\n    public override void Start()\n    {\n        string text = HttpService.JSONEncode(new Dictionary<string, object> { { \"a\", 1 }, { \"b\", new List<object> { \"x\", true } } });\n        var back = (Dictionary<string, object>)HttpService.JSONDecode(text);\n        print(\"decoded\", back[\"a\"], ((List<object>)back[\"b\"])[0]);\n        print(\"guid\", HttpService.GenerateGUID(false).Length);\n    }\n}\n"
+     },
+     "children": []
+    }
+   ]
+  },
+  {
+   "class": "ServerScriptService",
+   "props": {},
+   "children": []
+  }
+ ]
+}

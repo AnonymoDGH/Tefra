@@ -337,6 +337,14 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("EmitCount", Value::integer(0), "Pending burst (Emit(n) adds to it; consumed by the engine).",
            kPropHidden | kPropNotSerialized);
 
+    // ---- Messaging (handlers live in managed code: BindableEvent, RemoteEvent... in managed/Tefra.Engine) ----
+    b.cls("BindableEvent", "Instance", "Fires an event to the scripts that connected to it (Fire / Event).", "Events");
+    b.cls("BindableFunction", "Instance", "A function scripts call with Invoke; the answer comes from OnInvoke.",
+          "Events");
+    b.cls("RemoteEvent", "Instance", "Sends events between server and client scripts (both run in this process).",
+          "Events");
+    b.cls("RemoteFunction", "Instance", "Calls a function on the other side and returns its result.", "Events");
+
     // ---- Characters ------------------------------------------------------------------------------------------
     b.cls("Humanoid", "Instance", "Makes a Model a character: health, walking, jumping, animation state.",
           "Characters");

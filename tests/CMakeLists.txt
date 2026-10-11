@@ -39,10 +39,20 @@ add_test(NAME scripting_gameplay COMMAND tefra_run
     --place ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/gameplay.tefra --frames 1800 --press E:300:3 --require-scripts
     --expect-file ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/gameplay.expect)
 set_tests_properties(scripting_gameplay PROPERTIES LABELS "scripting" SKIP_RETURN_CODE 77)
+
+# Messaging and services (M3c): BindableEvent / BindableFunction, RemoteEvent / RemoteFunction loopback, Debris,
+# DataStore and HttpService. The datastores go to the build tree, not to the user's application data.
+add_test(NAME scripting_services COMMAND tefra_run
+    --place ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/services.tefra --frames 60 --require-scripts
+    --expect-file ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/services.expect)
+set_tests_properties(scripting_services PROPERTIES LABELS "scripting" SKIP_RETURN_CODE 77
+    ENVIRONMENT "TEFRA_DATASTORE_DIR=${CMAKE_BINARY_DIR}/tests/datastores")
 if(TEFRA_ASAN)
     # The .NET runtime keeps its heap for the life of the process; suppress only its modules (see lsan.supp).
     set(_tefra_lsan "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
     set_tests_properties(unit scripting_run scripting_game scripting_gameplay PROPERTIES ENVIRONMENT "${_tefra_lsan}")
+    set_tests_properties(scripting_services PROPERTIES ENVIRONMENT
+        "${_tefra_lsan};TEFRA_DATASTORE_DIR=${CMAKE_BINARY_DIR}/tests/datastores")
 endif()
 
 # MCP end-to-end (ADR-015): starts tefra_mcp_demo, speaks Streamable HTTP to it, then drives the stdio bridge.

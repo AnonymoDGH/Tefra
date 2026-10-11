@@ -1,0 +1,19 @@
+bus got	hello	2
+bus connected	2
+bus fired
+invoke	5
+debris queued
+queued
+server got	ping	1
+client got	news
+ask	pong x
+decoded	1	x
+guid	36
+coins	42
+after increment	50
+updated	Ana!
+inventory	True	4
+removed	True
+top	bo	75
+top	cy	50
+crate removed

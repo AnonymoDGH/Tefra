@@ -126,6 +126,39 @@ public class Hud : TefraScript   // LocalScript dentro de un ScreenGui de Starte
 - Un script destruido (o deshabilitado, o con error) deja de correr: sus manejadores de eventos y sus `Task.Wait` pendientes tampoco se ejecutan.
 - Limitación: un script con `namespace X;` (con ámbito de archivo) no compila; usa `namespace X { ... }`.
 
+### Mensajes, Debris y datos
+```csharp
+// Bindables: Fire y Invoke llaman a los manejadores en el momento.
+var bus = (BindableEvent)Game.Workspace.FindFirstChild("Bus");
+bus.Event += args => print("got", args[0]);
+bus.Fire("hello");
+var sum = (BindableFunction)Game.Workspace.FindFirstChild("Adder");
+sum.OnInvoke = args => (int)args[0] + (int)args[1];
+int r = (int)sum.Invoke(2, 3);
+
+// Remotes (servidor y cliente comparten proceso): el mensaje llega en el paso siguiente.
+var net = (RemoteEvent)Game.Workspace.FindFirstChild("Net");
+net.OnServerEvent += (player, args) => print("server", args[0]);
+net.OnClientEvent += args => print("client", args[0]);
+net.FireServer("ping");          // OnServerEvent (player = Players.LocalPlayer)
+net.FireAllClients("news");      // OnClientEvent
+
+Debris.AddItem(part, 2f);        // destruye la pieza a los 2 s de juego
+
+var store = DataStoreService.GetDataStore("PlayerData");
+store.SetAsync("coins", 42);
+double coins = (double)store.GetAsync("coins");   // los números vuelven como double
+store.IncrementAsync("coins", 8);
+var board = DataStoreService.GetOrderedDataStore("Scores");
+var top = board.GetSortedAsync(false, 10);        // (Key, Value) de mayor a menor
+
+string json = HttpService.JSONEncode(new Dictionary<string, object> { { "a", 1 } });
+```
+- `RemoteFunction` (`InvokeServer` / `InvokeClient`, con `OnServerInvoke` / `OnClientInvoke`) responde de forma síncrona.
+- `FireClient(player, ...)` llega al único cliente del proceso aunque `player` no sea el local.
+- `DataStore`: un fichero JSON por almacén en `%APPDATA%/Tefra/datastores` (o `~/.config/Tefra/datastores`); `TEFRA_DATASTORE_DIR` cambia la carpeta. Cada operación lee y escribe el fichero, así que no hay caché entre llamadas. El almacén se identifica solo por su nombre: dos juegos con el mismo nombre comparten el fichero. Las llamadas son síncronas (no hay `await`).
+- Al parar Play se olvidan todos los manejadores de estos mensajes y la cola de Debris.
+
 ## Efectos (ParticleEmitter)
 Un `ParticleEmitter` bajo una Part emite partículas de verdad (billboards en GPU, ordenadas, *soft particles*, máscara reactiva para el TAA). Se ven también en modo edición.
 - `Texture`: `builtin:fire`, `smoke`, `spark`, `star`, `snow`, `ring`, `circle`.
