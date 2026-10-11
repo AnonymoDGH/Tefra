@@ -1,10 +1,19 @@
-// Mirror of engine/scripting/include/tefra/scripting/abi.h. Keep the layouts identical; ABI version 2.
+// Mirror of engine/scripting/include/tefra/scripting/abi.h. Keep the layouts identical; ABI version 3.
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Tefra
 {
+    // Instance filter of a spatial query (C: TefraFilter). 16 bytes on LP64: pointer, uint32, int32.
+    [StructLayout(LayoutKind.Sequential)]
+    internal unsafe struct TefraFilter
+    {
+        public ulong* ids;
+        public uint count;
+        public int include; // 1 = FilterType.Include, 0 = Exclude
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     internal unsafe struct TefraValue
     {
@@ -61,11 +70,17 @@ namespace Tefra
         public delegate* unmanaged<ulong, ulong, ulong> clone;
         public delegate* unmanaged<byte*, ulong> find_path;
         public delegate* unmanaged<int, byte*, void> log;
-        public delegate* unmanaged<double*, double*, double, double*, ulong> raycast;
+        public delegate* unmanaged<double*, double*, double, TefraFilter*, double*, ulong> raycast;
         public delegate* unmanaged<int, int> input_key_down;
         public delegate* unmanaged<int, int> input_mouse_down;
         public delegate* unmanaged<double*, int> input_mouse_location;
         public delegate* unmanaged<ulong> root;
+        public delegate* unmanaged<double*, double, double*, TefraFilter*, double*, ulong> spherecast;
+        public delegate* unmanaged<double*, double*, double*, double*, TefraFilter*, double*, ulong> blockcast;
+        public delegate* unmanaged<int, double*, ulong, TefraFilter*, uint, ulong*, uint, uint> overlap;
+        public delegate* unmanaged<ulong, ulong*, uint, uint> touching_parts;
+        public delegate* unmanaged<ulong, double*, int, int> apply_impulse;
+        public delegate* unmanaged<ulong, double> mass;
     }
 
     // Managed function table (C: TefraManagedApi), filled by Bridge.Init.
@@ -84,7 +99,7 @@ namespace Tefra
     // copied out on the way back, so no pointer outlives the call that produced it.
     internal static unsafe class Native
     {
-        public const uint AbiVersion = 2;
+        public const uint AbiVersion = 3;
         public static NativeApi* Api;
 
         public static bool IsReady => Api != null;
@@ -197,17 +212,103 @@ namespace Tefra
 
         public static ulong Root() => Api->root();
 
+        // Filter ids of a query (null = no filter) and its FilterType as the C flag. The ids stay pinned by the caller.
+        internal static ulong[] FilterIds(QueryParams p, out int include)
+        {
+            include = p != null && p.FilterType == FilterType.Include ? 1 : 0;
+            return p == null ? new ulong[0] : p.FilterIds();
+        }
+
         // Returns the hit instance id (0 = miss) and fills position, normal and distance.
         public static ulong Raycast(double ox, double oy, double oz, double dx, double dy, double dz, double maxDistance,
-            out double[] hit)
+            QueryParams p, out double[] hit)
         {
             hit = new double[7];
             double* o = stackalloc double[3];
             double* d = stackalloc double[3];
             o[0] = ox; o[1] = oy; o[2] = oz;
             d[0] = dx; d[1] = dy; d[2] = dz;
-            fixed (double* h = hit) return Api->raycast(o, d, maxDistance, h);
+            int include;
+            ulong[] ids = FilterIds(p, out include);
+            fixed (ulong* idp = ids)
+            fixed (double* h = hit)
+            {
+                TefraFilter f = new TefraFilter { ids = idp, count = (uint)ids.Length, include = include };
+                return Api->raycast(o, d, maxDistance, &f, h);
+            }
         }
+
+        public static ulong Spherecast(Vector3 origin, float radius, Vector3 direction, QueryParams p, out double[] hit)
+        {
+            hit = new double[7];
+            double* o = stackalloc double[3];
+            double* d = stackalloc double[3];
+            o[0] = origin.X; o[1] = origin.Y; o[2] = origin.Z;
+            d[0] = direction.X; d[1] = direction.Y; d[2] = direction.Z;
+            int include;
+            ulong[] ids = FilterIds(p, out include);
+            fixed (ulong* idp = ids)
+            fixed (double* h = hit)
+            {
+                TefraFilter f = new TefraFilter { ids = idp, count = (uint)ids.Length, include = include };
+                return Api->spherecast(o, radius, d, &f, h);
+            }
+        }
+
+        public static ulong Blockcast(Vector3 center, Vector3 orientation, Vector3 size, Vector3 direction, QueryParams p,
+            out double[] hit)
+        {
+            hit = new double[7];
+            double* c = stackalloc double[3];
+            double* r = stackalloc double[3];
+            double* s = stackalloc double[3];
+            double* d = stackalloc double[3];
+            c[0] = center.X; c[1] = center.Y; c[2] = center.Z;
+            r[0] = orientation.X; r[1] = orientation.Y; r[2] = orientation.Z;
+            s[0] = size.X; s[1] = size.Y; s[2] = size.Z;
+            d[0] = direction.X; d[1] = direction.Y; d[2] = direction.Z;
+            int include;
+            ulong[] ids = FilterIds(p, out include);
+            fixed (ulong* idp = ids)
+            fixed (double* h = hit)
+            {
+                TefraFilter f = new TefraFilter { ids = idp, count = (uint)ids.Length, include = include };
+                return Api->blockcast(c, r, s, d, &f, h);
+            }
+        }
+
+        // kind: 0 Radius, 1 Box, 2 Part. Fills outIds with up to outIds.Length matches and returns how many matched.
+        public static uint Overlap(int kind, Vector3 center, Vector3 orientation, Vector3 size, float radius, ulong partId,
+            QueryParams p, int maxParts, ulong[] outIds)
+        {
+            double[] geom =
+            {
+                center.X, center.Y, center.Z, orientation.X, orientation.Y, orientation.Z, size.X, size.Y, size.Z, radius
+            };
+            int include;
+            ulong[] ids = FilterIds(p, out include);
+            fixed (double* g = geom)
+            fixed (ulong* idp = ids)
+            fixed (ulong* outp = outIds)
+            {
+                TefraFilter f = new TefraFilter { ids = idp, count = (uint)ids.Length, include = include };
+                return Api->overlap(kind, g, partId, &f, (uint)Math.Max(maxParts, 0), outp, (uint)outIds.Length);
+            }
+        }
+
+        public static uint TouchingParts(ulong partId, ulong[] outIds)
+        {
+            fixed (ulong* outp = outIds) return Api->touching_parts(partId, outp, (uint)outIds.Length);
+        }
+
+        public static bool ApplyImpulse(ulong partId, Vector3 value, bool angular)
+        {
+            double* v = stackalloc double[3];
+            v[0] = value.X; v[1] = value.Y; v[2] = value.Z;
+            return Api->apply_impulse(partId, v, angular ? 1 : 0) != 0;
+        }
+
+        public static double Mass(ulong partId) => Api->mass(partId);
 
         public static bool KeyDown(int keyCode) => Api->input_key_down(keyCode) != 0;
 

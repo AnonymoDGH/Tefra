@@ -155,6 +155,8 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("Friction", Value::number(0.5), "Coulomb friction coefficient.");
     b.prop("Elasticity", Value::number(0.3), "Restitution (bounciness).");
     b.prop("AssemblyLinearVelocity", Value::vector3({0, 0, 0}), "Velocity (m/s).", kPropNotSerialized);
+    b.prop("AssemblyAngularVelocity", Value::vector3({0, 0, 0}), "Angular velocity (rad/s, world axes).",
+           kPropNotSerialized);
 
     b.cls("Part", "BasePart", "A primitive shape: block, ball, cylinder or wedge.", "Parts");
     b.group("Data").prop("Shape", Value::enumeration(0), "Primitive shape.", 0, shape);

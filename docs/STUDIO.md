@@ -120,7 +120,11 @@ public class Hud : TefraScript   // LocalScript dentro de un ScreenGui de Starte
 }
 ```
 - Señales: `Touched`/`TouchEnded` (piezas y personajes; un sensor con `CanCollide = false` también las recibe), `Activated`/`MouseButton1Click` (botones), `Died`/`HealthChanged` (Humanoid), `CharacterAdded`/`CharacterRemoving` (Player), `Ended` (Sound).
-- `Workspace.Raycast(origen, dirección, distancia)` devuelve el primer sólido o `null`.
+- `Workspace.Raycast(origen, dirección, distancia)` devuelve el primer sólido o `null`. Con `RaycastParams` filtra por instancias (`FilterDescendantsInstances`, `FilterType.Exclude` por defecto o `Include`; filtra también a sus descendientes).
+- Consultas de volumen (`OverlapParams`, con `MaxParts`): `GetPartBoundsInRadius(centro, radio)`, `GetPartBoundsInBox(centro, tamaño)` o `GetPartBoundsInBox(centro, orientaciónGrados, tamaño)`, y `GetPartsInPart(pieza)` (no incluye la propia pieza). Devuelven `BasePart[]`. Usan la caja orientada de cada pieza (una `Ball` cuenta como su esfera inscrita en el radio); no hay `CFrame`, así que la orientación va como Vector3 en grados (Y, X, Z).
+- Barridos: `Workspace.Spherecast(origen, radio, dirección, params)` y `Workspace.Blockcast(centro, orientaciónGrados, tamaño, dirección, params)`. La longitud de la dirección es la distancia. Son barridos de forma reales de Jolt.
+- Física de piezas: `ApplyImpulse(v)` (kg·m/s) y `ApplyAngularImpulse(v)` se aplican en el siguiente paso a piezas sin anclar; `GetMass()` = Density × volumen; `AssemblyAngularVelocity` se puede escribir; `GetTouchingParts()` devuelve las piezas en contacto ahora (incluidos sensores y las piezas que toca un personaje).
+- Ejemplo de prueba: `tests/scripting/fixtures/queries.tefra` (`scripting_queries` en CTest).
 - Para matar o curar: `humanoid.Health = 0` o `humanoid.TakeDamage(10)`. Una caída fuera del mundo también mata.
 - Para plataformas que se mueven: cambia `Position` cada paso desde un script; la pieza se vuelve cinemática y lleva a quien esté encima.
 - Un script destruido (o deshabilitado, o con error) deja de correr: sus manejadores de eventos y sus `Task.Wait` pendientes tampoco se ejecutan.

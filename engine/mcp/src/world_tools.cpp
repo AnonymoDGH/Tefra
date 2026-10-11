@@ -459,7 +459,7 @@ MANY OBJECTS: use create_instances with an array (up to 5000 per call) instead o
 SCRIPTS: Script / LocalScript / ModuleScript hold C# (.NET 8) compiled when Play starts. A script is a class
   deriving from TefraScript with Start() / Update(float dt). API: Instance.New, FindFirstChild, Game.Workspace,
   Players.LocalPlayer, BasePart.Touched, Humanoid.Health/Died, UserInputService, Sound.Play, RunService.Heartbeat,
-  Task.Wait, TextLabel.Text... Scripts do not run in edit mode: generate edit-time content with create_instances.
+  Task.Wait, TextLabel.Text... Spatial queries: Workspace.Raycast/Spherecast/Blockcast (RaycastParams), GetPartBoundsInRadius/Box and GetPartsInPart (OverlapParams), BasePart.ApplyImpulse/GetMass/GetTouchingParts. Scripts do not run in edit mode: generate edit-time content with create_instances.
 
 EFFECTS: ParticleEmitter under a part (real GPU particles, visible in edit mode too). Texture = builtin:fire /
   smoke / spark / star / snow / ring / circle; Rate, Lifetime, Speed, SpreadAngle, Size->SizeEnd, Color->ColorEnd,

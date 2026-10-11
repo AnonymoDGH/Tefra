@@ -1,0 +1,134 @@
+{
+ "format": "tefra-place",
+ "version": 1,
+ "services": [
+  {
+   "class": "Workspace",
+   "props": {
+    "FallenPartsDestroyHeight": -200
+   },
+   "children": [
+    {
+     "class": "Part",
+     "props": {
+      "Name": "Floor",
+      "Position": [
+       0,
+       -0.5,
+       0
+      ],
+      "Size": [
+       80,
+       1,
+       80
+      ],
+      "Anchored": true,
+      "CanCollide": true
+     }
+    },
+    {
+     "class": "Part",
+     "props": {
+      "Name": "Crate",
+      "Position": [
+       5,
+       1,
+       0
+      ],
+      "Size": [
+       2,
+       2,
+       2
+      ],
+      "Anchored": true,
+      "CanCollide": true
+     }
+    },
+    {
+     "class": "Part",
+     "props": {
+      "Name": "Zone",
+      "Position": [
+       5,
+       1.5,
+       0
+      ],
+      "Size": [
+       2,
+       2,
+       2
+      ],
+      "Anchored": true,
+      "CanCollide": false
+     }
+    },
+    {
+     "class": "Part",
+     "props": {
+      "Name": "Pillar",
+      "Position": [
+       -5,
+       2,
+       0
+      ],
+      "Size": [
+       2,
+       4,
+       2
+      ],
+      "Anchored": true,
+      "CanCollide": true
+     }
+    },
+    {
+     "class": "Part",
+     "props": {
+      "Name": "Tilted",
+      "Position": [
+       -10,
+       1,
+       0
+      ],
+      "Size": [
+       2,
+       2,
+       2
+      ],
+      "Anchored": true,
+      "CanCollide": true,
+      "Orientation": [
+       0,
+       45,
+       0
+      ]
+     }
+    },
+    {
+     "class": "Part",
+     "props": {
+      "Name": "Mover",
+      "Position": [
+       0,
+       10,
+       10
+      ],
+      "Size": [
+       1,
+       1,
+       1
+      ],
+      "Anchored": false,
+      "CanCollide": true
+     }
+    },
+    {
+     "class": "Script",
+     "props": {
+      "Name": "QueryScript",
+      "Source": "using Tefra;\n\npublic class QueryTest : TefraScript\n{\n    private BasePart mover;\n    private float t;\n    private bool checkedUp;\n    private bool checkedTouch;\n\n    private static string Names(BasePart[] parts)\n    {\n        var names = new System.Collections.Generic.List<string>();\n        foreach (BasePart p in parts) names.Add(p.Name);\n        names.Sort();\n        return string.Join(\",\", names);\n    }\n\n    public override void Start()\n    {\n        Instance crate = Workspace.FindFirstChild(\"Crate\");\n        Instance zone = Workspace.FindFirstChild(\"Zone\");\n        mover = Workspace.FindFirstChild(\"Mover\") as BasePart;\n\n        Debug.Log(\"radius \" + Names(Workspace.GetPartBoundsInRadius(new Vector3(4.5f, 1f, 0f), 0.6f)));\n        var exclude = new OverlapParams();\n        exclude.FilterDescendantsInstances.Add(crate);\n        Debug.Log(\"radius filtered \" + Names(Workspace.GetPartBoundsInRadius(new Vector3(4.5f, 1f, 0f), 0.6f, exclude)));\n        Debug.Log(\"box \" + Names(Workspace.GetPartBoundsInBox(new Vector3(-10f, 1f, 0f), new Vector3(1f, 1f, 1f))));\n        Debug.Log(\"inpart \" + Names(Workspace.GetPartsInPart(zone as BasePart)));\n\n        var hit = Workspace.Raycast(new Vector3(5f, 10f, 0f), new Vector3(0f, -1f, 0f), 100f);\n        Debug.Log(\"ray \" + (hit == null ? \"miss\" : hit.Instance.Name + \" \" + hit.Distance.ToString(\"0.0\")));\n        var rayExclude = new RaycastParams();\n        rayExclude.FilterDescendantsInstances.Add(crate);\n        hit = Workspace.Raycast(new Vector3(5f, 10f, 0f), new Vector3(0f, -1f, 0f), 100f, rayExclude);\n        Debug.Log(\"ray filtered \" + (hit == null ? \"miss\" : hit.Instance.Name + \" \" + hit.Distance.ToString(\"0.0\")));\n\n        var sphere = Workspace.Spherecast(new Vector3(5f, 10f, 0f), 0.5f, new Vector3(0f, -20f, 0f));\n        Debug.Log(\"sphere \" + (sphere == null ? \"miss\" : sphere.Instance.Name + \" \" + sphere.Distance.ToString(\"0.0\")));\n        var sphereExclude = new RaycastParams();\n        sphereExclude.FilterDescendantsInstances.Add(crate);\n        sphere = Workspace.Spherecast(new Vector3(5f, 10f, 0f), 0.5f, new Vector3(0f, -20f, 0f), sphereExclude);\n        Debug.Log(\"sphere filtered \" + (sphere == null ? \"miss\" : sphere.Instance.Name + \" \" + sphere.Distance.ToString(\"0.0\")));\n\n        var block = Workspace.Blockcast(new Vector3(-5f, 10f, 0f), new Vector3(0f, 0f, 0f), new Vector3(1f, 1f, 1f), new Vector3(0f, -20f, 0f));\n        Debug.Log(\"block \" + (block == null ? \"miss\" : block.Instance.Name + \" \" + block.Distance.ToString(\"0.0\")));\n\n        if (mover != null)\n        {\n            Debug.Log(\"mass \" + mover.GetMass().ToString(\"0\"));\n            mover.ApplyImpulse(new Vector3(0f, 3500f, 0f)); // 700 kg x 5 m/s upwards\n        }\n    }\n\n    public override void Update(float dt)\n    {\n        t += dt;\n        if (mover == null) return;\n        if (!checkedUp && t >= 0.1f)\n        {\n            checkedUp = true;\n            Debug.Log(mover.Position.Y > 10f ? \"mover up\" : \"mover down\");\n        }\n        if (!checkedTouch && t >= 4f)\n        {\n            checkedTouch = true;\n            Debug.Log(\"touching \" + Names(mover.GetTouchingParts()));\n        }\n    }\n}\n"
+     }
+    }
+   ]
+  }
+ ]
+}

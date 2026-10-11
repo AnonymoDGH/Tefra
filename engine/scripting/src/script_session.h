@@ -19,8 +19,8 @@ void set_session(world::DataModel* model, const LogCallback* log);
 // The input snapshot read by UserInputService (nullptr = nothing is held).
 void set_input(const InputState* input);
 
-// The raycaster of the host (nullptr = raycasts miss).
-void set_raycaster(const RaycastFn* fn);
+// The physics hooks of the host (nullptr = queries miss).
+void set_physics_hooks(const PhysicsHooks* hooks);
 
 // The function table handed to managed code in Init.
 const TefraNativeApi* native_table();
