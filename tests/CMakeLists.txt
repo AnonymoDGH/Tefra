@@ -33,7 +33,7 @@ endif()
 
 # GPU integration tests (lavapipe in CI). Golden images live in tests/golden.
 tefra_add_executable(tefra_gpu_tests
-    SOURCES gpu/main.cpp gpu/test_testpattern.cpp
+    SOURCES gpu/main.cpp gpu/test_testpattern.cpp gpu/test_landscape_gpu.cpp
     DEPS tefra_app tefra_doctest)
 target_compile_definitions(tefra_gpu_tests PRIVATE TEFRA_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/golden")
 add_test(NAME gpu COMMAND tefra_gpu_tests)
