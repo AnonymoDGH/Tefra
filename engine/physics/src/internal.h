@@ -140,6 +140,12 @@ struct WorldImpl {
     std::unordered_set<u64> kinematic_ids;
     std::unordered_set<u64> moving_kinematic; // moved by the last sync: their velocity is cleared when they stop
     std::vector<TouchPair> touch_queue;       // character contacts found by scan_character_touches()
+    struct PendingImpulse {
+        u64 id = 0;
+        vec3 value{};
+        bool angular = false;
+    };
+    std::vector<PendingImpulse> impulses; // queued by apply_impulse(), applied by sync()
     f32 accumulator = 0.0f;
     bool writing_back = false;
     bool update_error_logged = false;
@@ -171,6 +177,11 @@ struct CharacterImpl {
     vec3 last_root_pos{};
     std::vector<u64> touching; // part ids the character touched at the last scan (Touched / TouchEnded)
 };
+
+// Sweeps `shape` (rotated by `rot`, its centre starting at `center`) along `direction` for max_distance metres. Used by
+// spherecast and blockcast. Defined in physics_world.cpp.
+bool cast_shape(WorldImpl& w, JPH::RefConst<JPH::Shape> shape, vec3 center, quat rot, vec3 direction, f32 max_distance,
+                RaycastResult& out, const world::QueryFilter* filter);
 
 // Defined in character.cpp.
 void character_pre_step(CharacterImpl& c, WorldImpl& w, f32 dt);

@@ -71,6 +71,7 @@ namespace Tefra
         private static readonly PropRef FrictionP = new PropRef("BasePart", "Friction");
         private static readonly PropRef ElasticityP = new PropRef("BasePart", "Elasticity");
         private static readonly PropRef VelocityP = new PropRef("BasePart", "AssemblyLinearVelocity");
+        private static readonly PropRef AngularVelocityP = new PropRef("BasePart", "AssemblyAngularVelocity");
 
         internal BasePart(ulong id) : base(id) { }
 
@@ -108,7 +109,60 @@ namespace Tefra
         public float Density { get => GetFloat(DensityP); set => SetFloat(DensityP, value); }
         public float Friction { get => GetFloat(FrictionP); set => SetFloat(FrictionP, value); }
         public float Elasticity { get => GetFloat(ElasticityP); set => SetFloat(ElasticityP, value); }
+        /// <summary>Velocity of an unanchored part (m/s). Ignored for anchored parts.</summary>
         public Vector3 AssemblyLinearVelocity { get => GetVector3(VelocityP); set => SetVector3(VelocityP, value); }
+        /// <summary>Spin of an unanchored part (rad/s, world axes). Ignored for anchored parts.</summary>
+        public Vector3 AssemblyAngularVelocity { get => GetVector3(AngularVelocityP); set => SetVector3(AngularVelocityP, value); }
+
+        /// <summary>
+        /// Adds a linear impulse (kg·m/s) to an unanchored part; it applies at the next physics step. Does nothing for
+        /// anchored parts or outside Play mode.
+        /// </summary>
+        public void ApplyImpulse(Vector3 impulse) => Native.ApplyImpulse(Id, impulse, false);
+
+        /// <summary>Adds an angular impulse (kg·m²/s, world axes) to an unanchored part.</summary>
+        public void ApplyAngularImpulse(Vector3 impulse) => Native.ApplyImpulse(Id, impulse, true);
+
+        /// <summary>Mass in kg: Density times the volume of the part's shape.</summary>
+        public float GetMass() => (float)Native.Mass(Id);
+
+        /// <summary>
+        /// Parts in contact with this one right now (sensors included). For a character's HumanoidRootPart, the parts
+        /// the character touches. Empty outside Play mode.
+        /// </summary>
+        public BasePart[] GetTouchingParts()
+        {
+            ulong[] buf = new ulong[32];
+            uint total = Native.TouchingParts(Id, buf);
+            if (total > buf.Length)
+            {
+                buf = new ulong[total];
+                total = Native.TouchingParts(Id, buf);
+            }
+            return ToParts(buf, total);
+        }
+
+        // Runs an overlap query (kind 0 Radius, 1 Box, 2 Part) and returns the matching parts.
+        internal static BasePart[] Overlap(int kind, Vector3 center, Vector3 orientation, Vector3 size, float radius,
+            ulong partId, OverlapParams p)
+        {
+            ulong[] buf = new ulong[64];
+            uint total = Native.Overlap(kind, center, orientation, size, radius, partId, p, p == null ? 0 : p.MaxParts, buf);
+            if (total > buf.Length)
+            {
+                buf = new ulong[total];
+                total = Native.Overlap(kind, center, orientation, size, radius, partId, p, p == null ? 0 : p.MaxParts, buf);
+            }
+            return ToParts(buf, total);
+        }
+
+        private static BasePart[] ToParts(ulong[] ids, uint total)
+        {
+            var list = new List<BasePart>((int)Math.Min(total, (uint)ids.Length));
+            for (int i = 0; i < ids.Length && i < total; ++i)
+                if (Instance.FromId(ids[i]) is BasePart part) list.Add(part);
+            return list.ToArray();
+        }
 
         /// <summary>Fires once when another part (or a character) starts touching this one. The argument is the other part.
         /// Characters report the touch with their HumanoidRootPart; sensors (CanCollide = false, CanTouch = true) report too.</summary>
@@ -213,9 +267,74 @@ namespace Tefra
         /// </summary>
         public RaycastResult Raycast(Vector3 origin, Vector3 direction, float maxDistance = 1000f)
         {
+            return Raycast(origin, direction, maxDistance, null);
+        }
+
+        /// <summary>Raycast that skips the parts that params filters out (FilterDescendantsInstances, FilterType).</summary>
+        public RaycastResult Raycast(Vector3 origin, Vector3 direction, RaycastParams p)
+        {
+            return Raycast(origin, direction, 1000f, p);
+        }
+
+        public RaycastResult Raycast(Vector3 origin, Vector3 direction, float maxDistance, RaycastParams p)
+        {
             double[] hit;
-            ulong id = Native.Raycast(origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z, maxDistance, out hit);
-            if (id == 0) return null;
+            ulong id = Native.Raycast(origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z, maxDistance, p, out hit);
+            return ToResult(id, hit);
+        }
+
+        /// <summary>
+        /// Closest solid part hit by a sphere of the given radius moving from origin along direction. The length of
+        /// direction is the distance. Returns null on a miss. The contact point is on the hit part's surface.
+        /// </summary>
+        public RaycastResult Spherecast(Vector3 origin, float radius, Vector3 direction, RaycastParams p = null)
+        {
+            double[] hit;
+            return ToResult(Native.Spherecast(origin, radius, direction, p, out hit), hit);
+        }
+
+        /// <summary>
+        /// Closest solid part hit by a box (center, orientation in degrees Y, X, Z, size) moving along direction. The
+        /// length of direction is the distance. Returns null on a miss.
+        /// </summary>
+        public RaycastResult Blockcast(Vector3 center, Vector3 orientationDegrees, Vector3 size, Vector3 direction,
+            RaycastParams p = null)
+        {
+            double[] hit;
+            return ToResult(Native.Blockcast(center, orientationDegrees, size, direction, p, out hit), hit);
+        }
+
+        /// <summary>Parts whose box touches the sphere (center, radius). A Ball counts as its inscribed sphere.</summary>
+        public BasePart[] GetPartBoundsInRadius(Vector3 center, float radius, OverlapParams p = null)
+        {
+            return BasePart.Overlap(0, center, Vector3.Zero, Vector3.Zero, radius, 0, p);
+        }
+
+        /// <summary>Parts whose box overlaps the axis-aligned box centered at center with the given size.</summary>
+        public BasePart[] GetPartBoundsInBox(Vector3 center, Vector3 size, OverlapParams p = null)
+        {
+            return BasePart.Overlap(1, center, Vector3.Zero, size, 0, 0, p);
+        }
+
+        /// <summary>Parts whose box overlaps the box centered at center, rotated by orientationDegrees (Y, X, Z).</summary>
+        public BasePart[] GetPartBoundsInBox(Vector3 center, Vector3 orientationDegrees, Vector3 size, OverlapParams p = null)
+        {
+            return BasePart.Overlap(1, center, orientationDegrees, size, 0, 0, p);
+        }
+
+        /// <summary>
+        /// Parts whose box overlaps the box of part. The part itself is not returned. Boxes only (a Ball counts as
+        /// its box).
+        /// </summary>
+        public BasePart[] GetPartsInPart(BasePart part, OverlapParams p = null)
+        {
+            if (part == null) return new BasePart[0];
+            return BasePart.Overlap(2, Vector3.Zero, Vector3.Zero, Vector3.Zero, 0, part.Id, p);
+        }
+
+        private static RaycastResult ToResult(ulong id, double[] hit)
+        {
+            if (id == 0 || hit == null) return null;
             return new RaycastResult(
                 Instance.FromId(id),
                 new Vector3((float)hit[0], (float)hit[1], (float)hit[2]),
@@ -224,7 +343,46 @@ namespace Tefra
         }
     }
 
-    /// <summary>Answer of Workspace.Raycast.</summary>
+    /// <summary>Whether FilterDescendantsInstances lists the parts to ignore (Exclude) or the only ones to hit (Include).</summary>
+    public enum FilterType
+    {
+        Exclude, Include
+    }
+
+    /// <summary>
+    /// Filter shared by RaycastParams and OverlapParams (Roblox semantics). A part is filtered by its ancestry: the part
+    /// or one of its ancestors must be listed. Exclude (default) ignores listed parts; Include hits only listed parts,
+    /// so an Include filter with an empty list hits nothing.
+    /// </summary>
+    public abstract class QueryParams
+    {
+        /// <summary>Instances whose parts (and their descendants) are filtered by FilterType.</summary>
+        public List<Instance> FilterDescendantsInstances { get; set; } = new List<Instance>();
+        public FilterType FilterType { get; set; } = FilterType.Exclude;
+
+        internal ulong[] FilterIds()
+        {
+            var ids = new List<ulong>();
+            if (FilterDescendantsInstances != null)
+                foreach (Instance i in FilterDescendantsInstances)
+                    if (i != null) ids.Add(i.Id);
+            return ids.ToArray();
+        }
+    }
+
+    /// <summary>Parameters of Workspace.Raycast, Spherecast and Blockcast.</summary>
+    public sealed class RaycastParams : QueryParams
+    {
+    }
+
+    /// <summary>Parameters of Workspace.GetPartBoundsInRadius / GetPartBoundsInBox / GetPartsInPart.</summary>
+    public sealed class OverlapParams : QueryParams
+    {
+        /// <summary>At most this many parts are returned; 0 = no limit.</summary>
+        public int MaxParts { get; set; } = 0;
+    }
+
+    /// <summary>Answer of Workspace.Raycast, Spherecast and Blockcast.</summary>
     public sealed class RaycastResult
     {
         /// <summary>The part that was hit.</summary>

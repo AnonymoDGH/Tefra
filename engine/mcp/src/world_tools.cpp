@@ -470,6 +470,8 @@ SCRIPTS: Script / LocalScript / ModuleScript hold C# (.NET 8) compiled when Play
   Task.Wait, TweenService (Create, Play, Completed), TextLabel.Text... Scripts do not run in edit mode: generate
   edit-time content with create_instances.
   Messaging: BindableEvent/BindableFunction (run at once), RemoteEvent/RemoteFunction (loopback, delivered at the next step), Debris.AddItem(item, s), DataStoreService.GetDataStore(name).SetAsync/GetAsync, HttpService.JSONEncode/JSONDecode.
+  Spatial queries: Workspace.Raycast/Spherecast/Blockcast (RaycastParams), GetPartBoundsInRadius/Box and GetPartsInPart (OverlapParams), BasePart.ApplyImpulse/GetMass/GetTouchingParts.
+  Also: CFrame, UDim2, NumberSequence/ColorSequence, SetAttribute/GetAttribute, CollectionService tags.
 
 EFFECTS: ParticleEmitter under a part (real GPU particles, visible in edit mode too). Texture = builtin:fire /
   smoke / spark / star / snow / ring / circle; Rate, Lifetime, Speed, SpreadAngle, Size->SizeEnd, Color->ColorEnd,

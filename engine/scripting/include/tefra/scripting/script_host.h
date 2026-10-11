@@ -10,7 +10,7 @@
 //   if (!host.init(&err)) { /* no .NET: continue without scripts, show err in the Output */ }
 //   host.set_log_callback([](LogLevel lvl, std::string_view msg) { ... });
 //   host.set_input(&input);            // optional: UserInputService reads this snapshot
-//   host.set_raycaster(raycast_fn);    // optional: Workspace:Raycast
+//   host.set_physics(hooks);           // optional: Workspace:Raycast, GetPartBounds*, BasePart:ApplyImpulse...
 //   host.start(model);                 // compiles and runs Start() of the scripts that should run
 //   while (running) host.step(dt);     // structure changes, Heartbeat, tasks, Update(), then the queued events
 //   host.stop();                       // drops the scripts; the DataModel keeps whatever the scripts changed
@@ -24,6 +24,7 @@
 #include "tefra/core/types.h"
 #include "tefra/scripting/abi.h"
 #include "tefra/world/datamodel.h"
+#include "tefra/world/query.h"
 
 #include <deque>
 #include <functional>
@@ -45,7 +46,34 @@ struct RayHit {
 };
 
 // Returns true and fills `out` for the closest solid part along the ray (sensors excluded), false on a miss.
-using RaycastFn = std::function<bool(vec3 origin, vec3 direction, f32 max_distance, RayHit& out)>;
+using RaycastFn =
+    std::function<bool(vec3 origin, vec3 direction, f32 max_distance, const world::QueryFilter& filter, RayHit& out)>;
+// Spherecast (origin, radius, direction: its length is the distance) and Blockcast (center, orientation in degrees,
+// size, direction). Same answer as RaycastFn.
+using SpherecastFn =
+    std::function<bool(vec3 origin, f32 radius, vec3 direction, const world::QueryFilter& filter, RayHit& out)>;
+using BlockcastFn = std::function<bool(vec3 center, vec3 orientation_deg, vec3 size, vec3 direction,
+                                       const world::QueryFilter& filter, RayHit& out)>;
+// Appends the parts matching the query (Workspace:GetPartBoundsInRadius and friends) to `out`.
+using OverlapFn = std::function<void(const world::OverlapRequest& query, std::vector<world::Instance*>& out)>;
+// Parts in contact with `part` (BasePart:GetTouchingParts).
+using TouchingFn = std::function<void(const world::Instance& part, std::vector<world::Instance*>& out)>;
+// Queues an impulse on a part (BasePart:ApplyImpulse / ApplyAngularImpulse). False when nothing was queued.
+using ImpulseFn = std::function<bool(world::Instance& part, vec3 value, bool angular)>;
+// Mass of a part in kg (BasePart:GetMass).
+using MassFn = std::function<f32(const world::Instance& part)>;
+
+// The physics functions behind the spatial queries and the BasePart methods. An empty function makes its query miss
+// or return nothing (no game running). Set with ScriptHost::set_physics.
+struct PhysicsHooks {
+    RaycastFn raycast;
+    SpherecastFn spherecast;
+    BlockcastFn blockcast;
+    OverlapFn overlap;
+    TouchingFn touching;
+    ImpulseFn impulse;
+    MassFn mass;
+};
 
 class ScriptHost {
   public:
@@ -69,8 +97,9 @@ class ScriptHost {
     // session runs; nullptr = no input (every key up). Safe to call before or during a session.
     void set_input(const InputState* input);
 
-    // The function behind Workspace:Raycast. nullptr = no raycasts (they miss). Safe to call during a session.
-    void set_raycaster(RaycastFn fn);
+    // The physics functions behind Workspace:Raycast, Spherecast, Blockcast, GetPartBounds* and the BasePart methods.
+    // Empty functions = queries miss. Safe to call during a session.
+    void set_physics(PhysicsHooks hooks);
 
     // Starts a play session on `model`: compiles every script that should run and calls Start() on each.
     //   Script:      under Workspace or ServerScriptService.
@@ -99,7 +128,7 @@ class ScriptHost {
     usize listener_ = 0;
     std::vector<TefraEvent> events_;  // queued by DataModel listeners, delivered to managed code once per step
     std::deque<std::string> strings_; // names and texts of queued signals (deque: pointers stay valid on push)
-    RaycastFn raycaster_;             // read by the native raycast entry while a session runs
+    PhysicsHooks hooks_;              // read by the native query entries while a session runs
 };
 
 } // namespace tefra::scripting

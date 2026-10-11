@@ -15,6 +15,7 @@
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/ScaledShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
 
 #include <algorithm>
 #include <cmath>
@@ -79,10 +80,19 @@ void register_jolt_hooks() {
 
 bool near(f32 a, f32 b) { return std::fabs(a - b) < 1e-4f; }
 
-// Ignores sensors: they do not block rays (they never collide).
-class SolidOnlyFilter final : public JPH::BodyFilter {
+// Ignores sensors (they never collide, so they do not block rays) and the parts that the query filter rejects.
+class SolidPartFilter final : public JPH::BodyFilter {
   public:
-    bool ShouldCollideLocked(const JPH::Body& body) const override { return !body.IsSensor(); }
+    SolidPartFilter(const world::DataModel& model, const world::QueryFilter* filter) : model_(model), filter_(filter) {}
+    bool ShouldCollideLocked(const JPH::Body& body) const override {
+        if (body.IsSensor()) return false;
+        if (!filter_) return true;
+        return filter_->accepts(model_.find(body.GetUserData()));
+    }
+
+  private:
+    const world::DataModel& model_;
+    const world::QueryFilter* filter_;
 };
 
 // Collision shape for a part. The Part.Shape enum picks the primitive; MeshPart (no Shape) is a box for now.
@@ -247,7 +257,7 @@ void WorldImpl::on_changed(world::Instance& inst, u32 prop) {
     const std::string& n = p->name;
     if (n == "Position" || n == "Orientation") {
         mark(inst, kDirtyTeleport);
-    } else if (n == "AssemblyLinearVelocity") {
+    } else if (n == "AssemblyLinearVelocity" || n == "AssemblyAngularVelocity") {
         mark(inst, kDirtyVelocity);
     } else if (n == "Anchored" || n == "CanCollide" || n == "CanTouch" || n == "Shape" || n == "Size" ||
                n == "Density" || n == "Friction" || n == "Elasticity") {
@@ -299,6 +309,7 @@ void WorldImpl::sync(f32 dt) {
         }
         if ((flags & kDirtyVelocity) != 0 && dynamic) {
             bi.SetLinearVelocity(bid, to_jolt(inst->get_vec3("AssemblyLinearVelocity")));
+            bi.SetAngularVelocity(bid, to_jolt(inst->get_vec3("AssemblyAngularVelocity")));
         }
     }
     // A kinematic part that stopped moving must not keep its last velocity (characters would slide off it).
@@ -308,6 +319,16 @@ void WorldImpl::sync(f32 dt) {
         if (it != bodies.end()) bi.SetLinearVelocity(it->second, JPH::Vec3::sZero());
     }
     moving_kinematic.swap(moved_now);
+    // Impulses from scripts, after the bodies of this frame exist. Only dynamic bodies take them.
+    for (const PendingImpulse& imp : impulses) {
+        const auto it = bodies.find(imp.id);
+        if (it == bodies.end() || bi.GetMotionType(it->second) != JPH::EMotionType::Dynamic) continue;
+        if (imp.angular)
+            bi.AddAngularImpulse(it->second, to_jolt(imp.value));
+        else
+            bi.AddImpulse(it->second, to_jolt(imp.value));
+    }
+    impulses.clear();
 }
 
 void WorldImpl::create_body(world::Instance& part) {
@@ -338,6 +359,7 @@ void WorldImpl::create_body(world::Instance& part) {
     bcs.mUserData = part.id();
     if (!anchored) {
         bcs.mLinearVelocity = to_jolt(part.get_vec3("AssemblyLinearVelocity"));
+        bcs.mAngularVelocity = to_jolt(part.get_vec3("AssemblyAngularVelocity"));
         bcs.mMotionQuality = JPH::EMotionQuality::LinearCast; // no tunnelling through thin parts
     }
     const JPH::EActivation activation =
@@ -372,6 +394,7 @@ void WorldImpl::write_back() {
         inst->set("Position", world::Value::vector3(from_jolt(bi.GetPosition(bid))));
         inst->set("Orientation", world::Value::vector3(world::quat_to_orientation(from_jolt(bi.GetRotation(bid)))));
         inst->set("AssemblyLinearVelocity", world::Value::vector3(from_jolt(bi.GetLinearVelocity(bid))));
+        inst->set("AssemblyAngularVelocity", world::Value::vector3(from_jolt(bi.GetAngularVelocity(bid))));
     }
     writing_back = false;
 }
@@ -473,15 +496,16 @@ void PhysicsWorld::step(f32 dt) {
     w.dispatch_touched();
 }
 
-bool PhysicsWorld::raycast(vec3 origin, vec3 direction, f32 max_distance, RaycastResult& out) const {
+bool PhysicsWorld::raycast(vec3 origin, vec3 direction, f32 max_distance, RaycastResult& out,
+                           const world::QueryFilter* filter) const {
     out = RaycastResult{};
     const f32 len = length(direction);
     if (len <= 0.0f || max_distance <= 0.0f) return false;
     const vec3 dir = direction / len;
     const JPH::RRayCast ray(JPH::RVec3(to_jolt(origin)), to_jolt(dir * max_distance));
     JPH::RayCastResult hit;
-    const detail::SolidOnlyFilter filter;
-    if (!impl_->system.GetNarrowPhaseQuery().CastRay(ray, hit, {}, {}, filter)) return false;
+    const detail::SolidPartFilter body_filter(impl_->model, filter);
+    if (!impl_->system.GetNarrowPhaseQuery().CastRay(ray, hit, {}, {}, body_filter)) return false;
     out.distance = hit.mFraction * max_distance;
     out.position = origin + dir * out.distance;
     out.instance = impl_->model.find(impl_->system.GetBodyInterfaceNoLock().GetUserData(hit.mBodyID));
@@ -492,6 +516,108 @@ bool PhysicsWorld::raycast(vec3 origin, vec3 direction, f32 max_distance, Raycas
                 lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, JPH::RVec3(to_jolt(out.position))));
     }
     return out.instance != nullptr;
+}
+
+namespace detail {
+
+bool cast_shape(WorldImpl& w, JPH::RefConst<JPH::Shape> shape, vec3 center, quat rot, vec3 direction, f32 max_distance,
+                RaycastResult& out, const world::QueryFilter* filter) {
+    out = RaycastResult{};
+    const f32 len = length(direction);
+    if (!shape || len <= 0.0f || max_distance <= 0.0f) return false;
+    const vec3 dir = direction / len;
+    const JPH::RMat44 start = JPH::RMat44::sRotationTranslation(to_jolt(rot), JPH::RVec3(to_jolt(center)));
+    const JPH::RShapeCast cast(shape.GetPtr(), JPH::Vec3::sReplicate(1.0f), start, to_jolt(dir * max_distance));
+    const JPH::ShapeCastSettings settings;
+    JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+    const SolidPartFilter body_filter(w.model, filter);
+    w.system.GetNarrowPhaseQuery().CastShape(cast, settings, JPH::RVec3::sZero(), collector, {}, {}, body_filter);
+    if (!collector.HadHit()) return false;
+    const JPH::ShapeCastResult& hit = collector.mHit;
+    out.distance = hit.mFraction * max_distance;
+    out.position = from_jolt(JPH::Vec3(hit.mContactPointOn2));
+    out.instance = w.model.find(w.system.GetBodyInterfaceNoLock().GetUserData(hit.mBodyID2));
+    {
+        JPH::BodyLockRead lock(w.system.GetBodyLockInterface(), hit.mBodyID2);
+        if (lock.Succeeded())
+            out.normal = from_jolt(lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, hit.mContactPointOn2));
+    }
+    return out.instance != nullptr;
+}
+
+} // namespace detail
+
+bool PhysicsWorld::spherecast(vec3 origin, f32 radius, vec3 direction, f32 max_distance, RaycastResult& out,
+                              const world::QueryFilter* filter) const {
+    if (!(radius > 0.0f)) {
+        out = RaycastResult{};
+        return false;
+    }
+    JPH::RefConst<JPH::Shape> shape;
+    {
+        JPH::SphereShapeSettings s(max(radius, 0.01f));
+        shape = s.Create().Get();
+    }
+    return detail::cast_shape(*impl_, shape, origin, quat{}, direction, max_distance, out, filter);
+}
+
+bool PhysicsWorld::blockcast(vec3 center, vec3 orientation_deg, vec3 size, vec3 direction, f32 max_distance,
+                             RaycastResult& out, const world::QueryFilter* filter) const {
+    const vec3 half{max(std::fabs(size.x) * 0.5f, 0.01f), max(std::fabs(size.y) * 0.5f, 0.01f),
+                    max(std::fabs(size.z) * 0.5f, 0.01f)};
+    JPH::BoxShapeSettings s(to_jolt(half));
+    // Jolt wants the convex radius below the smallest half extent.
+    s.mConvexRadius = min(0.05f, 0.9f * min(half.x, min(half.y, half.z)));
+    JPH::RefConst<JPH::Shape> shape = s.Create().Get();
+    return detail::cast_shape(*impl_, shape, center, world::orientation_to_quat(orientation_deg), direction,
+                              max_distance, out, filter);
+}
+
+void PhysicsWorld::touching_parts(const world::Instance& part, std::vector<world::Instance*>& out) const {
+    out.clear();
+    detail::WorldImpl& w = *impl_;
+    const u64 id = part.id();
+    auto add = [&](u64 other) {
+        if (other == id || other == 0) return;
+        world::Instance* o = w.model.find(other);
+        if (o && std::find(out.begin(), out.end(), o) == out.end()) out.push_back(o);
+    };
+    // Bodies: a shape query at the part's current transform, so a part at rest still counts as touching. (The
+    // contact listener is not used: Jolt drops the contacts of bodies that fall asleep.)
+    const auto body = w.bodies.find(id);
+    if (body != w.bodies.end()) {
+        constexpr f32 kTouchDistance = 0.05f;
+        const JPH::BodyID bid = body->second;
+        JPH::BodyInterface& bi = w.system.GetBodyInterface();
+        const JPH::ObjectLayer layer = bi.GetObjectLayer(bid);
+        JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> hits;
+        JPH::CollideShapeSettings settings;
+        settings.mMaxSeparationDistance = kTouchDistance;
+        w.system.GetNarrowPhaseQuery().CollideShape(bi.GetShape(bid), JPH::Vec3::sReplicate(1.0f),
+                                                    bi.GetCenterOfMassTransform(bid), settings, JPH::RVec3::sZero(),
+                                                    hits, w.system.GetDefaultBroadPhaseLayerFilter(layer),
+                                                    w.system.GetDefaultLayerFilter(layer));
+        for (const JPH::CollideShapeResult& r : hits.mHits) {
+            if (r.mBodyID2 == bid) continue;
+            const u64 other = w.system.GetBodyInterfaceNoLock().GetUserData(r.mBodyID2);
+            const auto info = w.infos.find(other);
+            if (info != w.infos.end() && info->second.can_touch) add(other);
+        }
+    }
+    // Characters: their root part is not a body, the scan keeps the parts each one touches.
+    for (const detail::CharacterImpl* c : w.characters) {
+        if (c->root_id == id) {
+            for (u64 t : c->touching) add(t);
+        } else if (std::find(c->touching.begin(), c->touching.end(), id) != c->touching.end()) {
+            add(c->root_id);
+        }
+    }
+}
+
+bool PhysicsWorld::apply_impulse(const world::Instance& part, vec3 impulse, bool angular) {
+    if (!part.is_a("BasePart") || part.get_bool("Anchored") || !impl_->is_simulated(part)) return false;
+    impl_->impulses.push_back(detail::WorldImpl::PendingImpulse{part.id(), impulse, angular});
+    return true;
 }
 
 void PhysicsWorld::set_heightfield(const f32* heights, u32 n, f32 cell, vec2 origin_xz, const world::Instance* owner) {
