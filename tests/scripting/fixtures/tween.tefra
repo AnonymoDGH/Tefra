@@ -1,0 +1,36 @@
+{
+  "format": "tefra-place",
+  "version": 1,
+  "services": [
+    {
+      "class": "Workspace",
+      "props": {},
+      "children": [
+        {
+          "class": "Part",
+          "id": 100,
+          "props": {
+            "Name": "Tweened",
+            "Position": [0, 2, 0],
+            "Size": [4, 1, 2]
+          },
+          "children": [
+            {
+              "class": "Script",
+              "id": 101,
+              "props": {
+                "Name": "Tweener",
+                "Source": "public class Tweener : TefraScript {\n    public override void Start() {\n        float e = TweenService.GetValue(0.25f, EasingStyle.Quad, EasingDirection.In);\n        if (e > 0.0624f && e < 0.0626f) print(\"easing ok\");\n        var p = (Part)Parent;\n        var info = new TweenInfo(0.5f, EasingStyle.Quad, EasingDirection.Out);\n        var tween = TweenService.Create(p, info, new { Position = new Vector3(10, 2, 0), Transparency = 0.75f });\n        tween.Completed += state => print(\"tween completed\", state);\n        tween.Play();\n    }\n}\n"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "class": "ServerScriptService",
+      "props": {},
+      "children": []
+    }
+  ]
+}

@@ -126,6 +126,26 @@ public class Hud : TefraScript   // LocalScript dentro de un ScreenGui de Starte
 - Un script destruido (o deshabilitado, o con error) deja de correr: sus manejadores de eventos y sus `Task.Wait` pendientes tampoco se ejecutan.
 - Limitación: un script con `namespace X;` (con ámbito de archivo) no compila; usa `namespace X { ... }`.
 
+### Animar propiedades (TweenService)
+```csharp
+public class Lift : TefraScript
+{
+    public override void Start()
+    {
+        var part = (Part)Parent;
+        var info = new TweenInfo(0.5f, EasingStyle.Quad, EasingDirection.Out); // Time, Style, Direction, RepeatCount, Reverses, DelayTime
+        var tween = TweenService.Create(part, info, new { Position = new Vector3(10, 4, 0), Transparency = 0.5f });
+        tween.Completed += state => Debug.Log("lift " + state);
+        tween.Play();
+    }
+}
+```
+- Metas: un objeto anónimo o un `Dictionary<string, object>` con el nombre de cada propiedad. Tipos animables: `float`, `int`, `Vector2`, `Vector3`, `Color3`. Los valores de partida se leen en `Play()`.
+- `Pause()`, `Play()` (reanuda), `Cancel()` (se queda donde está). `PlaybackState`: Begin, Playing, Paused, Completed, Cancelled. `Completed` recibe el estado final.
+- `TweenInfo.RepeatCount = -1` repite sin fin; `Reverses` vuelve al valor inicial en cada ciclo; `DelayTime` espera antes de empezar.
+- `TweenService.GetValue(alpha, style, direction)` devuelve la curva evaluada en `alpha` (0 a 1).
+- Los tweens avanzan en cada paso del motor. Si su instancia se destruye, se paran sin evento. Al pulsar Stop se borran todos.
+
 ## Efectos (ParticleEmitter)
 Un `ParticleEmitter` bajo una Part emite partículas de verdad (billboards en GPU, ordenadas, *soft particles*, máscara reactiva para el TAA). Se ven también en modo edición.
 - `Texture`: `builtin:fire`, `smoke`, `spark`, `star`, `snow`, `ring`, `circle`.

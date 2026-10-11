@@ -180,6 +180,7 @@ namespace Tefra
             if (_dirty) Sync(null);
             Yield.Advance(dt);
             RunService.Fire(dt);
+            TweenService.Step(dt);
             foreach (ScriptSlot s in Slots.ToArray())
             {
                 if (s.Obj == null || s.Failed || !s.Started) continue;
@@ -421,6 +422,7 @@ namespace Tefra
             // Drop every reference into the script assembly before unloading it: wrapper events, heartbeat and
             // pending tasks all hold user delegates.
             RunService.Clear();
+            TweenService.Clear();
             UserInputService.Clear();
             Yield.Clear();
             Instance.ClearAll();

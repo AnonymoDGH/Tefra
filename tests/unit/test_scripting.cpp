@@ -146,3 +146,39 @@ TEST_CASE("scripting: compile errors and exceptions disable only the script that
     REQUIRE(spinner != nullptr);
     CHECK(spinner->get_vec3("Orientation").y == doctest::Approx(15.0f).epsilon(1e-3)); // 10 frames at 90 deg/s
 }
+
+TEST_CASE("scripting: TweenService moves Position and Transparency over 0.5 s and fires Completed") {
+    scripting::ScriptHost host;
+    std::string err;
+    if (!host.init(&err)) {
+        MESSAGE("scripting unavailable, skipped: " << err);
+        return;
+    }
+    DataModel model;
+    REQUIRE(model.load(fixture("tween.tefra").c_str(), &err));
+
+    std::vector<std::string> logs;
+    host.set_log_callback([&logs](LogLevel, std::string_view message) { logs.emplace_back(message); });
+    REQUIRE(host.start(model));
+    Instance* part = model.find_path("Workspace.Tweened");
+    REQUIRE(part != nullptr);
+
+    // A quarter second in: Quad Out is at 0.75 of the way, and the tween has not completed yet.
+    run_frames(host, 15);
+    CHECK(part->get_vec3("Position").x == doctest::Approx(7.5f).epsilon(0.02));
+    CHECK_FALSE(contains(logs, "tween completed"));
+
+    // One second in: the tween finished at 0.5 s on its goal values, and Completed fired once.
+    run_frames(host, 45);
+    host.stop();
+
+    CHECK(contains(logs, "easing ok"));
+    CHECK(part->get_vec3("Position").x == doctest::Approx(10.0f).epsilon(1e-4));
+    CHECK(part->get_vec3("Position").y == doctest::Approx(2.0f).epsilon(1e-4));
+    CHECK(part->get_float("Transparency") == doctest::Approx(0.75f).epsilon(1e-4));
+    CHECK(contains(logs, "tween completed\tCompleted"));
+    int completions = 0;
+    for (const std::string& line : logs)
+        if (line.find("tween completed") != std::string::npos) ++completions;
+    CHECK(completions == 1);
+}
