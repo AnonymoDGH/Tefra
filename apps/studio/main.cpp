@@ -5,6 +5,8 @@
 #include "tefra/studio/app.h"
 
 #include "tefra/core/cli.h"
+#include "tefra/core/crash.h"
+#include "tefra/core/fs.h"
 #include "tefra/core/log.h"
 
 #include <cstdio>
@@ -14,6 +16,11 @@ using namespace tefra;
 
 int main(int argc, char** argv) {
     CommandLine cl(argc, argv);
+    // Log file next to the user's settings (send it when reporting a problem) and a crash reporter.
+    const std::string log_dir = path_join(config_dir(), "logs");
+    make_dirs(log_dir.c_str());
+    log_set_file(path_join(log_dir, "tefra_studio.log").c_str());
+    install_crash_handler();
     if (cl.has("help")) {
         std::printf("tefra_studio [place.tefra] [--demo | --template ID] [--validation] [--width N --height N] "
                     "[--capture out.png --frames N [--capture-viewport]] [--play] [--mcp-port N | --no-mcp]\n"

@@ -6,6 +6,7 @@
 #include "tefra/studio/app.h"
 
 #include "tefra/core/cli.h"
+#include "tefra/core/crash.h"
 #include "tefra/core/fs.h"
 #include "tefra/core/json_value.h"
 #include "tefra/core/log.h"
@@ -17,6 +18,11 @@ using namespace tefra;
 
 int main(int argc, char** argv) {
     CommandLine cl(argc, argv);
+    // Log file next to the user's settings (send it when reporting a problem) and a crash reporter.
+    const std::string log_dir = path_join(config_dir(), "logs");
+    make_dirs(log_dir.c_str());
+    log_set_file(path_join(log_dir, "tefra_player.log").c_str());
+    install_crash_handler();
     std::string dir = exe_dir(), place;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];

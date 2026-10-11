@@ -1,6 +1,8 @@
 #include "tefra/renderer/gltf.h"
+
 #include "tefra/renderer/gltf_skeleton.h"
 #include "tefra/renderer/scene.h"
+#include <meshoptimizer.h>
 
 #include "tefra/core/fs.h"
 #include "tefra/core/image.h"
@@ -30,6 +32,7 @@ struct Loader {
     std::map<const cgltf_primitive*, u32> mesh_cache;
     std::map<const cgltf_skin*, u32> skin_cache; // scene skin index per glTF skin
     GltfLoadResult result;
+    GltfLoadOptions options{};
 
     bool decode_image(const cgltf_image* img, ImageRGBA8& out) {
         if (img->buffer_view) {
@@ -238,9 +241,34 @@ struct Loader {
                 }
             }
         }
+        // Simplification (static meshes only): keeps the borders of UV seams, error target 2% of the extent.
+        auto simplify = [&](u32 max_tris) {
+            std::vector<u32> out(md.indices.size());
+            const usize got =
+                meshopt_simplify(out.data(), md.indices.data(), md.indices.size(), &md.vertices[0].pos[0],
+                                 md.vertices.size(), sizeof(Vertex), usize(max_tris) * 3, 0.05f, 0, nullptr);
+            out.resize(got);
+            return out;
+        };
+        const bool skinned = !md.skin.empty();
+        std::vector<u32> lod1;
+        if (!skinned && options.lod1_triangles && md.indices.size() / 3 > options.lod1_triangles)
+            lod1 = simplify(options.lod1_triangles);
+        if (!skinned && options.max_triangles && md.indices.size() / 3 > options.max_triangles) {
+            const usize before = md.indices.size() / 3;
+            md.indices = simplify(options.max_triangles);
+            TEFRA_LOG_INFO("glTF: simplified a primitive %zu -> %zu triangles", before, md.indices.size() / 3);
+        }
         result.triangles += md.indices.size() / 3;
         ++result.meshes;
-        return mesh_cache[&prim] = scene.add_mesh(md);
+        const u32 id = scene.add_mesh(md);
+        if (!lod1.empty()) {
+            MeshData coarse;
+            coarse.vertices = md.vertices;
+            coarse.indices = std::move(lod1);
+            result.lod1.push_back({id, scene.add_mesh(coarse)});
+        }
+        return mesh_cache[&prim] = id;
     }
 
     void node(const cgltf_node* nd, const mat4& world_from_asset) {
@@ -316,6 +344,7 @@ GltfLoadResult load_gltf(Scene& scene, const char* path, const GltfLoadOptions& 
     // Asset placement: world position is applied in double precision on the instances afterwards.
     const mat4 root = mat4_from_quat(options.rotation) * scale(vec3{options.scale});
     L.placement = root;
+    L.options = options;
     const usize first_instance = scene.instances().size();
     const cgltf_scene* sc = L.data->scene ? L.data->scene : (L.data->scenes_count ? &L.data->scenes[0] : nullptr);
     if (sc) {
