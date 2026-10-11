@@ -78,6 +78,20 @@ namespace Tefra
         public Vector3 Position { get => GetVector3(PositionP); set => SetVector3(PositionP, value); }
         /// <summary>Rotation in degrees, applied Y, then X, then Z (Roblox order).</summary>
         public Vector3 Orientation { get => GetVector3(OrientationP); set => SetVector3(OrientationP, value); }
+        /// <summary>Position and rotation together (Position plus the rotation from Orientation).</summary>
+        public CFrame CFrame
+        {
+            get => CFrame.FromOrientation(Position, Orientation);
+            set
+            {
+                Position = value.Position;
+                Orientation = value.ToOrientation();
+            }
+        }
+        /// <summary>Moves the part so that its CFrame becomes target.</summary>
+        public void PivotTo(CFrame target) => CFrame = target;
+        /// <summary>The part's own CFrame, which is its pivot.</summary>
+        public CFrame GetPivot() => CFrame;
         /// <summary>Dimensions in metres.</summary>
         public Vector3 Size { get => GetVector3(SizeP); set => SetVector3(SizeP, value); }
         public Color3 Color { get => GetColor3(ColorP); set => SetColor3(ColorP, value); }
@@ -153,6 +167,27 @@ namespace Tefra
         {
             get => GetRef(PrimaryPartP) as BasePart;
             set => SetRef(PrimaryPartP, value);
+        }
+
+        /// <summary>PrimaryPart's CFrame if set, else the first BasePart descendant's; identity for an empty model.</summary>
+        public CFrame GetPivot()
+        {
+            BasePart primary = PrimaryPart;
+            if (primary != null) return primary.CFrame;
+            foreach (Instance child in GetDescendants())
+                if (child is BasePart part) return part.CFrame;
+            return CFrame.Identity;
+        }
+
+        /// <summary>Moves every BasePart descendant rigidly so that the pivot ends at target.</summary>
+        public void PivotTo(CFrame target)
+        {
+            var parts = new List<BasePart>();
+            foreach (Instance child in GetDescendants())
+                if (child is BasePart part) parts.Add(part);
+            if (parts.Count == 0) return;
+            CFrame delta = target * GetPivot().Inverse();
+            foreach (BasePart part in parts) part.CFrame = delta * part.CFrame;
         }
     }
 

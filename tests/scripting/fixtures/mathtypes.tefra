@@ -1,0 +1,92 @@
+{
+ "format": "tefra-place",
+ "version": 1,
+ "services": [
+  {
+   "class": "Workspace",
+   "props": {},
+   "children": [
+    {
+     "class": "Part",
+     "id": 100,
+     "props": {
+      "Name": "Probe",
+      "Position": [
+       1,
+       2,
+       3
+      ],
+      "Size": [
+       2,
+       1,
+       2
+      ],
+      "Anchored": true,
+      "CanCollide": true
+     }
+    },
+    {
+     "class": "Model",
+     "id": 110,
+     "props": {
+      "Name": "Rig"
+     },
+     "children": [
+      {
+       "class": "Part",
+       "id": 111,
+       "props": {
+        "Name": "A",
+        "Position": [
+         0,
+         0,
+         0
+        ],
+        "Size": [
+         2,
+         1,
+         2
+        ],
+        "Anchored": true,
+        "CanCollide": true
+       }
+      },
+      {
+       "class": "Part",
+       "id": 112,
+       "props": {
+        "Name": "B",
+        "Position": [
+         2,
+         0,
+         0
+        ],
+        "Size": [
+         2,
+         1,
+         2
+        ],
+        "Anchored": true,
+        "CanCollide": true
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "class": "ServerScriptService",
+   "props": {},
+   "children": [
+    {
+     "class": "Script",
+     "id": 120,
+     "props": {
+      "Name": "MathTypes",
+      "Source": "public class MathTypes : TefraScript {\n    static string F(float v) => (Math.Abs(v) < 0.0005f ? 0f : v).ToString(\"F3\");\n    static string V(Vector3 v) => F(v.X) + \" \" + F(v.Y) + \" \" + F(v.Z);\n    static bool Near(CFrame a, CFrame b) =>\n        (a.Position - b.Position).Magnitude < 1e-4f && (a.LookVector - b.LookVector).Magnitude < 1e-4f &&\n        (a.RightVector - b.RightVector).Magnitude < 1e-4f && (a.UpVector - b.UpVector).Magnitude < 1e-4f;\n    public override void Start() {\n        var probe = (BasePart)Game.Workspace.FindFirstChild(\"Probe\");\n        probe.CFrame = new CFrame(new Vector3(1, 2, 3)) * CFrame.Angles(0.2f, 0f, 0f);\n        Debug.Log(\"probe orientation \" + F(probe.Orientation.X));\n        Debug.Log(\"probe position \" + V(probe.Position));\n\n        var cf = CFrame.fromEulerAnglesYXZ(0.3f, 0.5f, 0.2f) + new Vector3(4, 5, 6);\n        probe.CFrame = cf;\n        var back = probe.CFrame;\n        Debug.Log(Near(back, cf) ? \"roundtrip ok\" : \"roundtrip bad\");\n        Vector3 e = back.ToEulerAnglesYXZ();\n        Debug.Log(\"euler \" + V(e));\n        Vector3 o = probe.Orientation;\n        Debug.Log(\"orientation \" + F(o.X) + \" \" + F(o.Y) + \" \" + F(o.Z));\n\n        var c = CFrame.Angles(0.1f, 0.2f, 0.3f) + new Vector3(1, 2, 3);\n        Debug.Log(Near(c * c.Inverse(), CFrame.Identity) ? \"inverse ok\" : \"inverse bad\");\n        Vector3 p = c.PointToObjectSpace(c.PointToWorldSpace(new Vector3(5, 6, 7)));\n        Debug.Log(\"space \" + V(p));\n        Debug.Log(\"look \" + V(new CFrame(Vector3.Zero, new Vector3(0, 0, -10)).LookVector));\n        Debug.Log(\"lookAt \" + V(CFrame.lookAt(Vector3.Zero, new Vector3(10, 0, 0)).LookVector));\n        Debug.Log(\"lerp \" + V(CFrame.Identity.Lerp(CFrame.Angles(0, MathF.PI / 2, 0), 0.5f).LookVector));\n\n        var rig = (Model)Game.Workspace.FindFirstChild(\"Rig\");\n        Debug.Log(\"pivot \" + V(rig.GetPivot().Position));\n        rig.PivotTo(new CFrame(new Vector3(10, 0, 0)) * CFrame.Angles(0, MathF.PI / 2, 0));\n        var partB = (BasePart)rig.FindFirstChild(\"B\");\n        Debug.Log(\"rigB \" + V(partB.Position));\n        Debug.Log(\"pivot after \" + V(rig.GetPivot().Position));\n\n        var u = new UDim2(0.5f, 10f, 0f, 20f) + new UDim2(0.25f, 5f, 0.5f, 0f);\n        Debug.Log(\"udim2 \" + F(u.X.Scale) + \" \" + F(u.X.Offset) + \" \" + F(u.Y.Scale) + \" \" + F(u.Y.Offset));\n        var half = UDim2.fromOffset(0, 0).Lerp(UDim2.fromScale(1, 1), 0.25f);\n        Debug.Log(\"udim2 lerp \" + F(half.X.Scale) + \" \" + F(half.Y.Scale));\n\n        var ns = new NumberSequence(new NumberSequenceKeypoint(1, 0), new NumberSequenceKeypoint(0, 0), new NumberSequenceKeypoint(0.5f, 10f));\n        Debug.Log(\"nseq \" + F(ns.Evaluate(0.25f)) + \" \" + F(ns.Evaluate(0.5f)) + \" \" + F(ns.Evaluate(0.75f)));\n\n        var cs = new ColorSequence(Color3.Black, Color3.White);\n        Color3 mid = cs.Evaluate(0.5f);\n        Debug.Log(\"cseq \" + F(mid.R) + \" \" + F(mid.G) + \" \" + F(mid.B));\n        Color3 hex = Color3.FromHex(\"#FF8000\");\n        Debug.Log(\"hex \" + F(hex.R) + \" \" + F(hex.G) + \" \" + F(hex.B));\n        Debug.Log(\"hsv blue \" + V(Color3.FromHSV(2f / 3f, 1, 1).ToHSV()));\n        Debug.Log(\"hsv orange \" + V(Color3.FromRGB(255, 128, 0).ToHSV()));\n\n        var rnd = new TefraRandom(7);\n        bool ok = true;\n        for (int i = 0; i < 200; i++) {\n            int n = rnd.NextInteger(1, 6);\n            if (n < 1 || n > 6) ok = false;\n            if (Math.Abs(rnd.NextUnitVector().Magnitude - 1f) > 1e-4f) ok = false;\n            float x = rnd.NextNumber(2f, 3f);\n            if (x < 2f || x >= 3f) ok = false;\n        }\n        Debug.Log(\"random \" + (ok ? \"ok\" : \"bad\"));\n        Debug.Log(new TefraRandom(42).NextInteger(1, 1000) == new TefraRandom(42).NextInteger(1, 1000) ? \"random seeded ok\" : \"random seeded bad\");\n    }\n}\n"
+     }
+    }
+   ]
+  }
+ ]
+}

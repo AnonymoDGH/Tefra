@@ -118,6 +118,45 @@ TEST_CASE("scripting: Changed and Destroying events are delivered from the engin
     CHECK(model.find_path("Workspace.Box") == nullptr);
 }
 
+TEST_CASE("scripting: CFrame round trip, Model PivotTo and the value types run in a script") {
+    scripting::ScriptHost host;
+    std::string err;
+    if (!host.init(&err)) {
+        MESSAGE("scripting unavailable, skipped: " << err);
+        return;
+    }
+    DataModel model;
+    REQUIRE(model.load(fixture("mathtypes.tefra").c_str(), &err));
+
+    std::vector<std::string> logs;
+    host.set_log_callback([&logs](LogLevel, std::string_view message) { logs.emplace_back(message); });
+    REQUIRE(host.start(model));
+    run_frames(host, 2);
+    host.stop();
+
+    // The script sets part.CFrame from fromEulerAnglesYXZ(0.3, 0.5, 0.2) and reads it back: the Orientation stored in
+    // the DataModel is those angles in degrees (Y-X-Z convention shared with orientation_to_quat).
+    Instance* probe = model.find_path("Workspace.Probe");
+    REQUIRE(probe != nullptr);
+    const auto orientation = probe->get_vec3("Orientation");
+    CHECK(orientation.x == doctest::Approx(17.1887f).epsilon(1e-3));
+    CHECK(orientation.y == doctest::Approx(28.6479f).epsilon(1e-3));
+    CHECK(orientation.z == doctest::Approx(11.4592f).epsilon(1e-3));
+
+    // Model.PivotTo moved the whole model rigidly: A went to the pivot, B followed the same rotation and offset.
+    Instance* partB = model.find_path("Workspace.Rig.B");
+    REQUIRE(partB != nullptr);
+    const auto b = partB->get_vec3("Position");
+    CHECK(b.x == doctest::Approx(10.0f).epsilon(1e-4));
+    CHECK(b.y == doctest::Approx(0.0f).epsilon(1e-4));
+    CHECK(b.z == doctest::Approx(-2.0f).epsilon(1e-4));
+
+    CHECK(contains(logs, "roundtrip ok"));
+    CHECK(contains(logs, "inverse ok"));
+    CHECK(contains(logs, "random seeded ok"));
+    CHECK(contains(logs, "udim2 0.750 15.000 0.500 20.000"));
+}
+
 TEST_CASE("scripting: compile errors and exceptions disable only the script that failed") {
     scripting::ScriptHost host;
     std::string err;
