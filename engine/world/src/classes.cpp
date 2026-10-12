@@ -388,6 +388,61 @@ void register_builtin_classes(ClassRegistry& r) {
     b.group("Data").prop("FieldOfView", Value::number(70.0), "Vertical field of view (degrees).");
     b.prop("Position", Value::vector3({0, 5, 10}), "Camera position (m).");
     b.prop("LookAt", Value::vector3({0, 0, 0}), "Point the camera looks at (m).");
+
+    // ---- Stored-only classes (imported from Roblox files; no engine behaviour yet) ---------------------------
+    b.cls("Attachment", "Instance", "A point on a part (imported from Roblox; not used by the engine yet).",
+          "Gameplay");
+    b.group("Transform").prop("Position", Value::vector3({0, 0, 0}), "Position in the parent part's space (m).");
+    b.prop("Orientation", Value::vector3({0, 0, 0}), "Rotation in degrees (Orientation order).");
+    b.cls("Decal", "Instance", "An image on one face of its parent part (stored; not rendered yet).", "Appearance");
+    b.group("Appearance")
+        .prop("Texture", Value::string(""), "Image path (a file next to the place, or rbxassetid text).");
+    b.prop("Face", Value::enumeration(2), "Face of the parent part.", 0, normal_id);
+    b.prop("Transparency", Value::number(0.0), "0 = opaque, 1 = invisible.");
+    b.prop("Color3", Value::color3({1, 1, 1}), "Tint.");
+    b.cls("Texture", "Decal", "A repeating image on one face of its parent part (stored; not rendered yet).",
+          "Appearance");
+    b.prop("StudsPerTileU", Value::number(2.0), "Tile width (m).");
+    b.prop("StudsPerTileV", Value::number(2.0), "Tile height (m).");
+    b.cls("WeldConstraint", "Instance", "Glues two parts together (stored; no constraint solver yet).", "Gameplay");
+    b.group("Data").prop("Part0", Value::reference(0), "First part.");
+    b.prop("Part1", Value::reference(0), "Second part.");
+    b.cls("Weld", "Instance", "Rigid joint between two parts with offsets (stored; no constraint solver yet).",
+          "Gameplay");
+    b.group("Data").prop("Part0", Value::reference(0), "Parent part.");
+    b.prop("Part1", Value::reference(0), "Child part.");
+    b.prop("C0", Value::vector3({0, 0, 0}), "Joint position in Part0's space (m).");
+    b.prop("C0Orientation", Value::vector3({0, 0, 0}), "Joint rotation in Part0's space (degrees).");
+    b.prop("C1", Value::vector3({0, 0, 0}), "Joint position in Part1's space (m).");
+    b.prop("C1Orientation", Value::vector3({0, 0, 0}), "Joint rotation in Part1's space (degrees).");
+    b.cls("SurfaceGui", "GuiBase", "UI drawn on a face of a part (stored; not rendered yet).", "UI");
+    b.group("Behavior").prop("Enabled", Value::boolean(true), "Drawn when true.");
+    b.prop("Face", Value::enumeration(2), "Face of the adornee part.", 0, normal_id);
+    b.prop("AlwaysOnTop", Value::boolean(false), "Draws through walls.");
+    b.prop("PixelsPerStud", Value::number(50.0), "Resolution on the surface (pixels per metre).");
+    b.cls("Team", "Instance", "A team of players (Roblox Teams).", "Gameplay");
+    b.group("Appearance").prop("TeamColor", Value::color3({1, 1, 1}), "Team colour.");
+    b.group("Behavior").prop("AutoAssignable", Value::boolean(true), "Players join it automatically.");
+
+    // Value objects (Roblox *Value): one typed value each.
+    b.cls("ValueBase", "Instance", "Base of the value objects.").abstract();
+    b.cls("StringValue", "ValueBase", "Holds a string.", "Data");
+    b.group("Data").prop("Value", Value::string(""), "The value.");
+    b.cls("IntValue", "ValueBase", "Holds an integer.", "Data");
+    b.group("Data").prop("Value", Value::integer(0), "The value.");
+    b.cls("NumberValue", "ValueBase", "Holds a number.", "Data");
+    b.group("Data").prop("Value", Value::number(0.0), "The value.");
+    b.cls("BoolValue", "ValueBase", "Holds true or false.", "Data");
+    b.group("Data").prop("Value", Value::boolean(false), "The value.");
+    b.cls("Vector3Value", "ValueBase", "Holds a vector.", "Data");
+    b.group("Data").prop("Value", Value::vector3({0, 0, 0}), "The value.");
+    b.cls("Color3Value", "ValueBase", "Holds a colour.", "Data");
+    b.group("Data").prop("Value", Value::color3({1, 1, 1}), "The value (sRGB, 0-1).");
+    b.cls("ObjectValue", "ValueBase", "Holds a reference to another instance.", "Data");
+    b.group("Data").prop("Value", Value::reference(0), "The referenced instance.");
+    b.cls("CFrameValue", "ValueBase", "Holds a position and an orientation (Roblox CFrame).", "Data");
+    b.group("Data").prop("Position", Value::vector3({0, 0, 0}), "Position (m).");
+    b.prop("Orientation", Value::vector3({0, 0, 0}), "Rotation in degrees (Orientation order).");
 }
 
 } // namespace tefra::world

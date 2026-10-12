@@ -1,12 +1,14 @@
 #define DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS
 #include <doctest.h>
 
+#include "tefra/core/fs.h"
 #include "tefra/rbx/document.h"
 #include "tefra/rbx/importer.h"
 #include "tefra/world/datamodel.h"
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <random>
 #include <string>
 #include <vector>
@@ -465,18 +467,18 @@ void check_demo(DataModel& dm, const ImportReport& rep) {
     Instance* spin = dm.find_path("ServerScriptService.Spinner");
     REQUIRE(spin != nullptr);
     CHECK(spin->get_string("LuauSource") == "print('hi')\n-- end");
-    CHECK(spin->get_string("Source").find("public class Spinner_") != std::string::npos);
+    CHECK(spin->get_string("Source").find("public class Spinner : TefraScript") != std::string::npos);
+    CHECK(spin->get_string("Source").find("public override void Start() { }") != std::string::npos);
     CHECK(spin->get_string("Source").find(": TefraScript") != std::string::npos);
     CHECK_FALSE(spin->get_bool("Enabled", true));
 
     CHECK(dm.find_path("Lighting")->get_float("ClockTime") == doctest::Approx(8.0f));
 
-    Instance* bloom = dm.find_path("Lighting.Bloom");
-    REQUIRE(bloom != nullptr);
-    CHECK(bloom->class_name() == "ImportedInstance");
-    CHECK(bloom->get_string("OriginalClass") == "BloomEffect");
-    CHECK(bloom->get_string("OriginalProperties").find("Intensity") != std::string::npos);
-    Instance* inner = dm.find_path("Lighting.Bloom.Inner");
+    // Lighting effects have no Tefra class: their properties are attributes of Lighting, their children move up.
+    Instance* lighting = dm.find_path("Lighting");
+    REQUIRE(lighting != nullptr);
+    CHECK(lighting->get_attribute("rbx.BloomEffect.Intensity") != nullptr);
+    Instance* inner = dm.find_path("Lighting.Inner");
     REQUIRE(inner != nullptr);
     CHECK(inner->class_name() == "Part");
 
@@ -485,8 +487,7 @@ void check_demo(DataModel& dm, const ImportReport& rep) {
     CHECK(stuff->class_name() == "Folder");
 
     CHECK(rep.instances == 15);
-    CHECK(rep.imported_as_unsupported == 1);
-    CHECK(rep.unsupported_classes.at("BloomEffect") == 1);
+    CHECK(rep.imported_as_unsupported == 0);
     CHECK(rep.scripts == 1);
 }
 
@@ -709,18 +710,20 @@ TEST_CASE("rbx: XML place converts to the DataModel") {
     CHECK_FALSE(spin->get_bool("Enabled", true));
 
     CHECK(dm.find_path("Lighting")->get_float("ClockTime") == doctest::Approx(8.0f));
-    Instance* bloom = dm.find_path("Lighting.BloomEffect");
-    REQUIRE(bloom != nullptr);
-    CHECK(bloom->class_name() == "ImportedInstance");
-    CHECK(dm.find_path("Lighting.BloomEffect.Inner") != nullptr);
-    CHECK(dm.find_path("Lighting.Clouds") == nullptr); // consumed into CloudCover
+    CHECK(dm.find_path("Lighting.BloomEffect") == nullptr); // an effect: its properties are attributes now
+    REQUIRE(dm.find_path("Lighting")->get_attribute("rbx.BloomEffect.Intensity") != nullptr);
+    CHECK(dm.find_path("Lighting")->get_attribute("rbx.BloomEffect.Intensity")->n[0] == doctest::Approx(0.5));
+    REQUIRE(dm.find_path("Lighting.Inner") != nullptr); // its child moved up to Lighting
+    CHECK(dm.find_path("Lighting.Clouds") == nullptr);  // consumed into CloudCover
     CHECK(dm.find_path("Lighting")->get_float("CloudCover") == doctest::Approx(0.7f));
 
     CHECK(dm.find_path("ReplicatedStorage.ServerStorage.Stuff") != nullptr);
-    CHECK(dm.find_path("Workspace.Terrain")->class_name() == "ImportedInstance");
+    CHECK(dm.find_path("Workspace.Terrain")->class_name() == "Folder"); // placeholder
+    CHECK(dm.find_path("Workspace.Terrain")->get_attribute("RobloxClass") != nullptr);
 
     CHECK(rep.unsupported_classes.count("Terrain") == 1);
-    CHECK(rep.unsupported_classes.count("BloomEffect") == 1);
+    CHECK(rep.unsupported_classes.count("ServerStorage") == 1);
+    CHECK(rep.unsupported_classes.count("BloomEffect") == 0);
     CHECK(rep.scripts == 1);
     CHECK(std::any_of(rep.warnings.begin(), rep.warnings.end(),
                       [](const std::string& w) { return w.find("Terrain") != std::string::npos; }));
@@ -836,7 +839,8 @@ TEST_CASE("rbx: report JSON and summary") {
     ImportReport rep;
     REQUIRE(import_place_memory(file.data(), file.size(), dm, {}, &rep));
     const std::string json = report_to_json(rep).dump();
-    CHECK(json.find("\"imported_as_unsupported\":1") != std::string::npos);
+    CHECK(json.find("\"imported_as_unsupported\":0") != std::string::npos);
+    CHECK(json.find("\"class_counts\"") != std::string::npos);
     CHECK(json.find("\"BloomEffect\":1") != std::string::npos);
     CHECK(report_summary(rep).find("15 instances") != std::string::npos);
 }
@@ -852,7 +856,7 @@ TEST_CASE("rbx: missing or empty files fail cleanly") {
         import_place_memory(reinterpret_cast<const u8*>(not_roblox.data()), not_roblox.size(), dm, {}, nullptr, &err));
 }
 
-TEST_CASE("rbx: XML Content elements keep their URI (uri and url spellings); unsupported lighting is reported") {
+TEST_CASE("rbx: XML Content elements keep their URI (uri and url spellings); unmapped lighting is kept as attributes") {
     const std::string text = R"XML(<roblox version="4">
   <Item class="Workspace" referent="RBX1">
     <Item class="Sound" referent="RBX2">
@@ -873,7 +877,439 @@ TEST_CASE("rbx: XML Content elements keep their URI (uri and url spellings); uns
     REQUIRE(dm.find_path("Workspace.S1") != nullptr);
     CHECK(dm.find_path("Workspace.S1")->get_string("SoundId") == "rbxassetid://111");
     CHECK(dm.find_path("Workspace.S2")->get_string("SoundId") == "rbxassetid://222");
-    bool warned = false;
-    for (const std::string& w : rep.warnings) warned = warned || w.find("Lighting.Ambient") != std::string::npos;
-    CHECK(warned);
+    // Lighting properties with no Tefra property are kept as attributes (raw Roblox values).
+    REQUIRE(dm.find_path("Lighting") != nullptr);
+    CHECK(dm.find_path("Lighting")->get_attribute("rbx.Ambient") != nullptr);
+}
+
+// ---- Attributes, tags, placeholders, values, GUI and scripts (hand-written XML fixtures) ---------------------------
+
+namespace {
+
+std::string b64(const Bytes& bytes) { return base64_encode(bytes.data(), bytes.size()); }
+
+void put_f64le(Bytes& o, f64 d) {
+    u64 bits = 0;
+    std::memcpy(&bits, &d, 8);
+    for (u32 i = 0; i < 8; ++i) put8(o, static_cast<u32>(bits >> (8 * i)));
+}
+
+// AttributesSerialize: u32 count, then name, type byte and value for each attribute (little-endian).
+Bytes attributes_blob() {
+    Bytes b;
+    put32le(b, 6);
+    putstr(b, "Label");
+    put8(b, 0x01);
+    putstr(b, "Hola");
+    putstr(b, "Enabled");
+    put8(b, 0x02);
+    put8(b, 1);
+    putstr(b, "Level");
+    put8(b, 0x03);
+    put32le(b, 7);
+    putstr(b, "Speed");
+    put8(b, 0x05);
+    put_f64le(b, 2.5);
+    putstr(b, "Tint");
+    put8(b, 0x0C);
+    put_f32le(b, 1.0f);
+    put_f32le(b, 0.5f);
+    put_f32le(b, 0.0f);
+    putstr(b, "Offset");
+    put8(b, 0x0E);
+    put_f32le(b, 1.0f);
+    put_f32le(b, 2.0f);
+    put_f32le(b, 3.0f);
+    return b;
+}
+
+Bytes tags_blob() {
+    Bytes b;
+    for (const char* t : {"Coin", "Pickup"}) {
+        for (const char* p = t; *p; ++p) put8(b, static_cast<u8>(*p));
+        put8(b, 0);
+    }
+    return b;
+}
+
+// The C# skeleton must be well-formed without a compiler: no comment-breaking characters, braces balanced outside
+// the comment lines, exactly one TefraScript class with the Start override.
+bool stub_is_well_formed(const std::string& src) {
+    if (src.find('\r') != std::string::npos) return false;
+    if (src.find("\xE2\x80\xA8") != std::string::npos || src.find("\xE2\x80\xA9") != std::string::npos ||
+        src.find("\xC2\x85") != std::string::npos)
+        return false;
+    int depth = 0;
+    usize start = 0;
+    while (start <= src.size()) {
+        usize end = src.find('\n', start);
+        if (end == std::string::npos) end = src.size();
+        std::string line = src.substr(start, end - start);
+        const usize first = line.find_first_not_of(" \t");
+        if (first != std::string::npos && line.compare(first, 2, "//") != 0) {
+            for (char c : line) {
+                if (c == '{') ++depth;
+                if (c == '}') --depth;
+                if (depth < 0) return false;
+            }
+        }
+        if (end >= src.size()) break;
+        start = end + 1;
+    }
+    if (depth != 0) return false;
+    if (src.find(": TefraScript") == std::string::npos) return false;
+    if (src.find("public override void Start() { }") == std::string::npos) return false;
+    return src.find("public class ") != std::string::npos;
+}
+
+// Shorthand for an attribute's number / string value (empty or 0 when absent).
+f64 attr_num(const Instance* i, const char* name) {
+    const tefra::world::Value* v = i ? i->get_attribute(name) : nullptr;
+    return v ? v->n[0] : -1e300;
+}
+std::string attr_str(const Instance* i, const char* name) {
+    const tefra::world::Value* v = i ? i->get_attribute(name) : nullptr;
+    return v ? v->s : std::string("<absent>");
+}
+
+} // namespace
+
+TEST_CASE("rbx: Roblox Attributes and Tags become Tefra attributes and tags; unknown classes are placeholders") {
+    std::string xml = R"(<roblox version="4">
+  <Item class="Workspace" referent="W0">
+    <Properties><string name="Name">Workspace</string></Properties>
+    <Item class="Part" referent="P1">
+      <Properties>
+        <string name="Name">Tagged</string>
+        <BinaryString name="AttributesSerialize">)" +
+                      b64(attributes_blob()) + R"(</BinaryString>
+        <BinaryString name="Tags">)" +
+                      b64(tags_blob()) + R"(</BinaryString>
+      </Properties>
+    </Item>
+    <Item class="Part" referent="P2">
+      <Properties>
+        <string name="Name">Broken</string>
+        <BinaryString name="AttributesSerialize">)" +
+                      b64(Bytes{1, 0, 0, 0, 3, 0, 0, 0, 'B', 'a', 'd', 0x7F}) + R"(</BinaryString>
+      </Properties>
+    </Item>
+    <Item class="Trail" referent="T1">
+      <Properties>
+        <string name="Name">Trail</string>
+        <float name="Lifetime">2</float>
+        <bool name="Enabled">true</bool>
+        <string name="Texture">rbxasset://textures/trail.png</string>
+        <Vector3 name="Offset"><X>1</X><Y>2</Y><Z>3</Z></Vector3>
+      </Properties>
+      <Item class="Part" referent="P3"><Properties><string name="Name">Child</string></Properties></Item>
+    </Item>
+  </Item>
+</roblox>
+)";
+    DataModel dm;
+    ImportReport rep;
+    std::string err;
+    REQUIRE(import_place_memory(reinterpret_cast<const u8*>(xml.data()), xml.size(), dm, {}, &rep, &err));
+
+    Instance* tagged = dm.find_path("Workspace.Tagged");
+    REQUIRE(tagged != nullptr);
+    CHECK(attr_str(tagged, "Label") == "Hola");
+    CHECK(tagged->get_attribute("Enabled")->as_bool());
+    CHECK(tagged->get_attribute("Level")->type == tefra::world::PropType::Int);
+    CHECK(attr_num(tagged, "Level") == doctest::Approx(7));
+    CHECK(attr_num(tagged, "Speed") == doctest::Approx(2.5));
+    CHECK(tagged->get_attribute("Tint")->n[0] == doctest::Approx(1.0));
+    CHECK(tagged->get_attribute("Tint")->n[1] == doctest::Approx(0.5));
+    CHECK(tagged->get_attribute("Offset")->n[2] == doctest::Approx(3.0));
+    CHECK(tagged->has_tag("Coin"));
+    CHECK(tagged->has_tag("Pickup"));
+    CHECK(dm.tagged("Coin").size() == 1);
+    CHECK(rep.attributes == 6);
+    CHECK(rep.tags == 2);
+
+    // A blob with an unknown value type is kept as text, with a warning; nothing is guessed.
+    Instance* broken = dm.find_path("Workspace.Broken");
+    REQUIRE(broken != nullptr);
+    CHECK(broken->get_attribute("rbx.AttributesSerialize") != nullptr);
+    CHECK(std::any_of(rep.warnings.begin(), rep.warnings.end(),
+                      [](const std::string& w) { return w.find("unknown layout") != std::string::npos; }));
+
+    // Unknown class: a Folder with the name, RobloxClass, every property as rbx.<Prop>, and its children kept.
+    Instance* trail = dm.find_path("Workspace.Trail");
+    REQUIRE(trail != nullptr);
+    CHECK(trail->class_name() == "Folder");
+    CHECK(attr_str(trail, "RobloxClass") == "Trail");
+    CHECK(attr_num(trail, "rbx.Lifetime") == doctest::Approx(2));
+    CHECK(trail->get_attribute("rbx.Enabled")->as_bool());
+    CHECK(attr_str(trail, "rbx.Texture") == "rbxasset://textures/trail.png");
+    CHECK(trail->get_attribute("rbx.Offset")->n[1] == doctest::Approx(2.0));
+    CHECK(trail->get_attribute("rbx.Name") == nullptr); // the name is the instance name, not an attribute
+    REQUIRE(dm.find_path("Workspace.Trail.Child") != nullptr);
+    CHECK(dm.find_path("Workspace.Trail.Child")->class_name() == "Part");
+    CHECK(rep.unsupported_classes.at("Trail") == 1);
+    CHECK(rep.imported_as_unsupported == 1);
+    CHECK(rep.class_counts.at("Part") == 3);
+}
+
+TEST_CASE("rbx: value objects, decals, attachments, welds, teams and GUI modifiers map to Tefra classes") {
+    std::string xml = R"(<roblox version="4">
+  <Item class="Workspace" referent="W0">
+    <Properties><string name="Name">Workspace</string></Properties>
+    <Item class="Part" referent="P1">
+      <Properties>
+        <string name="Name">Door</string>
+        <CoordinateFrame name="CFrame"><X>0</X><Y>3</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame>
+        <Vector3 name="size"><X>4</X><Y>1</Y><Z>2</Z></Vector3>
+        <token name="shape">1</token>
+      </Properties>
+      <Item class="Decal" referent="D1"><Properties><string name="Name">Face</string><Content name="Texture"><url>rbxassetid://42</url></Content><token name="Face">5</token><float name="Transparency">0.5</float></Properties></Item>
+      <Item class="Attachment" referent="A1"><Properties><string name="Name">Hinge</string><CoordinateFrame name="CFrame"><X>2</X><Y>0</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame></Properties></Item>
+      <Item class="Weld" referent="WE1"><Properties><string name="Name">Glue</string><Ref name="Part0">P1</Ref><Ref name="Part1">P2</Ref></Properties></Item>
+      <Item class="StringValue" referent="SV1"><Properties><string name="Name">Owner</string><string name="Value">Ana</string></Properties></Item>
+      <Item class="IntValue" referent="IV1"><Properties><string name="Name">Coins</string><int name="Value">12</int></Properties></Item>
+      <Item class="ObjectValue" referent="OV1"><Properties><string name="Name">Target</string><Ref name="Value">P2</Ref></Properties></Item>
+    </Item>
+    <Item class="Part" referent="P2"><Properties><string name="Name">Wall</string></Properties></Item>
+  </Item>
+  <Item class="Lighting" referent="LI">
+    <Properties><string name="Name">Lighting</string><float name="FogStart">100</float></Properties>
+    <Item class="Atmosphere" referent="AT"><Properties><float name="Density">0.3</float></Properties></Item>
+  </Item>
+  <Item class="Teams" referent="TE">
+    <Properties><string name="Name">Teams</string></Properties>
+    <Item class="Team" referent="TM"><Properties><string name="Name">Red</string><int name="TeamColor">21</int><bool name="AutoAssignable">false</bool></Properties></Item>
+  </Item>
+  <Item class="StarterGui" referent="SG">
+    <Properties><string name="Name">StarterGui</string></Properties>
+    <Item class="ScreenGui" referent="SGU">
+      <Properties><string name="Name">HUD</string></Properties>
+      <Item class="BillboardGui" referent="BB">
+        <Properties><string name="Name">Tag</string><Ref name="Adornee">P2</Ref><Vector3 name="StudsOffset"><X>0</X><Y>2</Y><Z>0</Z></Vector3></Properties>
+        <Item class="TextBox" referent="TB"><Properties><string name="Name">Input</string><string name="Text">hi</string></Properties></Item>
+      </Item>
+      <Item class="ScrollingFrame" referent="SF">
+        <Properties><string name="Name">List</string><UDim2 name="Size"><XS>1</XS><XO>0</XO><YS>0</YS><YO>100</YO></UDim2></Properties>
+        <Item class="UIListLayout" referent="UL"><Properties><string name="Name">UIListLayout</string><UDim name="Padding"><S>0</S><O>6</O></UDim><token name="SortOrder">0</token></Properties></Item>
+        <Item class="UIStroke" referent="US"><Properties><string name="Name">Outline</string><Color3uint8 name="Color">16777215</Color3uint8><float name="Thickness">2</float></Properties></Item>
+      </Item>
+    </Item>
+  </Item>
+</roblox>
+)";
+    DataModel dm;
+    ImportReport rep;
+    std::string err;
+    REQUIRE(import_place_memory(reinterpret_cast<const u8*>(xml.data()), xml.size(), dm, {}, &rep, &err));
+    Instance* door = dm.find_path("Workspace.Door");
+    Instance* wall = dm.find_path("Workspace.Wall");
+    REQUIRE(door != nullptr);
+    REQUIRE(wall != nullptr);
+
+    Instance* decal = dm.find_path("Workspace.Door.Face");
+    REQUIRE(decal != nullptr);
+    CHECK(decal->class_name() == "Decal");
+    CHECK(decal->get_string("Texture") == "rbxassetid://42");
+    CHECK(decal->get("Face")->as_enum() == enum_of("NormalId", "Front")); // Roblox token 5
+    CHECK(decal->get_float("Transparency") == doctest::Approx(0.5f));
+
+    Instance* hinge = dm.find_path("Workspace.Door.Hinge");
+    REQUIRE(hinge != nullptr);
+    CHECK(hinge->class_name() == "Attachment");
+    CHECK(hinge->get_vec3("Position").x == doctest::Approx(2 * 0.28f));
+
+    Instance* glue = dm.find_path("Workspace.Door.Glue");
+    REQUIRE(glue != nullptr);
+    CHECK(glue->class_name() == "Weld");
+    CHECK(glue->get("Part0")->ref == door->id());
+    CHECK(glue->get("Part1")->ref == wall->id());
+
+    CHECK(dm.find_path("Workspace.Door.Owner")->class_name() == "StringValue");
+    CHECK(dm.find_path("Workspace.Door.Owner")->get_string("Value") == "Ana");
+    CHECK(dm.find_path("Workspace.Door.Coins")->get("Value")->as_int() == 12);
+    CHECK(dm.find_path("Workspace.Door.Target")->get("Value")->ref == wall->id());
+
+    // Teams is not a Tefra service: a placeholder under ReplicatedStorage; the Team inside is a real Team.
+    Instance* teams = dm.find_path("ReplicatedStorage.Teams");
+    REQUIRE(teams != nullptr);
+    CHECK(teams->class_name() == "Folder");
+    CHECK(attr_str(teams, "RobloxClass") == "Teams");
+    Instance* red = dm.find_path("ReplicatedStorage.Teams.Red");
+    REQUIRE(red != nullptr);
+    CHECK(red->class_name() == "Team");
+    CHECK(red->get_vec3("TeamColor").x == doctest::Approx(196.0f / 255.0f));
+    CHECK_FALSE(red->get_bool("AutoAssignable", true));
+
+    Instance* tag = dm.find_path("StarterGui.HUD.Tag");
+    REQUIRE(tag != nullptr);
+    CHECK(tag->class_name() == "BillboardGui");
+    CHECK(tag->get("Adornee")->ref == wall->id());
+    CHECK(tag->get_vec3("StudsOffset").y == doctest::Approx(2 * 0.28f));
+    CHECK(dm.find_path("StarterGui.HUD.Tag.Input")->class_name() == "TextBox");
+    CHECK(dm.find_path("StarterGui.HUD.Tag.Input")->get_string("Text") == "hi");
+
+    Instance* list = dm.find_path("StarterGui.HUD.List");
+    REQUIRE(list != nullptr);
+    CHECK(list->class_name() == "Frame");
+    CHECK(attr_str(list, "RobloxClass") == "ScrollingFrame");
+    CHECK(list->get_vec3("SizeOffset").y == doctest::Approx(100.0f));
+    Instance* layout = dm.find_path("StarterGui.HUD.List.UIListLayout");
+    REQUIRE(layout != nullptr);
+    CHECK(layout->get_float("Padding") == doctest::Approx(6.0f));
+    CHECK(layout->get_attribute("rbx.SortOrder") != nullptr);
+    Instance* stroke = dm.find_path("StarterGui.HUD.List.Outline");
+    REQUIRE(stroke != nullptr);
+    CHECK(stroke->class_name() == "UIStroke");
+    CHECK(stroke->get_float("Thickness") == doctest::Approx(2.0f));
+
+    // Lighting: effects and unmapped properties are attributes; no Atmosphere instance.
+    Instance* lighting = dm.find_path("Lighting");
+    REQUIRE(lighting != nullptr);
+    CHECK(dm.find_path("Lighting.Atmosphere") == nullptr);
+    CHECK(attr_num(lighting, "rbx.Atmosphere.Density") == doctest::Approx(0.3));
+    CHECK(attr_num(lighting, "rbx.FogStart") == doctest::Approx(100));
+
+    CHECK(rep.class_counts.at("Decal") == 1);
+    CHECK(rep.approximated >= 1); // ScrollingFrame
+}
+
+TEST_CASE("rbx: script stubs are well-formed C# and keep the Luau as comments") {
+    const std::string luau1 =
+        "local t = { a = 1 } -- }{ */ \"quote\" 'x'\nprint(\"end\")\xE2\x80\xA8 still comment\nlast line";
+    const std::string luau2 = "print('two')";
+    std::string xml = R"(<roblox version="4">
+  <Item class="ServerScriptService" referent="S0">
+    <Properties><string name="Name">ServerScriptService</string></Properties>
+    <Item class="Script" referent="S1"><Properties><string name="Name">class</string><ProtectedString name="Source"><![CDATA[)" +
+                      luau1 + R"(]]></ProtectedString></Properties></Item>
+    <Item class="Script" referent="S2"><Properties><string name="Name">Spin</string><ProtectedString name="Source"><![CDATA[)" +
+                      luau2 + R"(]]></ProtectedString></Properties></Item>
+    <Item class="Script" referent="S3"><Properties><string name="Name">Spin</string><ProtectedString name="Source"><![CDATA[print(3)]]></ProtectedString></Properties></Item>
+  </Item>
+  <Item class="ReplicatedStorage" referent="R0">
+    <Properties><string name="Name">ReplicatedStorage</string></Properties>
+    <Item class="ModuleScript" referent="M1"><Properties><string name="Name">Util-Helper 2</string><ProtectedString name="Source"><![CDATA[return {}]]></ProtectedString></Properties></Item>
+  </Item>
+</roblox>
+)";
+    DataModel dm;
+    ImportReport rep;
+    std::string err;
+    REQUIRE(import_place_memory(reinterpret_cast<const u8*>(xml.data()), xml.size(), dm, {}, &rep, &err));
+    REQUIRE(rep.scripts == 4);
+
+    Instance* kw = dm.find_path("ServerScriptService.class");
+    REQUIRE(kw != nullptr);
+    CHECK(kw->get_string("LuauSource") == luau1);
+    CHECK(stub_is_well_formed(kw->get_string("Source")));
+    CHECK(kw->get_string("Source").find("public class class_ : TefraScript") != std::string::npos);
+    CHECK_FALSE(kw->get_bool("Enabled", true));
+
+    // Two scripts named Spin: each gets its own class name (the file index is appended).
+    Instance* s2 = dm.find_path("ServerScriptService.Spin");
+    REQUIRE(s2 != nullptr);
+    const std::string src2 = s2->get_string("Source");
+    CHECK(stub_is_well_formed(src2));
+    CHECK(src2.find("public class Spin_") != std::string::npos);
+    CHECK(src2.find("// print('two')") != std::string::npos);
+
+    Instance* mod = dm.find_path("ReplicatedStorage.Util-Helper 2");
+    REQUIRE(mod != nullptr);
+    CHECK(mod->class_name() == "ModuleScript");
+    CHECK(stub_is_well_formed(mod->get_string("Source")));
+    CHECK(mod->get_string("Source").find("public class Util_Helper_2 : TefraScript") != std::string::npos);
+
+    // The checker itself rejects a broken stub.
+    CHECK_FALSE(stub_is_well_formed("public class X : TefraScript\n{\n    public override void Start() { }\n"));
+    CHECK_FALSE(stub_is_well_formed("public class X : TefraScript\n{\n}\n}\n// Start\n"));
+}
+
+TEST_CASE("rbx: asset files next to the place link MeshPart, FileMesh and Sound references") {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const std::string dir = "rbx_test_assets_a";
+    fs::create_directories(dir, ec);
+    const std::string glb = dir + "/777.glb";
+    const Bytes glb_bytes = {'g', 'l', 'T', 'F'}; // only the file's existence is checked here
+    REQUIRE(file_write_all(glb.c_str(), glb_bytes.data(), glb_bytes.size()));
+
+    std::string xml = R"(<roblox version="4">
+  <Item class="Workspace" referent="W0">
+    <Properties><string name="Name">Workspace</string></Properties>
+    <Item class="MeshPart" referent="M1"><Properties><string name="Name">Tree</string><string name="MeshId">rbxassetid://777</string></Properties></Item>
+    <Item class="MeshPart" referent="M2"><Properties><string name="Name">Rock</string><string name="MeshId">rbxassetid://778</string></Properties></Item>
+    <Item class="Part" referent="P1">
+      <Properties><string name="Name">Lamp</string></Properties>
+      <Item class="SpecialMesh" referent="SM"><Properties><string name="Name">Mesh</string><string name="MeshId">rbxassetid://777</string><Vector3 name="Scale"><X>2</X><Y>2</Y><Z>2</Z></Vector3></Properties></Item>
+    </Item>
+    <Item class="Sound" referent="S1"><Properties><string name="Name">Music</string><Content name="SoundId"><url>rbxassetid://888</url></Content></Properties></Item>
+  </Item>
+</roblox>
+)";
+    ImportOptions opt;
+    opt.assets_dir = dir;
+    DataModel dm;
+    ImportReport rep;
+    std::string err;
+    REQUIRE(import_place_memory(reinterpret_cast<const u8*>(xml.data()), xml.size(), dm, opt, &rep, &err));
+
+    CHECK(dm.find_path("Workspace.Tree")->get_string("MeshId") == glb);
+    CHECK(dm.find_path("Workspace.Tree")->class_name() == "MeshPart");
+    CHECK(dm.find_path("Workspace.Rock")->get_string("MeshId") == "rbxassetid://778"); // no file: text kept
+    CHECK(dm.find_path("Workspace.Rock")->get_attribute("RobloxClass") != nullptr);
+    CHECK(dm.find_path("Workspace.Lamp")->class_name() == "MeshPart"); // FileMesh with a file
+    CHECK(dm.find_path("Workspace.Lamp")->get_string("MeshId") == glb);
+    CHECK(dm.find_path("Workspace.Lamp.Mesh") == nullptr); // absorbed, not a child
+    CHECK(dm.find_path("Workspace.Music")->get_string("SoundId") == "rbxassetid://888");
+    CHECK(rep.assets_linked == 2);
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("rbx: import_place of a file looks for <stem>_assets next to it") {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const std::string place = "rbx_test_place_b.rbxlx";
+    const std::string dir = "rbx_test_place_b_assets";
+    fs::create_directories(dir, ec);
+    const std::string glb = dir + "/777.glb";
+    const Bytes glb_bytes = {'g', 'l', 'T', 'F'};
+    REQUIRE(file_write_all(glb.c_str(), glb_bytes.data(), glb_bytes.size()));
+    const std::string xml = R"(<roblox version="4">
+  <Item class="Workspace" referent="W0">
+    <Properties><string name="Name">Workspace</string></Properties>
+    <Item class="MeshPart" referent="M1"><Properties><string name="Name">Tree</string><string name="MeshId">rbxassetid://777</string></Properties></Item>
+  </Item>
+</roblox>
+)";
+    REQUIRE(file_write_all(place.c_str(), xml.data(), xml.size()));
+    DataModel dm;
+    ImportReport rep;
+    std::string err;
+    REQUIRE(import_place(place.c_str(), dm, {}, &rep, &err));
+    CHECK(dm.find_path("Workspace.Tree")->get_string("MeshId") == glb);
+    fs::remove_all(dir, ec);
+    fs::remove(place, ec);
+}
+
+TEST_CASE("rbx: keep_all_properties keeps unmapped properties of native classes (off by default)") {
+    const std::string xml = R"(<roblox version="4">
+  <Item class="Workspace" referent="W0">
+    <Properties><string name="Name">Workspace</string></Properties>
+    <Item class="Part" referent="P1">
+      <Properties><string name="Name">Gate</string><bool name="Locked">true</bool></Properties>
+    </Item>
+  </Item>
+</roblox>
+)";
+    DataModel dm;
+    REQUIRE(import_place_memory(reinterpret_cast<const u8*>(xml.data()), xml.size(), dm, {}));
+    CHECK(dm.find_path("Workspace.Gate")->get_attribute("rbx.Locked") == nullptr);
+
+    ImportOptions opt;
+    opt.keep_all_properties = true;
+    DataModel dm2;
+    REQUIRE(import_place_memory(reinterpret_cast<const u8*>(xml.data()), xml.size(), dm2, opt));
+    const tefra::world::Value* locked = dm2.find_path("Workspace.Gate")->get_attribute("rbx.Locked");
+    REQUIRE(locked != nullptr);
+    CHECK(locked->as_bool());
 }

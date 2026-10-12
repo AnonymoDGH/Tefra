@@ -1267,6 +1267,90 @@ namespace Tefra
         public float AspectRatio { get => GetFloat(RatioP); set => SetFloat(RatioP, value); }
     }
 
+    // ---- Value objects (Roblox *Value; engine/world/src/classes.cpp) -----------------------------------------------
+
+    /// <summary>Base of the value objects: one typed value each (`Value` property).</summary>
+    public abstract class ValueBase : Instance
+    {
+        internal ValueBase(ulong id) : base(id) { }
+    }
+
+    public class StringValue : ValueBase
+    {
+        private static readonly PropRef ValueP = new PropRef("StringValue", "Value");
+
+        internal StringValue(ulong id) : base(id) { }
+
+        public string Value { get => GetString(ValueP); set => SetString(ValueP, value); }
+    }
+
+    public class IntValue : ValueBase
+    {
+        private static readonly PropRef ValueP = new PropRef("IntValue", "Value");
+
+        internal IntValue(ulong id) : base(id) { }
+
+        public int Value { get => GetInt(ValueP); set => SetInt(ValueP, value); }
+    }
+
+    public class NumberValue : ValueBase
+    {
+        private static readonly PropRef ValueP = new PropRef("NumberValue", "Value");
+
+        internal NumberValue(ulong id) : base(id) { }
+
+        public float Value { get => GetFloat(ValueP); set => SetFloat(ValueP, value); }
+    }
+
+    public class BoolValue : ValueBase
+    {
+        private static readonly PropRef ValueP = new PropRef("BoolValue", "Value");
+
+        internal BoolValue(ulong id) : base(id) { }
+
+        public bool Value { get => GetBool(ValueP); set => SetBool(ValueP, value); }
+    }
+
+    public class Vector3Value : ValueBase
+    {
+        private static readonly PropRef ValueP = new PropRef("Vector3Value", "Value");
+
+        internal Vector3Value(ulong id) : base(id) { }
+
+        public Vector3 Value { get => GetVector3(ValueP); set => SetVector3(ValueP, value); }
+    }
+
+    public class Color3Value : ValueBase
+    {
+        private static readonly PropRef ValueP = new PropRef("Color3Value", "Value");
+
+        internal Color3Value(ulong id) : base(id) { }
+
+        public Color3 Value { get => GetColor3(ValueP); set => SetColor3(ValueP, value); }
+    }
+
+    /// <summary>Holds a reference to another instance (nil = null).</summary>
+    public class ObjectValue : ValueBase
+    {
+        private static readonly PropRef ValueP = new PropRef("ObjectValue", "Value");
+
+        internal ObjectValue(ulong id) : base(id) { }
+
+        public Instance Value { get => GetRef(ValueP); set => SetRef(ValueP, value); }
+    }
+
+    /// <summary>A position and an orientation (Roblox CFrame, kept as Position + Orientation in degrees).</summary>
+    public class CFrameValue : ValueBase
+    {
+        private static readonly PropRef PositionP = new PropRef("CFrameValue", "Position");
+        private static readonly PropRef OrientationP = new PropRef("CFrameValue", "Orientation");
+
+        internal CFrameValue(ulong id) : base(id) { }
+
+        public Vector3 Position { get => GetVector3(PositionP); set => SetVector3(PositionP, value); }
+        public Vector3 Orientation { get => GetVector3(OrientationP); set => SetVector3(OrientationP, value); }
+    }
+
     internal static class ClassMap
     {
         internal static readonly Dictionary<string, Func<ulong, Instance>> Map =
@@ -1316,6 +1400,14 @@ namespace Tefra
                 ["BindableFunction"] = id => new BindableFunction(id),
                 ["RemoteEvent"] = id => new RemoteEvent(id),
                 ["RemoteFunction"] = id => new RemoteFunction(id),
+                ["StringValue"] = id => new StringValue(id),
+                ["IntValue"] = id => new IntValue(id),
+                ["NumberValue"] = id => new NumberValue(id),
+                ["BoolValue"] = id => new BoolValue(id),
+                ["Vector3Value"] = id => new Vector3Value(id),
+                ["Color3Value"] = id => new Color3Value(id),
+                ["ObjectValue"] = id => new ObjectValue(id),
+                ["CFrameValue"] = id => new CFrameValue(id),
             };
     }
 }

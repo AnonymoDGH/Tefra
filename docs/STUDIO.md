@@ -212,6 +212,28 @@ string json = HttpService.JSONEncode(new Dictionary<string, object> { { "a", 1 }
 - Los cambios de atributos y etiquetas no entran en el historial de deshacer (Ctrl+Z) de Studio. El panel Properties los muestra en solo lectura.
 - MCP: `get_instance` devuelve `attributes` y `tags`; `set_properties` acepta `attributes` (se fusionan, `null` borra) y `tags` (reemplaza la lista).
 
+## Importar lugares de Roblox (ADR-017)
+Solo para lugares propios. `Import Roblox Place...` (o `tefra_import in.rbxlx out.tefra [--report r.json]`) convierte
+`.rbxl`, `.rbxlx`, `.rbxm` y `.rbxmx`. Qué se trae y qué no está en `docs/research/rbx-import/REPORT.md`.
+
+- **Scripts**: `Script`, `LocalScript` y `ModuleScript` conservan el Luau en `LuauSource`. `Source` es un esqueleto C#
+  (`public class <Nombre> : TefraScript` con `Start()` vacío) con el Luau original como comentario. Se importan
+  desactivados (`Enabled = false`). Solo queda traducir el Luau a C#. Si dos scripts se llaman igual, el esqueleto
+  lleva el índice del fichero en el nombre de la clase.
+- **Clases sin equivalente**: se crea una `Folder` con el mismo nombre, el atributo `RobloxClass` (clase original) y
+  cada propiedad como `rbx.<Propiedad>` (números, booleanos, cadenas, `Vector3`, `Color3`; el resto como texto JSON).
+  Los hijos se conservan. Los `rbx.*` son valores crudos de Roblox (studs), sin convertir.
+- **Atributos y etiquetas** de Roblox pasan a atributos y etiquetas de Tefra.
+- **Valores, decals, attachments, welds, equipos y GUI**: `StringValue`, `IntValue`, `NumberValue`, `BoolValue`,
+  `Vector3Value`, `Color3Value`, `ObjectValue`, `CFrameValue`, `Decal`, `Texture`, `Attachment`, `Weld`,
+  `WeldConstraint`, `Team`, `SurfaceGui`, `BillboardGui` y los modificadores `UIStroke`, `UIPadding`, `UIListLayout`...
+- **Efectos de Lighting** (`Atmosphere`, `Sky`, `BloomEffect`...): sus propiedades son atributos `rbx.<Clase>.<Prop>`
+  de `Lighting`.
+- **Assets**: si `<lugar>_assets/<id>.glb` (o `.ogg`, `.png`...) existe junto al lugar, `MeshId` y `SoundId` apuntan a
+  ese fichero. Si no, se conserva el texto `rbxassetid://`. Studio no descarga nada.
+- **Terreno voxel** (SmoothGrid): sin convertir; queda una `Folder` `Terrain` con sus ajustes en `rbx.*`.
+- El informe lista contadores por clase y cada clase convertida a marcador de posición.
+
 ## Efectos (ParticleEmitter)
 Un `ParticleEmitter` bajo una Part emite partículas de verdad (billboards en GPU, ordenadas, *soft particles*, máscara reactiva para el TAA). Se ven también en modo edición.
 - `Texture`: `builtin:fire`, `smoke`, `spark`, `star`, `snow`, `ring`, `circle`.
