@@ -256,6 +256,7 @@ void App::draw_menu_bar() {
         if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S", false, editing)) save_place(true);
         ImGui::Separator();
         if (ImGui::MenuItem("Import Roblox Place...", nullptr, false, editing)) import_roblox_dialog();
+        if (ImGui::MenuItem("Import 3D Model...", nullptr, false, editing)) import_model_dialog();
         if (ImGui::MenuItem("Export Game...", nullptr, false, editing)) export_game_dialog();
         ImGui::Separator();
         if (ImGui::MenuItem("Quit")) confirm_discard([this] { quit_ = true; });

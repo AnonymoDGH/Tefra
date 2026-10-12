@@ -135,3 +135,13 @@ endif()
 # --- meshoptimizer (MIT, v0.22): mesh simplification for LODs of heavy scanned assets (only the simplifier) --------
 add_library(tefra_meshopt STATIC meshoptimizer/simplifier.cpp meshoptimizer/allocator.cpp)
 target_include_directories(tefra_meshopt SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/meshoptimizer)
+
+# --- ufbx (MIT or public domain, v0.23.1): FBX and OBJ (+MTL) loader for the model import (engine/renderer) -----------
+add_library(tefra_ufbx STATIC ufbx/ufbx.c)
+target_include_directories(tefra_ufbx SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/ufbx)
+if(UNIX AND NOT APPLE)
+    find_library(TEFRA_UFBX_MATH_LIB m)
+    if(TEFRA_UFBX_MATH_LIB)
+        target_link_libraries(tefra_ufbx PUBLIC ${TEFRA_UFBX_MATH_LIB})
+    endif()
+endif()

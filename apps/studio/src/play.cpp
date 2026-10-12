@@ -341,29 +341,23 @@ void App::setup_mcp() {
     }
     mcp_->add_tool(
         "import_model",
-        "Inserts a glTF model (.glb/.gltf file path on this computer) as a MeshPart. In a saved project the file is "
-        "copied into its assets folder. scale multiplies the model's own size (glTF metres).",
+        "Inserts a 3D model as a MeshPart. Accepts .glb/.gltf (used as they are) and .fbx, .obj (+ .mtl), .stl and "
+        ".ply (converted to .glb in metres, +Y up). In a saved project the file goes into its assets folder. scale "
+        "multiplies the model's own size; unit_scale sets the unit of OBJ/STL/PLY files (1 = metres, 0.01 = cm); "
+        "max_triangles simplifies the model (0 = keep).",
         R"({"type":"object","properties":{"path":{"type":"string"},"name":{"type":"string"},)"
         R"("position":{"type":"array"},"scale":{"type":"number"},"orientation":{"type":"array"},)"
+        R"("unit_scale":{"type":"number"},"max_triangles":{"type":"number"},)"
         R"("parent_path":{"type":"string"}},"required":["path"]})",
         [this](const JsonValue& a) {
             const std::string src = a["path"].as_string();
-            const std::string ext = path_extension(src);
-            if (ext != ".glb" && ext != ".gltf") return mcp::ToolResult::error("path must be a .glb or .gltf file");
-            if (!file_exists(src.c_str())) return mcp::ToolResult::error("file not found: " + src);
-            std::string mesh_id = src;
-            if (!session_.path().empty()) {
-                const std::string project = path_parent(session_.path());
-                const std::string rel = "assets/" + path_stem(src) + "/" + path_filename(src);
-                const std::string dst = path_join(project, rel);
-                bool ok = make_dirs(path_parent(dst).c_str());
-                if (ext == ".gltf")
-                    ok = ok && copy_tree(path_parent(src), path_parent(dst)); // buffers and textures
-                else
-                    ok = ok && copy_file(src, dst);
-                if (!ok) return mcp::ToolResult::error("cannot copy the model into " + project);
-                mesh_id = rel;
-            }
+            render::ModelImportOptions opt;
+            opt.unit_scale = a["unit_scale"].is_number() ? f32(a["unit_scale"].as_number()) : 1.0f;
+            const f64 max_tris = a["max_triangles"].as_number(0.0);
+            opt.max_triangles = max_tris > 0.0 ? u32(max_tris) : 0u;
+            std::string mesh_id, err;
+            render::ModelImportReport rep;
+            if (!import_model_asset(src, opt, mesh_id, err, &rep)) return mcp::ToolResult::error(err);
             world::DataModel& dm = session_.model();
             Instance* parent = dm.workspace();
             if (a["parent_path"].is_string()) {
@@ -389,6 +383,12 @@ void App::setup_mcp() {
             r.set("id", JsonValue(f64(mp->id())));
             r.set("path", JsonValue(mp->full_name()));
             r.set("MeshId", JsonValue(mesh_id));
+            if (!rep.format.empty()) r.set("format", JsonValue(rep.format));
+            if (!rep.warnings.empty()) {
+                JsonValue ws = JsonValue::array();
+                for (const std::string& w : rep.warnings) ws.push(JsonValue(w));
+                r.set("warnings", ws);
+            }
             return mcp::ToolResult::json(r);
         });
     mcp_->add_tool(

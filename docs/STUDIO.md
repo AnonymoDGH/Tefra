@@ -31,8 +31,23 @@ Al abrir Studio sin argumentos aparece la página de inicio, al estilo de Roblox
 - **My Experiences**: todas, con búsqueda y orden por fecha o nombre.
 - **Archive**: experiencias archivadas (`Documentos/Tefra/Archive`), con Restore.
 - **Open File...** abre cualquier `.tefra`; **Import Roblox Place...** importa un `.rbxl`/`.rbxlx` propio (ADR-017).
+- **Import 3D Model...** (menú File) inserta un modelo como MeshPart, seleccionado, donde mira la cámara. Ver «Importar modelos 3D».
 
 Cada proyecto es una carpeta: `<Nombre>.tefra`, `thumbnail.png` y `assets/` (los archivos que el lugar usa por ruta relativa). `File > Home` vuelve a la página de inicio. Si hay cambios sin guardar, Studio pregunta antes de cerrar o cambiar de lugar. La variable `TEFRA_HOME` cambia la carpeta raíz (instalaciones portátiles).
+
+## Importar modelos 3D
+**File > Import 3D Model...** y la herramienta MCP `import_model` aceptan:
+- `.glb` y `.gltf`: se usan tal cual (un `.gltf` copia toda su carpeta, con buffers y texturas).
+- `.fbx` (binario o ASCII) y `.obj` (con su `.mtl` y texturas): leídos con ufbx (MIT o dominio público, `third_party/ufbx`).
+- `.stl` (ASCII y binario) y `.ply` (ASCII y binario little endian): leídos por el propio importador.
+- `.dae` (Collada) y `.3mf`: no soportados todavía.
+
+Se convierten a glTF 2.0 binario (`.glb`), con geometría, normales, UV, materiales PBR (color, metalness/roughness, normal map, emisión) y la jerarquía de nodos con sus transformaciones. Las unidades quedan en metros y el eje vertical en +Y. FBX usa sus propias unidades y ejes; OBJ, STL y PLY no las llevan, así que usan `unit_scale` (1 = metros, 0.01 = cm) y, en STL y PLY, se asume Z hacia arriba.
+
+- En un proyecto guardado, el `.glb` va a `assets/<nombre>/<nombre>.glb`. En un lugar sin guardar, a una carpeta de caché de Studio.
+- Las texturas van dentro del `.glb` (solo PNG y JPEG). Sin embeber, se escriben junto al `.glb`.
+- Límite opcional de triángulos por primitiva (`max_triangles`, simplificación con meshoptimizer).
+- Los modelos con esqueleto se importan en su pose de reposo: no se exporta el esqueleto ni las formas (blend shapes).
 
 ## Exportar un juego
 `File > Export Game...` crea una carpeta autocontenida que se puede copiar a otro PC:
@@ -267,6 +282,6 @@ Herramientas disponibles:
 - play, stop, get_output, capture_viewport, set_camera;
 - terrain_height, raycast (medir el terreno y apoyar objetos en el suelo);
 - new_place_from_template (meadow, beach, valley, obby...), save_project;
-- import_model (glTF/GLB → MeshPart, copiado a `assets/` del proyecto), import_roblox.
+- import_model (glTF/GLB, FBX, OBJ, STL o PLY → MeshPart; los modelos se convierten a GLB en `assets/`; opciones `unit_scale` y `max_triangles`), import_roblox.
 
 Para clientes que solo hablan stdio (Claude Desktop) hay un puente, `tefra_mcp`; ver `docs/research/m3-mcp/REPORT.md`.
