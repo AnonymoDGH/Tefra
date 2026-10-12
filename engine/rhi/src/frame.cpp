@@ -36,6 +36,16 @@ FrameLoop::~FrameLoop() {
     vkDestroySemaphore(dev_.device(), timeline_, nullptr);
 }
 
+void FrameLoop::wait_next() {
+    const u32 slot = static_cast<u32>(frame_number_ % count_);
+    if (slot_value_[slot] == 0) return;
+    VkSemaphoreWaitInfo wi{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+    wi.semaphoreCount = 1;
+    wi.pSemaphores = &timeline_;
+    wi.pValues = &slot_value_[slot];
+    TEFRA_VK_CHECK(vkWaitSemaphores(dev_.device(), &wi, UINT64_MAX));
+}
+
 FrameContext& FrameLoop::begin() {
     framebuffer_cache_next_frame();
     const u32 slot = static_cast<u32>(frame_number_ % count_);

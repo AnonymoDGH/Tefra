@@ -146,7 +146,7 @@ bool App::init(std::string* error) {
     }
     u32 w = 0, h = 0;
     window_->framebuffer_size(w, h);
-    swapchain_ = std::make_unique<rhi::Swapchain>(*device_, surface, w, h, rhi::PresentMode::Fifo);
+    swapchain_ = std::make_unique<rhi::Swapchain>(*device_, surface, w, h, rhi::PresentMode::Mailbox); // low latency; falls back to fifo
     frames_ = std::make_unique<rhi::FrameLoop>(*device_, kFramesInFlight);
     heap_ = std::make_unique<rhi::BindlessHeap>(*device_, kFramesInFlight);
     scene_ = std::make_unique<render::Scene>(*device_, *heap_);
@@ -633,6 +633,8 @@ int App::run() {
     u32 frames_done = 0;
     const bool scripted = !cfg_.capture_path.empty() && cfg_.frames > 0;
     while (!quit_) {
+        // Wait for the GPU first, then read input: the camera moves with this moment's mouse and keys.
+        frames_->wait_next();
         window_->poll_events();
         if (window_->should_close()) {
             if (cfg_.player || scripted || screen_ != Screen::Editor || !session_.modified()) break;
