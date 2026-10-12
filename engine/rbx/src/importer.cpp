@@ -11,6 +11,8 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -170,39 +172,76 @@ bool ascii_alnum(char c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
 }
 
-// A C# identifier for the skeleton class of a script: sanitised name plus the file index (unique).
-std::string csharp_ident(const std::string& name, u32 index) {
+// Reserved C# words and the engine names a script class must not shadow.
+bool csharp_reserved(const std::string& w) {
+    static const char* const kWords[] = {
+        "abstract", "as",      "base",    "bool",       "break",    "byte",     "case",        "catch",     "char",
+        "checked",  "class",   "const",   "continue",   "decimal",  "default",  "delegate",    "do",        "double",
+        "else",     "enum",    "event",   "explicit",   "extern",   "false",    "finally",     "fixed",     "float",
+        "for",      "foreach", "goto",    "if",         "implicit", "in",       "int",         "interface", "internal",
+        "is",       "lock",    "long",    "namespace",  "new",      "null",     "object",      "operator",  "out",
+        "override", "params",  "private", "protected",  "public",   "readonly", "ref",         "return",    "sbyte",
+        "sealed",   "short",   "sizeof",  "stackalloc", "static",   "string",   "struct",      "switch",    "this",
+        "throw",    "true",    "try",     "typeof",     "uint",     "ulong",    "unchecked",   "unsafe",    "ushort",
+        "using",    "virtual", "void",    "volatile",   "while",    "Tefra",    "TefraScript", "System"};
+    for (const char* k : kWords)
+        if (w == k) return true;
+    return false;
+}
+
+// Identifier base of the C# class of a script: letters, digits and '_', no leading digit, not reserved.
+std::string csharp_base(const std::string& name) {
     std::string base;
     for (char c : name) base += ascii_alnum(c) ? c : '_';
     if (base.empty() || (base[0] >= '0' && base[0] <= '9')) base = "Script_" + base;
-    return base + "_" + std::to_string(index);
+    if (csharp_reserved(base)) base += "_";
+    return base;
 }
 
-std::string one_line(std::string s) {
-    for (char& c : s)
-        if (c == '\n' || c == '\r') c = ' ';
+// Makes text safe inside a C# line comment: C# ends a comment at CR, LF, U+0085, U+2028 and U+2029, so those (and
+// NUL bytes) become spaces.
+std::string scrub_line(std::string s) {
+    for (usize i = 0; i < s.size(); ++i) {
+        const u8 c = static_cast<u8>(s[i]);
+        if (c == '\r' || c == '\n' || c == 0) {
+            s[i] = ' ';
+        } else if (c == 0xC2 && i + 1 < s.size() && static_cast<u8>(s[i + 1]) == 0x85) {
+            s[i] = ' ';
+            s[i + 1] = ' ';
+            ++i;
+        } else if (c == 0xE2 && i + 2 < s.size() && static_cast<u8>(s[i + 1]) == 0x80 &&
+                   (static_cast<u8>(s[i + 2]) == 0xA8 || static_cast<u8>(s[i + 2]) == 0xA9)) {
+            s[i] = ' ';
+            s[i + 1] = ' ';
+            s[i + 2] = ' ';
+            i += 2;
+        }
+    }
     return s;
 }
 
-// The C# skeleton that replaces a Roblox script: the Luau is kept as line comments (safe for any content).
-std::string script_skeleton(const std::string& cls, const std::string& name, const std::string& luau, u32 index) {
+// The C# stub that replaces a Roblox script: the Luau original as a block of line comments, then an empty class.
+// ModuleScripts are compiled (never run), so the stub must compile on its own.
+std::string script_skeleton(const std::string& cls, const std::string& name, const std::string& luau,
+                            const std::string& class_name) {
     std::string out;
-    out += "// Imported from a Roblox " + cls + " \"" + one_line(name) + "\".\n";
-    out += "// The original Luau is kept below as comments and in LuauSource. Rewrite it in C#;\n";
-    out += "// the script is imported disabled (Enabled = false).\n";
-    out += "using Tefra;\n\n";
-    out += "public class " + csharp_ident(name, index) + " : TefraScript\n{\n";
-    out += "    // Luau original:\n";
+    out += "// Imported from a Roblox " + cls + " \"" + scrub_line(name) + "\".\n";
+    out += "// The Luau original is kept below as comments (and in LuauSource). Rewrite the logic in C#.\n";
+    out += "// The script is imported disabled (Enabled = false) so nothing runs until it is translated.\n";
+    out += "// Luau original:\n";
     usize start = 0;
     for (;;) {
         usize end = luau.find('\n', start);
         if (end == std::string::npos) end = luau.size();
         std::string line = luau.substr(start, end - start);
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        out += "    // " + line + "\n";
+        out += "// " + scrub_line(line) + "\n";
         if (end >= luau.size()) break;
         start = end + 1;
     }
+    out += "\nusing Tefra;\n\n";
+    out += "public class " + class_name + " : TefraScript\n{\n";
+    out += "    public override void Start() { }\n";
     out += "}\n";
     return out;
 }
@@ -267,13 +306,19 @@ std::optional<vec3> color_of(const InstanceData& d, std::string_view name) {
     return std::nullopt;
 }
 
+// Roblox BrickColor number -> sRGB (nullopt when the number is not in the partial palette).
+std::optional<vec3> brick_rgb(i64 number) {
+    for (const BrickEntry& e : kBrickColors)
+        if (static_cast<i64>(e.number) == number) return vec3{e.r / 255.0f, e.g / 255.0f, e.b / 255.0f};
+    return std::nullopt;
+}
+
 // Part colour: Color3uint8, then Color3, then the BrickColor number.
 std::optional<vec3> part_color(const InstanceData& d, bool& unknown_brick) {
     if (auto c = color_of(d, "Color3uint8")) return c;
     if (auto c = color_of(d, "Color")) return c;
     if (auto n = int_of(d, "BrickColor")) {
-        for (const BrickEntry& e : kBrickColors)
-            if (static_cast<i64>(e.number) == *n) return vec3{e.r / 255.0f, e.g / 255.0f, e.b / 255.0f};
+        if (auto rgb = brick_rgb(*n)) return rgb;
         unknown_brick = true;
         return vec3{163 / 255.0f, 162 / 255.0f, 165 / 255.0f}; // BrickColor kDefaultBrickColor
     }
@@ -322,6 +367,13 @@ bool is_same_name_class(std::string_view c) {
            c == "StarterPlayerScripts" || c == "StarterCharacterScripts";
 }
 
+// Roblox NormalId token -> Tefra NormalId name. Roblox orders the faces Right, Top, Back, Left, Bottom, Front (the
+// order of the Faces bit mask); unknown tokens become Front.
+const char* face_name(i64 token) {
+    static const char* const kFaces[] = {"Right", "Top", "Back", "Left", "Bottom", "Front"};
+    return token >= 0 && token < 6 ? kFaces[token] : "Front";
+}
+
 // Roblox ParticleEmitter: ranges become a mean plus Variation, sequences their first and last keys. Textures are
 // Roblox asset ids, so the look is picked from the emitter's name (fire, smoke, spark, star, snow) or a soft circle.
 void apply_particles(const InstanceData& d, Instance& inst, f64 scale) {
@@ -359,7 +411,8 @@ void apply_particles(const InstanceData& d, Instance& inst, f64 scale) {
     if (auto v = bool_of(d, "Enabled")) inst.set("Enabled", WValue::boolean(*v));
     if (auto v = bool_of(d, "LockedToPart")) inst.set("LockedToPart", WValue::boolean(*v));
     if (auto v = vec3_of(d, "Acceleration")) inst.set("Acceleration", WValue::vector3(*v * f32(scale)));
-    if (auto v = int_of(d, "EmissionDirection")) inst.set("EmissionDirection", WValue::enumeration(u32(*v) % 6));
+    if (auto v = int_of(d, "EmissionDirection"))
+        inst.set("EmissionDirection", WValue::enumeration(enum_index("NormalId", face_name(*v))));
     std::string lower = d.name();
     for (char& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     const char* look = "builtin:circle";
@@ -397,12 +450,140 @@ std::string truncated_base64(const std::string& bytes) {
     return b64;
 }
 
+// ---- Roblox Attributes / Tags blobs ------------------------------------------------------------------------------
+
+constexpr usize kMaxAttributes = 4096;
+
+u32 read_u32le(const u8* p) { return u32(p[0]) | (u32(p[1]) << 8) | (u32(p[2]) << 16) | (u32(p[3]) << 24); }
+f32 read_f32le(const u8* p) {
+    f32 f = 0.0f;
+    std::memcpy(&f, p, 4);
+    return f;
+}
+f64 read_f64le(const u8* p) {
+    f64 d = 0.0;
+    std::memcpy(&d, p, 8);
+    return d;
+}
+
+// AttributesSerialize: u32 LE count, then per entry a u32 LE length + name, a type byte and the value. The type ids
+// reuse the property table of docs/research/m3b-rbx/FORMAT.md (1.4) with plain little-endian values:
+// 01 String (u32 LE length + bytes), 02 Bool, 03 Int32, 05 Float64, 07 UDim2 (kept as text), 0C Color3, 0E Vector3.
+// NOT verified against a file saved by Roblox (see docs/research/rbx-import/REPORT.md): an unknown type id or a
+// length that does not add up fails the whole blob, which is then kept as rbx.AttributesSerialize.
+bool decode_attributes(const std::string& blob, std::vector<std::pair<std::string, WValue>>& out) {
+    out.clear();
+    usize pos = 0;
+    auto take = [&](usize n, const u8*& p) {
+        if (n > blob.size() - pos) return false;
+        p = reinterpret_cast<const u8*>(blob.data()) + pos;
+        pos += n;
+        return true;
+    };
+    const u8* p = nullptr;
+    if (!take(4, p)) return false;
+    const u32 count = read_u32le(p);
+    if (count > kMaxAttributes) return false;
+    for (u32 i = 0; i < count; ++i) {
+        if (!take(4, p)) return false;
+        const u32 name_len = read_u32le(p);
+        if (!take(name_len, p)) return false;
+        std::string name(reinterpret_cast<const char*>(p), name_len);
+        if (!take(1, p)) return false;
+        const u8 type = p[0];
+        switch (type) {
+        case 0x01: {
+            if (!take(4, p)) return false;
+            const u32 n = read_u32le(p);
+            if (!take(n, p)) return false;
+            out.emplace_back(std::move(name), WValue::string(std::string(reinterpret_cast<const char*>(p), n)));
+            break;
+        }
+        case 0x02:
+            if (!take(1, p)) return false;
+            out.emplace_back(std::move(name), WValue::boolean(p[0] != 0));
+            break;
+        case 0x03:
+            if (!take(4, p)) return false;
+            out.emplace_back(std::move(name), WValue::integer(static_cast<i32>(read_u32le(p))));
+            break;
+        case 0x05:
+            if (!take(8, p)) return false;
+            out.emplace_back(std::move(name), WValue::number(read_f64le(p)));
+            break;
+        case 0x07: {
+            if (!take(16, p)) return false;
+            char buf[128];
+            std::snprintf(buf, sizeof buf, "UDim2(%g,%g,%g,%g)", static_cast<f64>(read_f32le(p)),
+                          static_cast<f64>(read_f32le(p + 4)), static_cast<f64>(read_f32le(p + 8)),
+                          static_cast<f64>(read_f32le(p + 12)));
+            out.emplace_back(std::move(name), WValue::string(buf));
+            break;
+        }
+        case 0x0C:
+            if (!take(12, p)) return false;
+            out.emplace_back(std::move(name),
+                             WValue::color3(vec3{read_f32le(p), read_f32le(p + 4), read_f32le(p + 8)}));
+            break;
+        case 0x0E:
+            if (!take(12, p)) return false;
+            out.emplace_back(std::move(name),
+                             WValue::vector3(vec3{read_f32le(p), read_f32le(p + 4), read_f32le(p + 8)}));
+            break;
+        default: return false;
+        }
+    }
+    return pos == blob.size();
+}
+
+// Tags: the names separated by NUL bytes.
+std::vector<std::string> split_tags(const std::string& blob) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (char c : blob) {
+        if (c == '\0') {
+            if (!cur.empty()) out.push_back(cur);
+            cur.clear();
+        } else {
+            cur += c;
+        }
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+
+bool is_value_class(std::string_view c) {
+    return c == "StringValue" || c == "IntValue" || c == "NumberValue" || c == "BoolValue" || c == "Vector3Value" ||
+           c == "Color3Value" || c == "ObjectValue" || c == "CFrameValue";
+}
+
+// Lighting children that Tefra has no class for: their properties are kept as rbx.<Class>.<Prop> on Lighting.
+bool is_lighting_effect(std::string_view c) {
+    return c == "Atmosphere" || c == "Sky" || c == "Clouds" || c == "BloomEffect" || c == "ColorCorrectionEffect" ||
+           c == "SunRaysEffect" || c == "DepthOfFieldEffect" || c == "BlurEffect";
+}
+
+bool is_ui_modifier(std::string_view c) {
+    return c == "UIStroke" || c == "UIPadding" || c == "UIListLayout" || c == "UIGridLayout" || c == "UIGradient" ||
+           c == "UIAspectRatioConstraint";
+}
+
+// GUI classes with no Tefra class of their own: TextBox has one (a TextLabel); the others become Frames.
+bool is_gui_extra(std::string_view c) {
+    return c == "TextBox" || c == "ScrollingFrame" || c == "CanvasGroup" || c == "ViewportFrame";
+}
+
 class Converter {
   public:
     Converter(const Document& doc, DataModel& dm, const ImportOptions& opt, ImportReport& rep)
-        : doc_(doc), dm_(dm), opt_(opt), rep_(rep), s_(opt.stud_to_meters), made_(doc.instances.size(), nullptr) {
+        : doc_(doc), dm_(dm), opt_(opt), rep_(rep), s_(opt.stud_to_meters), made_(doc.instances.size(), nullptr),
+          assets_dir_(opt.assets_dir) {
         for (const std::string& w : doc.warnings) warn(w);
         rep_.instances = static_cast<u32>(doc.instances.size());
+        for (const InstanceData& d : doc.instances) {
+            ++rep_.class_counts[d.class_name];
+            if (is_script_class(d.class_name)) ++script_names_[csharp_base(d.name())];
+        }
     }
 
     void run_place();
@@ -433,9 +614,17 @@ class Converter {
 
     Instance* convert(u32 idx, Instance* parent);
     void convert_children(u32 idx, Instance& inst);
-    Instance* imported(u32 idx, Instance* parent, const std::string& name);
+    Instance* placeholder(u32 idx, Instance* parent, const std::string& name);
+    void mark_approximated(const InstanceData& d, Instance& inst);
+    void dump_props(const InstanceData& d, Instance& inst, const std::string& prefix);
+    void apply_extras(const InstanceData& d, Instance& inst);
+    std::optional<WValue> attribute_value(const Value& v) const;
+    std::string special_mesh_file(u32 idx) const;
+    std::string asset_path(const std::string& text, std::initializer_list<const char*> exts) const;
+    std::string script_class(const std::string& name, u32 index) const;
     void apply_service(const InstanceData& d, Instance& svc);
     void apply_base(const InstanceData& d, Instance& inst, bool cylinder);
+    void apply_cframe(const InstanceData& d, Instance& inst, const char* prop, const char* pos, const char* ori);
     Instance* convert_part(u32 idx, Instance* parent, const std::string& name);
     Instance* convert_script(u32 idx, Instance* parent, const std::string& name);
     void apply_light(const InstanceData& d, Instance& inst);
@@ -446,8 +635,10 @@ class Converter {
     void apply_image(const InstanceData& d, Instance& inst);
     void apply_corner(const InstanceData& d, Instance& gui);
     void apply_clouds(const InstanceData& d, Instance& lighting);
+    void apply_decal(const InstanceData& d, Instance& inst);
+    void apply_value(const InstanceData& d, Instance& inst);
+    void apply_modifier(const InstanceData& d, Instance& inst);
     JsonValue value_json(const Value& v) const;
-    JsonValue props_json(const InstanceData& d) const;
 
     const Document& doc_;
     DataModel& dm_;
@@ -455,9 +646,11 @@ class Converter {
     ImportReport& rep_;
     f64 s_;
     std::vector<Instance*> made_;
+    std::string assets_dir_;
     std::vector<Deferred> deferred_;
     std::vector<std::pair<std::string, u32>> warnings_;
     std::unordered_map<std::string, usize> warn_index_;
+    std::unordered_map<std::string, u32> script_names_; // csharp_base -> number of scripts with that base
 };
 
 void Converter::finish() {
@@ -477,11 +670,15 @@ void Converter::run_place() {
             ++rep_.converted;
             made_[r] = svc;
             apply_service(d, *svc);
+            dump_props(d, *svc, "rbx.");
+            apply_extras(d, *svc);
             convert_children(r, *svc);
         } else {
-            // Services Tefra does not have (ServerStorage, StarterPack...): kept under ReplicatedStorage, unless empty.
+            // Services Tefra does not have (ServerStorage, Teams, StarterPack...): a placeholder under
+            // ReplicatedStorage, unless empty.
             if (d.children.empty() || !replicated) continue;
-            Instance* holder = imported(r, replicated, d.name());
+            Instance* holder = placeholder(r, replicated, d.name());
+            apply_extras(d, *holder);
             made_[r] = holder;
             convert_children(r, *holder);
         }
@@ -511,12 +708,23 @@ void Converter::convert_children(u32 idx, Instance& inst) {
         const InstanceData& cd = doc_.instances[c];
         if (cd.class_name == "UICorner" && inst.is_a("GuiObject")) {
             apply_corner(cd, inst);
+            dump_props(cd, inst, "rbx.UICorner.");
             ++rep_.converted;
             continue;
         }
-        if (cd.class_name == "Clouds" && inst.class_name() == "Lighting") {
-            apply_clouds(cd, inst);
+        if (inst.class_name() == "Lighting" && is_lighting_effect(cd.class_name)) {
+            // Tefra has no sky, fog or post-effect classes yet: their properties are kept on Lighting.
+            if (cd.class_name == "Clouds") apply_clouds(cd, inst);
+            dump_props(cd, inst, "rbx." + cd.class_name + ".");
             ++rep_.converted;
+            for (u32 g : cd.children) convert(g, &inst); // children move up to Lighting
+            continue;
+        }
+        if (cd.class_name == "SpecialMesh" && inst.is_a("BasePart")) {
+            // Absorbed by the part (a file mesh made the part a MeshPart already): the properties are kept.
+            dump_props(cd, inst, "rbx.SpecialMesh.");
+            ++rep_.converted;
+            for (u32 g : cd.children) convert(g, &inst);
             continue;
         }
         convert(c, &inst);
@@ -544,7 +752,11 @@ Instance* Converter::convert(u32 idx, Instance* parent) {
         } else if (cls == "PointLight" || cls == "SpotLight") {
             apply_light(d, *inst);
         } else if (cls == "Sound") {
-            if (auto v = text_of(d, "SoundId")) inst->set("SoundId", WValue::string(*v));
+            if (auto v = text_of(d, "SoundId")) {
+                const std::string file = asset_path(*v, {".ogg", ".mp3", ".wav", ".flac"});
+                if (!file.empty()) ++rep_.assets_linked;
+                inst->set("SoundId", WValue::string(file.empty() ? *v : file));
+            }
             if (auto v = num_of(d, "Volume")) inst->set("Volume", WValue::number(*v));
             if (auto v = num_of(d, "PlaybackSpeed")) inst->set("PlaybackSpeed", WValue::number(*v));
             if (auto v = bool_of(d, "Looped")) inst->set("Looped", WValue::boolean(*v));
@@ -553,10 +765,17 @@ Instance* Converter::convert(u32 idx, Instance* parent) {
             if (auto v = num_of(d, "RollOffMinDistance")) inst->set("RollOffMinDistance", WValue::number(*v * s_));
             if (auto v = num_of(d, "RollOffMaxDistance")) inst->set("RollOffMaxDistance", WValue::number(*v * s_));
         }
+    } else if (cls == "Team") {
+        inst = dm_.create_internal(cls, parent, name);
+        if (auto c = color_of(d, "TeamColor"))
+            inst->set("TeamColor", WValue::color3(*c));
+        else if (auto n = int_of(d, "TeamColor"))
+            if (auto rgb = brick_rgb(*n)) inst->set("TeamColor", WValue::color3(*rgb));
+        if (auto v = bool_of(d, "AutoAssignable")) inst->set("AutoAssignable", WValue::boolean(*v));
     } else if (cls == "ParticleEmitter") {
         inst = dm_.create_internal(cls, parent, name);
         apply_particles(d, *inst, s_);
-    } else if (cls == "Motor6D") {
+    } else if (cls == "Motor6D" || cls == "Weld") {
         inst = dm_.create_internal(cls, parent, name);
         defer_ref(inst, "Part0", d.find("Part0"));
         defer_ref(inst, "Part1", d.find("Part1"));
@@ -569,45 +788,281 @@ Instance* Converter::convert(u32 idx, Instance* parent) {
                                              static_cast<f32>(cf->f[2] * s_)}));
             inst->set(base + "Orientation", WValue::vector3(orientation_of(rot)));
         }
+    } else if (cls == "WeldConstraint") {
+        inst = dm_.create_internal(cls, parent, name);
+        defer_ref(inst, "Part0", d.find("Part0"));
+        defer_ref(inst, "Part1", d.find("Part1"));
+    } else if (cls == "Attachment") {
+        inst = dm_.create_internal(cls, parent, name);
+        apply_cframe(d, *inst, "CFrame", "Position", "Orientation");
+    } else if (cls == "Decal" || cls == "Texture") {
+        inst = dm_.create_internal(cls, parent, name);
+        apply_decal(d, *inst);
+    } else if (cls == "SurfaceGui") {
+        inst = dm_.create_internal(cls, parent, name);
+        if (auto v = bool_of(d, "Enabled")) inst->set("Enabled", WValue::boolean(*v));
+        if (auto f = int_of(d, "Face")) inst->set("Face", WValue::enumeration(enum_index("NormalId", face_name(*f))));
+        if (auto v = bool_of(d, "AlwaysOnTop")) inst->set("AlwaysOnTop", WValue::boolean(*v));
+        if (auto v = num_of(d, "PixelsPerStud")) inst->set("PixelsPerStud", WValue::number(*v / s_));
+    } else if (cls == "BillboardGui") {
+        inst = dm_.create_internal(cls, parent, name);
+        if (auto v = bool_of(d, "Enabled")) inst->set("Enabled", WValue::boolean(*v));
+        defer_ref(inst, "Adornee", d.find("Adornee"));
+        if (auto sz = udim2_of(d, "Size")) inst->set("Size", WValue::vector3(vec3{(*sz)[1], (*sz)[3], 0.0f}));
+        if (auto o = vec3_of(d, "StudsOffset")) inst->set("StudsOffset", WValue::vector3(*o * f32(s_)));
+        if (auto v = bool_of(d, "AlwaysOnTop")) inst->set("AlwaysOnTop", WValue::boolean(*v));
+        if (auto v = num_of(d, "MaxDistance")) inst->set("MaxDistance", WValue::number(*v * s_));
+    } else if (is_value_class(cls)) {
+        inst = dm_.create_internal(cls, parent, name);
+        apply_value(d, *inst);
     } else if (is_part_class(cls)) {
         inst = convert_part(idx, parent, name);
     } else if (cls == "MeshPart") {
         inst = dm_.create_internal(cls, parent, name);
         apply_base(d, *inst, false);
-        if (auto v = text_of(d, "MeshId")) inst->set("MeshId", WValue::string(*v));
+        const std::string mesh = text_of(d, "MeshId").value_or(std::string());
+        const std::string file = asset_path(mesh, {".glb", ".gltf"});
+        if (!file.empty()) {
+            inst->set("MeshId", WValue::string(file));
+            ++rep_.assets_linked;
+        } else {
+            inst->set("MeshId", WValue::string(mesh));
+            mark_approximated(d, *inst);
+            warn("MeshPart geometry is not imported: MeshId keeps the rbxassetid:// text (put <id>.glb in the "
+                 "assets folder to link it)");
+        }
         if (auto v = text_of(d, "TextureID")) inst->set("TextureId", WValue::string(*v));
-        warn("MeshPart geometry is not imported: MeshId keeps the rbxassetid:// text");
     } else if (is_script_class(cls)) {
         inst = convert_script(idx, parent, name);
     } else if (cls == "Animation") {
         inst = dm_.create_internal(cls, parent, name);
         if (auto v = text_of(d, "AnimationId")) inst->set("AnimationId", WValue::string(*v));
-    } else if (is_gui_class(cls)) {
-        inst = dm_.create_internal(cls, parent, name);
+    } else if (is_gui_class(cls) || is_gui_extra(cls)) {
+        const bool native = is_gui_class(cls) || cls == "TextBox";
+        const char* tefra_cls = cls == "TextBox" ? "TextBox" : (is_gui_class(cls) ? cls.c_str() : "Frame");
+        inst = dm_.create_internal(tefra_cls, parent, name);
         apply_gui_common(d, *inst);
-        if (cls == "TextLabel" || is_button(cls)) apply_text(d, *inst);
+        if (cls == "TextLabel" || cls == "TextBox" || is_button(cls)) apply_text(d, *inst);
         if (cls == "ImageLabel" || cls == "ImageButton") apply_image(d, *inst);
         if (is_button(cls))
             if (auto v = bool_of(d, "AutoButtonColor")) inst->set("AutoButtonColor", WValue::boolean(*v));
+        if (!native) mark_approximated(d, *inst);
+    } else if (is_ui_modifier(cls)) {
+        inst = dm_.create_internal(cls, parent, name);
+        apply_modifier(d, *inst);
+        dump_props(d, *inst, "rbx.");
+    } else if (cls == "SurfaceLight") {
+        inst = dm_.create_internal("PointLight", parent, name);
+        apply_light(d, *inst);
+        mark_approximated(d, *inst);
+    } else if (cls == "Tool" || cls == "Accessory" || cls == "Hat" || cls == "HopperBin") {
+        inst = dm_.create_internal("Model", parent, name);
+        mark_approximated(d, *inst);
     } else if (cls == "Terrain") {
-        warn("voxel Terrain is not converted (kept as ImportedInstance)");
+        warn("voxel Terrain (SmoothGrid) is not converted: kept as a Folder with its settings in rbx.* attributes");
     }
 
-    if (!inst) inst = imported(idx, parent, name);
+    if (!inst) {
+        inst = placeholder(idx, parent, name);
+    } else {
+        ++rep_.converted;
+        if (opt_.keep_all_properties) dump_props(d, *inst, "rbx.");
+    }
+    apply_extras(d, *inst);
     made_[idx] = inst;
-    if (inst->class_name() != "ImportedInstance") ++rep_.converted;
     convert_children(idx, *inst);
     return inst;
 }
 
-Instance* Converter::imported(u32 idx, Instance* parent, const std::string& name) {
+// A class Tefra does not have: a Folder with the same name, RobloxClass and every property as rbx.<Prop>. Its
+// children are still converted, so nothing below it is lost.
+Instance* Converter::placeholder(u32 idx, Instance* parent, const std::string& name) {
     const InstanceData& d = doc_.instances[idx];
-    Instance* inst = dm_.create_internal("ImportedInstance", parent, name);
+    Instance* inst = dm_.create_internal("Folder", parent, name);
     ++rep_.imported_as_unsupported;
     ++rep_.unsupported_classes[d.class_name];
-    inst->set("OriginalClass", WValue::string(d.class_name), true);
-    inst->set("OriginalProperties", WValue::string(props_json(d).dump()), true);
+    inst->set_attribute("RobloxClass", WValue::string(d.class_name));
+    dump_props(d, *inst, "rbx.");
     return inst;
+}
+
+// A class converted to the nearest Tefra class: RobloxClass and the properties as rbx.<Prop> keep what is lost.
+void Converter::mark_approximated(const InstanceData& d, Instance& inst) {
+    inst.set_attribute("RobloxClass", WValue::string(d.class_name));
+    dump_props(d, inst, "rbx.");
+    ++rep_.approximated;
+}
+
+// Every property of a source instance as an attribute (Name, Tags and AttributesSerialize excluded).
+void Converter::dump_props(const InstanceData& d, Instance& inst, const std::string& prefix) {
+    for (const Property& p : d.props) {
+        if (p.name == "Name" || p.name == "Tags" || p.name == "AttributesSerialize") continue;
+        if (std::optional<WValue> v = attribute_value(p.value)) inst.set_attribute(prefix + p.name, std::move(*v));
+    }
+}
+
+// Roblox Attributes and CollectionService tags of an instance.
+void Converter::apply_extras(const InstanceData& d, Instance& inst) {
+    if (const Value* a = d.find("AttributesSerialize");
+        a && (a->type == Type::BinaryString || a->type == Type::String)) {
+        std::vector<std::pair<std::string, WValue>> attrs;
+        if (decode_attributes(a->s, attrs)) {
+            for (auto& [name, v] : attrs)
+                if (inst.set_attribute(name, v)) ++rep_.attributes;
+        } else {
+            warn("Attributes with an unknown layout are kept as rbx.AttributesSerialize (base64)");
+            inst.set_attribute("rbx.AttributesSerialize", WValue::string(truncated_base64(a->s)));
+        }
+    }
+    if (const Value* t = d.find("Tags"); t && (t->type == Type::BinaryString || t->type == Type::String)) {
+        for (const std::string& tag : split_tags(t->s))
+            if (inst.add_tag(tag)) ++rep_.tags;
+    }
+}
+
+// A property as a Tefra attribute value: numbers, bools, strings, Vector3 and Color3 keep their type; anything else
+// becomes its JSON text. Blobs are truncated. Values with no Tefra meaning (none, NaN) give nothing.
+std::optional<WValue> Converter::attribute_value(const Value& v) const {
+    switch (v.type) {
+    case Type::None: return std::nullopt;
+    case Type::Bool: return WValue::boolean(v.i != 0);
+    case Type::Int32:
+    case Type::Int64:
+    case Type::Enum:
+    case Type::BrickColor: return WValue::integer(v.i);
+    case Type::Float32:
+    case Type::Float64:
+        if (std::isfinite(v.d)) return WValue::number(v.d);
+        break;
+    case Type::String:
+    case Type::ProtectedString:
+    case Type::UniqueId: return WValue::string(v.s);
+    case Type::BinaryString:
+    case Type::Bytecode: return WValue::string(truncated_base64(v.s));
+    case Type::Vector3: return WValue::vector3(vec3{v.f[0], v.f[1], v.f[2]});
+    case Type::Color3: return WValue::color3(vec3{v.f[0], v.f[1], v.f[2]});
+    case Type::Color3uint8: return WValue::color3(vec3{v.f[0] / 255.0f, v.f[1] / 255.0f, v.f[2] / 255.0f});
+    default: break;
+    }
+    return WValue::string(value_json(v).dump());
+}
+
+// The asset file of a Roblox asset text ("rbxassetid://123" or "123") in the assets folder, or "" when there is none.
+std::string Converter::asset_path(const std::string& text, std::initializer_list<const char*> exts) const {
+    if (assets_dir_.empty()) return {};
+    std::string id = text;
+    if (id.rfind("rbxassetid://", 0) == 0) id = id.substr(13);
+    if (id.empty() || id.size() > 20) return {};
+    for (char c : id)
+        if (c < '0' || c > '9') return {};
+    for (const char* ext : exts) {
+        std::string path = assets_dir_ + "/" + id + ext;
+        if (file_exists(path.c_str())) return path;
+    }
+    return {};
+}
+
+// The file of a FileMesh SpecialMesh child of a Part (a glTF in the assets folder), or "".
+std::string Converter::special_mesh_file(u32 idx) const {
+    for (u32 c : doc_.instances[idx].children) {
+        const InstanceData& cd = doc_.instances[c];
+        if (cd.class_name != "SpecialMesh") continue;
+        if (std::optional<std::string> id = text_of(cd, "MeshId")) {
+            std::string file = asset_path(*id, {".glb", ".gltf"});
+            if (!file.empty()) return file;
+        }
+    }
+    return {};
+}
+
+// C# class of a script: its base name, plus the file index when another script has the same base.
+std::string Converter::script_class(const std::string& name, u32 index) const {
+    const std::string base = csharp_base(name);
+    auto it = script_names_.find(base);
+    return (it != script_names_.end() && it->second > 1) ? base + "_" + std::to_string(index) : base;
+}
+
+// Position (scaled to metres) and orientation of a CFrame property.
+void Converter::apply_cframe(const InstanceData& d, Instance& inst, const char* prop, const char* pos,
+                             const char* ori) {
+    const Value* cf = nullptr;
+    if (!cframe_of(d, prop, cf)) return;
+    inst.set(pos, WValue::vector3(vec3{static_cast<f32>(cf->f[0] * s_), static_cast<f32>(cf->f[1] * s_),
+                                       static_cast<f32>(cf->f[2] * s_)}));
+    inst.set(ori, WValue::vector3(orientation_of(mat_from_cframe(cf->f))));
+}
+
+void Converter::apply_decal(const InstanceData& d, Instance& inst) {
+    std::string tex = text_of(d, "Texture").value_or(std::string());
+    if (!tex.empty()) {
+        const std::string file = asset_path(tex, {".png", ".jpg", ".jpeg"});
+        if (!file.empty()) {
+            tex = file;
+            ++rep_.assets_linked;
+        }
+    }
+    inst.set("Texture", WValue::string(tex));
+    if (auto f = int_of(d, "Face")) inst.set("Face", WValue::enumeration(enum_index("NormalId", face_name(*f))));
+    if (auto v = num_of(d, "Transparency")) inst.set("Transparency", WValue::number(*v));
+    if (auto c = color_of(d, "Color3")) inst.set("Color3", WValue::color3(*c));
+    if (inst.class_name() == "Texture") {
+        if (auto v = num_of(d, "StudsPerTileU")) inst.set("StudsPerTileU", WValue::number(*v * s_));
+        if (auto v = num_of(d, "StudsPerTileV")) inst.set("StudsPerTileV", WValue::number(*v * s_));
+    }
+}
+
+void Converter::apply_value(const InstanceData& d, Instance& inst) {
+    const std::string& cls = inst.class_name();
+    if (cls == "StringValue") {
+        if (auto v = text_of(d, "Value")) inst.set("Value", WValue::string(*v));
+    } else if (cls == "IntValue") {
+        if (auto v = int_of(d, "Value")) inst.set("Value", WValue::integer(*v));
+    } else if (cls == "NumberValue") {
+        if (auto v = num_of(d, "Value")) inst.set("Value", WValue::number(*v));
+    } else if (cls == "BoolValue") {
+        if (auto v = bool_of(d, "Value")) inst.set("Value", WValue::boolean(*v));
+    } else if (cls == "Vector3Value") {
+        if (auto v = vec3_of(d, "Value")) inst.set("Value", WValue::vector3(*v * f32(s_)));
+    } else if (cls == "Color3Value") {
+        if (auto c = color_of(d, "Value")) inst.set("Value", WValue::color3(*c));
+    } else if (cls == "ObjectValue") {
+        defer_ref(&inst, "Value", d.find("Value"));
+    } else if (cls == "CFrameValue") {
+        apply_cframe(d, inst, "Value", "Position", "Orientation");
+    }
+}
+
+// Roblox UI modifiers with a Tefra class: the numeric and colour properties map; the rest is kept as rbx.* attributes.
+void Converter::apply_modifier(const InstanceData& d, Instance& inst) {
+    const std::string& cls = inst.class_name();
+    auto udim_offset = [&](const char* prop) -> std::optional<f32> {
+        const Value* v = d.find(prop);
+        if (!v || v->type != Type::UDim) return std::nullopt;
+        return v->f[1];
+    };
+    if (cls == "UIStroke") {
+        if (auto c = color_of(d, "Color")) inst.set("Color", WValue::color3(*c));
+        if (auto v = num_of(d, "Thickness")) inst.set("Thickness", WValue::number(*v));
+        if (auto v = num_of(d, "Transparency")) inst.set("Transparency", WValue::number(*v));
+    } else if (cls == "UIPadding") {
+        for (const char* side : {"PaddingLeft", "PaddingRight", "PaddingTop", "PaddingBottom"})
+            if (auto v = udim_offset(side)) inst.set(side, WValue::number(*v));
+    } else if (cls == "UIListLayout") {
+        if (auto v = udim_offset("Padding")) inst.set("Padding", WValue::number(*v));
+    } else if (cls == "UIGridLayout") {
+        if (auto s = udim2_of(d, "CellSize")) inst.set("CellSize", WValue::vector3(vec3{(*s)[1], (*s)[3], 0.0f}));
+        if (auto s = udim2_of(d, "CellPadding")) inst.set("CellPadding", WValue::vector3(vec3{(*s)[1], (*s)[3], 0.0f}));
+    } else if (cls == "UIGradient") {
+        const Value* seq = d.find("Color");
+        if (seq && seq->type == Type::ColorSequence && seq->seq.size() >= 5) {
+            const usize n = seq->seq.size();
+            inst.set("Color0", WValue::color3({seq->seq[1], seq->seq[2], seq->seq[3]}));
+            inst.set("Color1", WValue::color3({seq->seq[n - 4], seq->seq[n - 3], seq->seq[n - 2]}));
+        }
+        if (auto v = num_of(d, "Rotation")) inst.set("Rotation", WValue::number(*v));
+    } else if (cls == "UIAspectRatioConstraint") {
+        if (auto v = num_of(d, "AspectRatio")) inst.set("AspectRatio", WValue::number(*v));
+    }
 }
 
 void Converter::apply_service(const InstanceData& d, Instance& svc) {
@@ -632,8 +1087,6 @@ void Converter::apply_service(const InstanceData& d, Instance& svc) {
             const f64 distance = std::max(1.0, *fog_end * s_);
             svc.set("FogDensity", WValue::number(std::min(1.0, 3.0 / distance)));
         }
-        for (const char* ignored : {"Ambient", "OutdoorAmbient", "Brightness", "FogStart", "FogColor"})
-            if (d.find(ignored)) warn(std::string("Lighting.") + ignored + " has no Tefra equivalent (ignored)");
     } else if (cls == "StarterPlayer") {
         if (auto v = num_of(d, "CharacterWalkSpeed")) svc.set("CharacterWalkSpeed", WValue::number(*v * s_));
         if (auto h = num_of(d, "CharacterJumpHeight")) {
@@ -702,6 +1155,17 @@ void Converter::apply_base(const InstanceData& d, Instance& inst, bool cylinder)
 Instance* Converter::convert_part(u32 idx, Instance* parent, const std::string& name) {
     const InstanceData& d = doc_.instances[idx];
     const std::string& cls = d.class_name;
+    if (cls == "Part") {
+        // A Part with a FileMesh SpecialMesh whose file exists in the assets folder is a mesh part.
+        const std::string file = special_mesh_file(idx);
+        if (!file.empty()) {
+            Instance* mesh = dm_.create_internal("MeshPart", parent, name);
+            apply_base(d, *mesh, false);
+            mesh->set("MeshId", WValue::string(file));
+            ++rep_.assets_linked;
+            return mesh;
+        }
+    }
     const bool spawn = cls == "SpawnLocation";
     Instance* inst = dm_.create_internal(spawn ? "SpawnLocation" : "Part", parent, name);
 
@@ -728,6 +1192,7 @@ Instance* Converter::convert_part(u32 idx, Instance* parent, const std::string& 
         if (auto v = bool_of(d, "Enabled")) inst->set("Enabled", WValue::boolean(*v));
         if (auto v = bool_of(d, "Neutral")) inst->set("Neutral", WValue::boolean(*v));
     }
+    if (cls != "Part" && !spawn) mark_approximated(d, *inst);
     return inst;
 }
 
@@ -736,7 +1201,7 @@ Instance* Converter::convert_script(u32 idx, Instance* parent, const std::string
     Instance* inst = dm_.create_internal(d.class_name, parent, name);
     const std::string luau = text_of(d, "Source").value_or(std::string());
     inst->set("LuauSource", WValue::string(luau));
-    inst->set("Source", WValue::string(script_skeleton(d.class_name, name, luau, idx)));
+    inst->set("Source", WValue::string(script_skeleton(d.class_name, name, luau, script_class(name, idx))));
     if (d.class_name != "ModuleScript") {
         const bool disabled_in_file = bool_of(d, "Disabled").value_or(false);
         inst->set("Enabled", WValue::boolean(opt_.convert_scripts_disabled ? false : !disabled_in_file));
@@ -937,17 +1402,6 @@ JsonValue Converter::value_json(const Value& v) const {
     return JsonValue();
 }
 
-JsonValue Converter::props_json(const InstanceData& d) const {
-    JsonValue obj = JsonValue::object();
-    for (const Property& p : d.props) {
-        JsonValue entry = JsonValue::object();
-        entry.set("type", JsonValue(type_name(p.value.type)));
-        entry.set("value", value_json(p.value));
-        obj.set(p.name, std::move(entry));
-    }
-    return obj;
-}
-
 // Resets the services to empty (their properties back to the defaults) before a place is imported.
 void clear_services(DataModel& dm) {
     const std::vector<Instance*> services = dm.root().children();
@@ -956,6 +1410,19 @@ void clear_services(DataModel& dm) {
         for (u32 i = 1; i < s->cls().prop_count(); ++i)
             if (const world::PropInfo* p = s->cls().prop(i)) s->set(i, p->def, true);
     }
+}
+
+// The options of a file: when no assets folder is named, "<dir>/<stem>_assets" next to the file.
+ImportOptions options_for_path(const char* path, const ImportOptions& options) {
+    ImportOptions o = options;
+    if (!o.assets_dir.empty() || !path) return o;
+    const std::string p = path;
+    const usize slash = p.find_last_of("/\\");
+    const usize start = slash == std::string::npos ? 0 : slash + 1;
+    usize end = p.find_last_of('.');
+    if (end == std::string::npos || end <= start) end = p.size();
+    o.assets_dir = p.substr(0, start) + p.substr(start, end - start) + "_assets";
+    return o;
 }
 
 bool check_bytes(const u8* data, usize size, std::string* error) {
@@ -987,7 +1454,7 @@ bool import_place(const char* path, DataModel& dm, const ImportOptions& options,
         if (error) *error = std::string("cannot read ") + (path ? path : "(null)");
         return false;
     }
-    return import_place_memory(bytes.data(), bytes.size(), dm, options, report, error);
+    return import_place_memory(bytes.data(), bytes.size(), dm, options_for_path(path, options), report, error);
 }
 
 bool import_model_memory(const u8* data, usize size, Instance* parent, const ImportOptions& options,
@@ -1015,7 +1482,8 @@ bool import_model(const char* path, Instance* parent, const ImportOptions& optio
         if (error) *error = std::string("cannot read ") + (path ? path : "(null)");
         return false;
     }
-    return import_model_memory(bytes.data(), bytes.size(), parent, options, report, error, roots);
+    return import_model_memory(bytes.data(), bytes.size(), parent, options_for_path(path, options), report, error,
+                               roots);
 }
 
 JsonValue report_to_json(const ImportReport& report) {
@@ -1023,7 +1491,11 @@ JsonValue report_to_json(const ImportReport& report) {
     o.set("instances", JsonValue(report.instances));
     o.set("converted", JsonValue(report.converted));
     o.set("imported_as_unsupported", JsonValue(report.imported_as_unsupported));
+    o.set("approximated", JsonValue(report.approximated));
     o.set("scripts", JsonValue(report.scripts));
+    o.set("attributes", JsonValue(report.attributes));
+    o.set("tags", JsonValue(report.tags));
+    o.set("assets_linked", JsonValue(report.assets_linked));
     JsonValue warnings = JsonValue::array();
     for (const std::string& w : report.warnings) warnings.push(JsonValue(w));
     o.set("warnings", std::move(warnings));
@@ -1035,13 +1507,20 @@ JsonValue report_to_json(const ImportReport& report) {
     JsonValue uc = JsonValue::object();
     for (const auto& [name, count] : classes) uc.set(name, JsonValue(count));
     o.set("unsupported_classes", std::move(uc));
+    std::vector<std::pair<std::string, u32>> all(report.class_counts.begin(), report.class_counts.end());
+    std::sort(all.begin(), all.end(), [](const auto& a, const auto& b) {
+        return a.second != b.second ? a.second > b.second : a.first < b.first;
+    });
+    JsonValue cc = JsonValue::object();
+    for (const auto& [name, count] : all) cc.set(name, JsonValue(count));
+    o.set("class_counts", std::move(cc));
     return o;
 }
 
 std::string report_summary(const ImportReport& report) {
     return std::to_string(report.instances) + " instances: " + std::to_string(report.converted) + " converted (" +
            std::to_string(report.scripts) + " scripts), " + std::to_string(report.imported_as_unsupported) +
-           " kept as ImportedInstance, " + std::to_string(report.warnings.size()) + " warnings";
+           " kept as placeholders, " + std::to_string(report.warnings.size()) + " warnings";
 }
 
 } // namespace tefra::rbx
