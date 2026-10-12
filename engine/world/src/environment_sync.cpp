@@ -2,7 +2,9 @@
 
 #include "tefra/core/fs.h"
 #include "tefra/core/image.h"
+#include "tefra/core/jobs.h"
 #include "tefra/core/log.h"
+#include "tefra/core/time.h"
 #include "tefra/renderer/gltf.h"
 #include "tefra/renderer/ocean.h"
 #include "tefra/renderer/palm.h"
@@ -56,14 +58,21 @@ struct LoadedModel {
     std::vector<std::pair<u32, u32>> lod1; // (mesh, coarser LOD) when requested
 };
 
-LoadedModel load_model(render::Scene& scene, const std::string& path, u32 max_triangles = 0, u32 lod1_triangles = 0) {
-    LoadedModel m;
-    const usize first = scene.instances().size();
+// CPU half of a model load (parse, decode, simplify; any thread). Null when the file cannot be read.
+std::shared_ptr<render::GltfPrepared> prepare_model(const std::string& path, u32 max_triangles = 0,
+                                                    u32 lod1_triangles = 0) {
     render::GltfLoadOptions opt;
     opt.max_triangles = max_triangles;
     opt.lod1_triangles = lod1_triangles;
-    const render::GltfLoadResult r = render::load_gltf(scene, path.c_str(), opt);
-    if (!r.ok) return m;
+    return render::gltf_prepare(path.c_str(), opt);
+}
+
+// GPU half: uploads a prepared model (main thread) and reports its mesh and material handles.
+LoadedModel commit_model(render::Scene& scene, render::GltfPrepared* prep) {
+    LoadedModel m;
+    if (!prep) return m;
+    const usize first = scene.instances().size();
+    const render::GltfLoadResult r = render::gltf_commit(scene, *prep);
     m.lod1 = r.lod1;
     f32 top = 0.0f;
     for (usize i = first; i < scene.instances().size() && i - first < 2; ++i) {
@@ -76,6 +85,11 @@ LoadedModel load_model(render::Scene& scene, const std::string& path, u32 max_tr
     m.center_y = top;
     scene.instances().resize(first);
     return m;
+}
+
+LoadedModel load_model(render::Scene& scene, const std::string& path, u32 max_triangles = 0, u32 lod1_triangles = 0) {
+    const auto prep = prepare_model(path, max_triangles, lod1_triangles);
+    return commit_model(scene, prep.get());
 }
 
 u32 hash_u32(u32 x) {
@@ -316,7 +330,53 @@ vec2 populate_plains(render::Scene& scene, const render::Terrain& terrain, rende
     return vec2{0.0f, 0.0f};
 }
 
-void build_palm_assets(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir) {
+namespace {
+
+// CPU work of the coast that needs no GPU: the palm geometry, the frond atlas and the shore-rock meshes. It runs in
+// parallel jobs (one per item) before the uploads, so the rock scans and the palms overlap instead of queueing.
+struct PalmVariant {
+    u32 seed;
+    f32 h;
+};
+constexpr PalmVariant kPalmVariants[3] = {{5, 10.0f}, {9, 12.5f}, {21, 14.5f}};
+
+struct CoastCpu {
+    bool palms = false;
+    bool rocks = false;
+    render::PalmMeshes palm[3];
+    std::vector<u8> frond_albedo, frond_normal;
+    std::shared_ptr<render::GltfPrepared> rock[3];
+};
+
+std::shared_ptr<render::GltfPrepared> prepare_rock(const std::string& cache_dir, u32 k) {
+    const std::string path = cache_dir + "/models/" + kRocks[k].name + "/" + kRocks[k].name + ".gltf";
+    if (!file_exists(path.c_str())) return nullptr;
+    // The CC0 scans have 0.7-1.3 M triangles: far too many for hundreds of instances (and three shadow cascades)
+    // on low-end GPUs. Near LOD 12k triangles, far LOD 1.5k.
+    return prepare_model(path, 12000, 1500);
+}
+
+void prepare_coast_cpu(CoastCpu& c, const std::string& cache_dir, bool palms, bool rocks) {
+    c.palms = palms;
+    c.rocks = rocks;
+    // Items 0-2: rock scans, 3-5: palms, 6: frond atlas.
+    const u64 t0 = time_now_ns();
+    global_jobs().parallel_for(7, 1, [&](u32 begin, u32 end) {
+        for (u32 i = begin; i < end; ++i) {
+            if (i < 3) {
+                if (rocks) c.rock[i] = prepare_rock(cache_dir, i);
+            } else if (i < 6) {
+                if (palms) c.palm[i - 3] = render::make_palm(kPalmVariants[i - 3].seed, kPalmVariants[i - 3].h);
+            } else if (palms) {
+                render::make_frond_textures(5, 1024, 512, c.frond_albedo, c.frond_normal);
+            }
+        }
+    });
+    TEFRA_LOG_INFO("Coast: CPU prepare (rock scans, palms, frond atlas) in %.0f ms", ns_to_ms(time_now_ns() - t0));
+}
+
+void build_palm_assets_impl(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir,
+                            CoastCpu* pre) {
     if (assets.palms_built) return;
     assets.palms_built = true;
     const std::string tex = cache_dir + "/textures/";
@@ -333,7 +393,10 @@ void build_palm_assets(render::Scene& scene, LandscapeAssets& assets, const std:
     const u32 bark_mat = scene.add_material(bark);
 
     std::vector<u8> frond_albedo, frond_normal;
-    render::make_frond_textures(5, 1024, 512, frond_albedo, frond_normal);
+    if (pre && pre->palms)
+        frond_albedo.swap(pre->frond_albedo), frond_normal.swap(pre->frond_normal);
+    else
+        render::make_frond_textures(5, 1024, 512, frond_albedo, frond_normal);
     rhi::TextureUpload up;
     up.pixels = frond_albedo.data();
     up.width = 1024;
@@ -356,13 +419,10 @@ void build_palm_assets(render::Scene& scene, LandscapeAssets& assets, const std:
     const u32 frond_mat = scene.add_material(fronds);
 
     // Three palms with different heights and seeds.
-    struct Variant {
-        u32 seed;
-        f32 h;
-    };
-    const Variant variants[3] = {{5, 10.0f}, {9, 12.5f}, {21, 14.5f}};
     for (int v = 0; v < 3; ++v) {
-        const render::PalmMeshes pm = render::make_palm(variants[v].seed, variants[v].h);
+        render::PalmMeshes computed;
+        if (!(pre && pre->palms)) computed = render::make_palm(kPalmVariants[v].seed, kPalmVariants[v].h);
+        const render::PalmMeshes& pm = pre && pre->palms ? pre->palm[v] : computed;
         TEFRA_LOG_INFO("Palm %d: LOD0 %u triangles, LOD1 %u triangles", v,
                        u32((pm.trunk_lod0.indices.size() + pm.crown_lod0.indices.size()) / 3),
                        u32((pm.trunk_lod1.indices.size() + pm.crown_lod1.indices.size()) / 3));
@@ -390,15 +450,14 @@ void build_palm_assets(render::Scene& scene, LandscapeAssets& assets, const std:
     }
 }
 
-void build_rock_assets(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir) {
+void build_rock_assets_impl(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir,
+                            CoastCpu* pre) {
     if (assets.rocks_built) return;
     assets.rocks_built = true;
     for (u32 k = 0; k < 3; ++k) {
-        const std::string path = cache_dir + "/models/" + kRocks[k].name + "/" + kRocks[k].name + ".gltf";
-        if (!file_exists(path.c_str())) continue;
-        // The CC0 scans have 0.7-1.3 M triangles: far too many for hundreds of instances (and three shadow cascades)
-        // on low-end GPUs. Near LOD 12k triangles, far LOD 1.5k.
-        const LoadedModel lm = load_model(scene, path, 12000, 1500);
+        std::shared_ptr<render::GltfPrepared> own;
+        if (!(pre && pre->rocks)) own = prepare_rock(cache_dir, k);
+        const LoadedModel lm = commit_model(scene, pre && pre->rocks ? pre->rock[k].get() : own.get());
         if (lm.mesh[0] == ~0u) continue;
         auto coarse = [&](u32 mesh) {
             for (const auto& [full, low] : lm.lod1)
@@ -425,6 +484,16 @@ void build_rock_assets(render::Scene& scene, LandscapeAssets& assets, const std:
     scene.upload();
 }
 
+} // namespace
+
+void build_palm_assets(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir) {
+    build_palm_assets_impl(scene, assets, cache_dir, nullptr);
+}
+
+void build_rock_assets(render::Scene& scene, LandscapeAssets& assets, const std::string& cache_dir) {
+    build_rock_assets_impl(scene, assets, cache_dir, nullptr);
+}
+
 void add_palm_prototypes(render::Scene& scene, render::Vegetation& veg, u32 palm_protos[3],
                          const std::string& cache_dir) {
     LandscapeAssets assets;
@@ -434,8 +503,10 @@ void add_palm_prototypes(render::Scene& scene, render::Vegetation& veg, u32 palm
 
 vec2 populate_coast(render::Scene& scene, const render::Terrain& terrain, render::Vegetation& veg,
                     LandscapeAssets& assets, const std::string& cache_dir) {
-    build_palm_assets(scene, assets, cache_dir);
-    build_rock_assets(scene, assets, cache_dir);
+    CoastCpu cpu;
+    prepare_coast_cpu(cpu, cache_dir, !assets.palms_built, !assets.rocks_built);
+    build_palm_assets_impl(scene, assets, cache_dir, &cpu);
+    build_rock_assets_impl(scene, assets, cache_dir, &cpu);
     u32 palms[3];
     for (u32 v = 0; v < 3; ++v) palms[v] = veg.add_prototype(assets.palms[v].proto);
     u32 rock_protos[3];

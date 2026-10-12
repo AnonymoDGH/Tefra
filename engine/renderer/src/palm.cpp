@@ -1,6 +1,7 @@
 #include "tefra/renderer/palm.h"
 
 #include "tefra/core/assert.h"
+#include "tefra/core/jobs.h"
 
 #include <algorithm>
 #include <cmath>
@@ -325,12 +326,13 @@ void make_frond_textures(u32 seed, u32 w, u32 h, std::vector<u8>& albedo, std::v
     std::vector<vec3> col(usize(w) * h, vec3{}), nrm(usize(w) * h, vec3{0, 0, 1});
     std::vector<u8> has(usize(w) * h, 0);
 
-    // Supersampled scratch for one tile: last painted surface wins (leaflets overlap like real ones).
-    std::vector<u8> hit(usize(sw) * sh);
-    std::vector<vec3> sc(usize(sw) * sh), sn(usize(sw) * sh);
-    std::vector<f32> sa(usize(sw) * sh);
-
-    for (u32 tile = 0; tile < 4; ++tile) {
+    // The four tiles are independent: each has its own supersampled scratch and writes only its own quadrant of the
+    // atlas, so they are painted in parallel (the result is the same as a serial loop).
+    auto render_tile = [&](u32 tile) {
+        // Supersampled scratch for one tile: last painted surface wins (leaflets overlap like real ones).
+        std::vector<u8> hit(usize(sw) * sh);
+        std::vector<vec3> sc(usize(sw) * sh), sn(usize(sw) * sh);
+        std::vector<f32> sa(usize(sw) * sh);
         Rng rng(seed * 131u + tile * 977u + 5u);
         const bool dead = tile == kDeadTile;
         std::fill(hit.begin(), hit.end(), u8(0));
@@ -410,7 +412,10 @@ void make_frond_textures(u32 seed, u32 w, u32 h, std::vector<u8>& albedo, std::v
                     ao_out[ai] = a_acc / f32(hits);
                 }
             }
-    }
+    };
+    global_jobs().parallel_for(4, 1, [&](u32 begin, u32 end) {
+        for (u32 t = begin; t < end; ++t) render_tile(t);
+    });
 
     // Texels without leaflets take the mean leaflet colour, so filtering never pulls in black.
     vec3 mean{};

@@ -67,4 +67,8 @@ class JobSystem {
     Impl* impl_;
 };
 
+// Process-wide job system (hardware threads - 1 workers; the calling thread helps while it waits). Used for the
+// load-time work (terrain fields, glTF simplification); created on first use.
+JobSystem& global_jobs();
+
 } // namespace tefra
