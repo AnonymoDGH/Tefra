@@ -37,10 +37,11 @@ void main() {
     for (uint i = 0u; i < OCEAN_DETAIL_WAVES; ++i) {
         OceanWave w = pc.waves.w[OCEAN_GEOMETRY_WAVES + i];
         float k = w.dir_k.z, A = w.amp.x;
-        float th = k * dot(w.dir_k.xy, v_xz) - w.dir_k.w * t + w.amp.z;
         float keep = ocean_keep(k, footprint);
-        slope += k * A * cos(th) * w.dir_k.xy * keep;
         lost += 0.5 * (k * A) * (k * A) * (1.0 - keep);
+        if (keep <= 0.0) continue; // filtered out completely: the slope term is exactly zero
+        float th = k * dot(w.dir_k.xy, v_xz) - w.dir_k.w * t + w.amp.z;
+        slope += k * A * cos(th) * w.dir_k.xy * keep;
     }
     // Capillary micro detail: three octaves of drifting noise slopes (no periodic interference pattern).
     {
@@ -49,12 +50,13 @@ void main() {
         for (int i = 0; i < 5; ++i) {
             float scale = oct[i].x; // m per noise cell
             float keep = 1.0 - smoothstep(0.3, 0.8, footprint / scale);
+            lost += dot(oct[i].y, oct[i].y) * 2.0 * (1.0 - keep);
+            if (keep <= 0.0) continue; // sub-pixel octave: its noise is not evaluated (the term is exactly zero)
             vec2 drift = vec2(0.31, 0.95) * t * oct[i].z * 0.12;
             vec3 n1 = ocean_noised(v_xz / scale + drift);
             vec3 n2 = ocean_noised(v_xz / scale * 1.37 - drift.yx + 17.0);
             vec2 g = (n1.yz + n2.yz * 1.37) * oct[i].y; // slope (noise cell -> metres cancels with the 1/scale)
             slope += g * keep;
-            lost += dot(oct[i].y, oct[i].y) * 2.0 * (1.0 - keep);
         }
     }
     // Far away every wave is filtered: the slope variance tends to the Cox-Munk total for a ~6 m/s wind.

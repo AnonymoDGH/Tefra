@@ -91,4 +91,9 @@ void JobSystem::wait(TaskGroup& group) {
     }
 }
 
+JobSystem& global_jobs() {
+    static JobSystem jobs;
+    return jobs;
+}
+
 } // namespace tefra

@@ -139,6 +139,12 @@ i64 file_mtime(const std::string& path) {
     return ec ? 0 : to_unix(t);
 }
 
+u64 file_size(const std::string& path) {
+    std::error_code ec;
+    const auto n = fs::file_size(to_path(path), ec);
+    return ec ? 0 : static_cast<u64>(n);
+}
+
 bool copy_file(const std::string& from, const std::string& to) {
     std::error_code ec;
     fs::copy_file(to_path(from), to_path(to), fs::copy_options::overwrite_existing, ec);
@@ -155,6 +161,22 @@ bool rename_path(const std::string& from, const std::string& to) {
     std::error_code ec;
     fs::rename(to_path(from), to_path(to), ec);
     return !ec;
+}
+
+void keep_newest_files(const std::string& dir, const std::string& suffix, u32 max_files) {
+    std::vector<std::pair<fs::file_time_type, fs::path>> files;
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(to_path(dir), ec)) {
+        if (ec) break;
+        const std::string name = e.path().filename().string();
+        if (!e.is_regular_file(ec) || name.size() < suffix.size() ||
+            name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
+            continue;
+        files.emplace_back(e.last_write_time(ec), e.path());
+    }
+    if (files.size() <= max_files) return;
+    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    for (usize i = max_files; i < files.size(); ++i) fs::remove(files[i].second, ec);
 }
 
 bool remove_tree(const std::string& path) {
