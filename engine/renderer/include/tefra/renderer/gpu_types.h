@@ -94,6 +94,13 @@ struct FrameConstants {
     vec4 water_scattering;       // xyz 1/m
     vec4 clouds;                 // x coverage (0 = none), y base altitude (m), z feature size (m), w drift (m)
     AtmosphereGPU atmo;
+    vec4 celestial;  // x sun disc (0/1), y moon disc (0/1), z moon angular radius (rad), w sun glare strength
+    vec4 moon;       // xyz towards the moon, w moon phase (0 new, 0.5 full)
+    vec4 stars;      // x star count (whole sphere), y brightness, z night (0 day .. 1 night), w unused
+    vec4 fog_tint;   // xyz colour of the height fog
+    vec4 cloud_look; // xyz colour of the cumulus, w optical depth multiplier
+    vec4 cloud_wind; // xy unit wind direction (world x, z)
+    vec4 sun_true;   // xyz towards the sun itself (sun_dir is the moon at night)
 };
 static_assert(sizeof(FrameConstants) % 16 == 0);
 

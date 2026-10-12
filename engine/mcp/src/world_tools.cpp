@@ -484,6 +484,9 @@ CHARACTERS: Humanoid events per character: Jumping, FreeFalling, Landed, StateCh
 
 UI: ScreenGui under StarterGui with Frame / TextLabel / TextButton / ImageLabel (Position/Size = scale + offset).
 AUDIO: Sound (SoundId = file path or builtin:click/jump/checkpoint/win/coin/wind_loop...).
+SKY: under Lighting (ClockTime, GeographicLatitude set the sun; night = moonlight + stars): Sky (SkyboxMode Procedural/
+  Cubemap/HDRI, SkyboxFt..Dn images, HdriPath, StarCount, MoonPhase, CelestialBodiesShown), Atmosphere (Density, Haze,
+  Color, Decay, Glare), Clouds (Cover, Density, Color, Altitude, WindSpeed, WindDirection). Defaults = the built-in look.
 PLAY: play / stop / get_output (script errors) / capture_viewport (see the result) / set_camera.)");
 }
 

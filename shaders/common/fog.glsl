@@ -25,7 +25,7 @@ float fog_phase(Frame f, vec3 dir) {
 }
 // Uniform in-scattered radiance (sun term without shadowing) of the fog along dir.
 vec3 fog_radiance(Frame f, vec3 dir) {
-    return fog_ambient(f) + f.sun_color.rgb * f.sun_dir.w * fog_phase(f, dir);
+    return (fog_ambient(f) + f.sun_color.rgb * f.sun_dir.w * fog_phase(f, dir)) * f.fog_tint.rgb;
 }
 // Transmittance and in-scattered radiance of the exponential height fog along a ray of length dist.
 void fog_terms(Frame f, vec3 dir, float dist, out float T, out vec3 inscatter) {

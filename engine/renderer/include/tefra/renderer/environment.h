@@ -77,5 +77,8 @@ void sh9_convolve_cosine(vec4 sh[9]);                                    // radi
 vec3 sh9_eval(const vec4 sh[9], vec3 n);
 vec3 equirect_direction(f32 u, f32 v);                            // u,v in [0,1]
 vec2 brdf_lut_integrate(f32 n_dot_v, f32 roughness, u32 samples); // (scale, bias) for F0
+// Six LDR faces (Roblox order: Ft -Z, Bk +Z, Lf -X, Rt +X, Up +Y, Dn -Y; sRGB, top row first) resampled to an equirect
+// of the given width (height = width / 2), linear values times scale (nits). Empty (width 0) when a face is missing.
+ImageRGBA32F equirect_from_cube_faces(const ImageRGBA8 faces[6], u32 width, f32 scale);
 
 } // namespace tefra::render

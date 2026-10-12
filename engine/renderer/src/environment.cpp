@@ -113,6 +113,60 @@ vec3 sh9_eval(const vec4 sh[9], vec3 n) {
     return {max(r.x, 0.0f), max(r.y, 0.0f), max(r.z, 0.0f)};
 }
 
+ImageRGBA32F equirect_from_cube_faces(const ImageRGBA8 faces[6], u32 width, f32 scale) {
+    ImageRGBA32F out;
+    for (u32 i = 0; i < 6; ++i)
+        if (faces[i].width == 0 || faces[i].height == 0 ||
+            faces[i].pixels.size() < usize(faces[i].width) * faces[i].height * 4)
+            return out;
+    // Face basis: forward, up; right = forward x up. The dominant forward axis picks the face.
+    static constexpr vec3 kFwd[6] = {{0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, -1, 0}};
+    static constexpr vec3 kUp[6] = {{0, 1, 0}, {0, 1, 0}, {0, 1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}};
+    f32 srgb[256];
+    for (u32 i = 0; i < 256; ++i) {
+        const f32 c = static_cast<f32>(i) / 255.0f;
+        srgb[i] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+    }
+    out.width = width;
+    out.height = max(1u, width / 2);
+    out.pixels.assign(usize(out.width) * out.height * 4, 1.0f);
+    for (u32 y = 0; y < out.height; ++y) {
+        for (u32 x = 0; x < out.width; ++x) {
+            const vec3 d = equirect_direction(tc(x, out.width), tc(y, out.height));
+            u32 face = 0;
+            f32 best = -2.0f;
+            for (u32 k = 0; k < 6; ++k) {
+                const f32 dn = dot(d, kFwd[k]);
+                if (dn > best) {
+                    best = dn;
+                    face = k;
+                }
+            }
+            const vec3 right = cross(kFwd[face], kUp[face]);
+            const f32 den = max(dot(d, kFwd[face]), 1e-4f);
+            const f32 u = dot(d, right) / den, v = dot(d, kUp[face]) / den; // [-1, 1], v up
+            const ImageRGBA8& img = faces[face];
+            const f32 fx = (u * 0.5f + 0.5f) * static_cast<f32>(img.width) - 0.5f;
+            const f32 fy = (0.5f - v * 0.5f) * static_cast<f32>(img.height) - 0.5f;
+            const i32 x0 = static_cast<i32>(std::floor(fx)), y0 = static_cast<i32>(std::floor(fy));
+            const f32 wx = fx - static_cast<f32>(x0), wy = fy - static_cast<f32>(y0);
+            f32 acc[3] = {0.0f, 0.0f, 0.0f};
+            for (i32 j = 0; j < 2; ++j) {
+                for (i32 i = 0; i < 2; ++i) {
+                    const i32 px = clamp(x0 + i, 0, i32(img.width) - 1), py = clamp(y0 + j, 0, i32(img.height) - 1);
+                    const f32 w = (i ? wx : 1.0f - wx) * (j ? wy : 1.0f - wy);
+                    const u8* p = &img.pixels[(usize(py) * img.width + usize(px)) * 4];
+                    for (int c = 0; c < 3; ++c) acc[c] += w * srgb[p[c]];
+                }
+            }
+            f32* o = &out.pixels[(usize(y) * out.width + x) * 4];
+            for (int c = 0; c < 3; ++c) o[c] = acc[c] * scale;
+            o[3] = 1.0f;
+        }
+    }
+    return out;
+}
+
 vec2 brdf_lut_integrate(f32 n_dot_v, f32 roughness, u32 samples) {
     n_dot_v = max(n_dot_v, 1e-4f);
     const vec3 v{std::sqrt(1.0f - n_dot_v * n_dot_v), 0.0f, n_dot_v};

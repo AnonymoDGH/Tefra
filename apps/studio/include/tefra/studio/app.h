@@ -10,9 +10,11 @@
 #include "tefra/core/input.h"
 #include "tefra/core/log.h"
 
+#include "tefra/renderer/atmosphere.h"
 #include "tefra/renderer/camera.h"
 #include "tefra/renderer/renderer.h"
 #include "tefra/rhi/resources.h"
+#include "tefra/world/sky.h"
 
 #include <deque>
 #include <functional>
@@ -45,7 +47,7 @@ class Renderer;
 namespace tefra::world {
 class SceneSync;
 class ParticleSystem;
-}
+} // namespace tefra::world
 namespace tefra::scripting {
 class ScriptHost;
 }
@@ -222,8 +224,13 @@ class App {
     f32 move_snap_ = 0.5f, rotate_snap_ = 15.0f;
     bool snap_ = true;
 
-    // Lighting state last applied to the environment.
-    f32 applied_clock_ = -1.0f, applied_lat_ = -1000.0f, applied_az_ = -1000.0f;
+    // Sky state last applied to the environment (IBL, atmosphere LUTs). The image-based light is re-baked only when
+    // one of these changes: the background, the atmosphere, or the sun by more than half a degree (procedural sky).
+    bool have_applied_sky_ = false;
+    world::SkyBackground applied_background_;
+    render::AtmosphereParams applied_atmosphere_;
+    vec3 applied_sun_{0.0f, 1.0f, 0.0f};
+    bool procedural_sky_ = true; // false: the visible sky is the Cubemap / HDRI background (no atmosphere draw)
 
     // Output panel.
     mutable std::mutex log_mutex_;

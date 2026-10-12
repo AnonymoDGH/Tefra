@@ -97,6 +97,22 @@ struct RenderSettings {
     f32 grass_radius = 30.0f;       // m, disc of blades around the camera (max 60; cost ~ radius^2, thinned far out)
     f32 vegetation_distance = 1.0f; // scales vegetation draw / LOD / shadow distances (0.4-1.5)
     bool grass_stats = false;       // count the blades drawn with an extra compute pass; see Renderer::grass_blades()
+    // Sky objects (engine/world/sky.h). The defaults are the look before Sky, Atmosphere and Clouds existed.
+    // Night: when the sun is below -0.1 (normalized y) and moon_illuminance > 0 the moon is the directional light
+    // (sun_direction/sun_illuminance are replaced); moon_direction is the moon's position in the sky.
+    bool celestial_shown = true;           // sun and moon discs
+    bool moon_visible = true;              // moon disc and moonlight
+    f32 moon_phase = 0.5f;                 // 0 new, 0.5 full
+    f32 moon_angular_radius = 0.0262f;     // rad
+    vec3 moon_direction{0.0f, 1.0f, 0.0f}; // towards the moon
+    f32 moon_illuminance = 40.0f;          // lux at full moon (0 = no moonlight)
+    f32 star_count = 3000.0f;              // stars over the whole sphere, seen at night
+    f32 star_brightness = 1.0f;
+    f32 sky_glare = 0.0f;                  // halo around the sun (0 = none)
+    vec3 fog_tint{1.0f, 1.0f, 1.0f};       // colour of the height fog
+    vec3 cloud_tint{1.0f, 1.0f, 1.0f};     // colour of the cumulus
+    f32 cloud_density = 1.0f;              // optical depth multiplier of the cumulus
+    vec2 cloud_wind_dir{0.9578f, 0.2873f}; // unit wind direction in world x, z
 };
 
 // Quality presets (Roblox-style graphics level): limit the costly features of a RenderSettings to what a GPU tier can
