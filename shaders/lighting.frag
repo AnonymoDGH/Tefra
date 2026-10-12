@@ -8,6 +8,7 @@
 #include "common/fog.glsl"
 #include "common/shadow.glsl"
 #include "common/clouds.glsl"
+#include "common/sky.glsl"
 layout(push_constant) uniform Push { FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; uint ao; uint vol; } pc;
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
@@ -117,20 +118,34 @@ float contact_shadow(Frame f, vec3 p, vec3 n, vec3 L, uint depth_idx, float nois
 }
 
 vec3 sky_color(Frame f, vec3 dir) {
-    if (f.atmo.skyview_lut == 0xFFFFFFFFu)
-        return textureLod(TEX2D(f.env_background, SMP_LINEAR_REPEAT), equirect_uv(dir), 0.0).rgb * f.exposure.y;
+    if (f.atmo.skyview_lut == 0xFFFFFFFFu) {
+        // Image sky (Cubemap / HDRI): the background image, with the cumulus over it.
+        vec3 bg = textureLod(TEX2D(f.env_background, SMP_LINEAR_REPEAT), equirect_uv(dir), 0.0).rgb * f.exposure.y;
+        vec4 cl = clouds_eval(f, dir, bg);
+        return mix(bg, cl.rgb, cl.a);
+    }
     Atmosphere a = f.atmo;
     vec3 s = a.sun.xyz;
     vec3 L = textureLod(TEX2D(a.skyview_lut, SMP_LINEAR_CLAMP), skyview_uv(dir, s), 0.0).rgb * a.ground.w;
-    // Sun disk with limb darkening, attenuated by the atmosphere.
     float cos_d = dot(dir, s), cos_r = cos(a.sun.w);
-    if (cos_d > cos_r) {
+    const bool sun_hit = cos_d > cos_r && f.celestial.x > 0.0;
+    if (sun_hit || (f.celestial.w > 0.0 && cos_d > 0.0)) {
         float r = a.radii.x + a.radii.w + max(f.camera_pos.y, 0.0);
         vec3 T = atmo_transmittance(a, r, dir.y);
-        float x = clamp(acos(min(cos_d, 1.0)) / a.sun.w, 0.0, 1.0);
-        float limb = 1.0 - 0.6 * (1.0 - sqrt(1.0 - x * x));
-        L += T * a.ground.w / (ATMO_PI * a.sun.w * a.sun.w) * limb;
+        // Sun disk with limb darkening, attenuated by the atmosphere.
+        if (sun_hit) {
+            float x = clamp(acos(min(cos_d, 1.0)) / a.sun.w, 0.0, 1.0);
+            float limb = 1.0 - 0.6 * (1.0 - sqrt(1.0 - x * x));
+            L += T * a.ground.w / (ATMO_PI * a.sun.w * a.sun.w) * limb;
+        }
+        // Forward-scattered halo around the sun (Atmosphere.Glare).
+        if (f.celestial.w > 0.0) {
+            float c = max(cos_d, 0.0);
+            L += T * a.ground.w * f.celestial.w * (0.01 * pow(c, 6.0) + 0.08 * pow(c, 200.0));
+        }
     }
+    // Night: stars and the moon (sk_stars and sk_moon return 0 by day).
+    L += sk_stars(f, dir) + sk_moon(f, dir);
     vec4 cl = clouds_eval(f, dir, L);
     return mix(L, cl.rgb, cl.a);
 }

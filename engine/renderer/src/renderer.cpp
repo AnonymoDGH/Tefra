@@ -531,13 +531,22 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     const Vegetation* veg = world.vegetation;
     if (output_format_ != target.format) create_pipelines(target.format);
     RenderSettings s = settings_in;
+    const vec3 sun_true = normalize(s.sun_direction);
     if (atmo) {
         // Sun light at the camera from the atmosphere: color and intensity change with the sun elevation.
         const f32 alt = atmo->params().ground_altitude + max(static_cast<f32>(camera.position.y), 0.0f);
-        const vec3 e = atmo->sun_illuminance(alt, s.sun_direction);
+        const vec3 e = atmo->sun_illuminance(alt, sun_true);
         const f32 lum = 0.2126f * e.x + 0.7152f * e.y + 0.0722f * e.z;
         s.sun_illuminance = lum;
         s.sun_color = lum > 0.0f ? e / lum : vec3{1.0f};
+    }
+    // Night: below the horizon the moon is the directional light (shadows included). The sky itself still comes
+    // from the real sun (sun_true), which is below the horizon and draws no light.
+    constexpr f32 kMoonBelowSun = -0.1f;
+    if (s.moon_illuminance > 0.0f && sun_true.y < kMoonBelowSun) {
+        s.sun_direction = normalize(s.moon_direction);
+        s.sun_illuminance = s.moon_illuminance;
+        s.sun_color = vec3{0.80f, 0.88f, 1.0f};
     }
     FrameBuffers& fb = frames_[slot];
     // The slot's fence has been waited on, so last frame's grass counter copy in this slot is complete.
@@ -604,6 +613,18 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     fc.env_background = env.background();
     fc.fog = {s.fog_density, s.fog_falloff, s.fog_height, s.fog_anisotropy};
     fc.clouds = {s.cloud_coverage, s.cloud_altitude, s.cloud_size, s.cloud_wind * time};
+    {
+        const vec3 moon_dir = normalize(s.moon_direction);
+        const f32 night = saturate((-sun_true.y - 0.02f) / 0.10f);
+        const bool moon_disc = s.celestial_shown && s.moon_visible;
+        fc.celestial = {s.celestial_shown ? 1.0f : 0.0f, moon_disc ? 1.0f : 0.0f, s.moon_angular_radius, s.sky_glare};
+        fc.moon = {moon_dir.x, moon_dir.y, moon_dir.z, s.moon_phase};
+        fc.stars = {s.star_count, s.star_brightness, night, 0.0f};
+        fc.fog_tint = {s.fog_tint.x, s.fog_tint.y, s.fog_tint.z, 0.0f};
+        fc.cloud_look = {s.cloud_tint.x, s.cloud_tint.y, s.cloud_tint.z, s.cloud_density};
+        fc.cloud_wind = {s.cloud_wind_dir.x, s.cloud_wind_dir.y, 0.0f, 0.0f};
+        fc.sun_true = {sun_true.x, sun_true.y, sun_true.z, 0.0f};
+    }
     if (world.ocean) {
         const OceanDesc& od = world.ocean->desc();
         fc.ocean = {od.level, 1.0f, 0.0f, 0.0f};
@@ -618,7 +639,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         fc.canopy = {cb.origin.x, cb.origin.y, cb.size, s.canopy_strength};
     }
     if (atmo)
-        fc.atmo = atmo->gpu(s.sun_direction, 0);
+        fc.atmo = atmo->gpu(sun_true, 0);
     else
         fc.atmo.skyview_lut = 0xFFFFFFFFu;
 

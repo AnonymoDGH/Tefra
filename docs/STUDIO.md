@@ -244,6 +244,15 @@ Un `ParticleEmitter` bajo una Part emite partículas de verdad (billboards en GP
 
 Eventos de `Humanoid` por personaje: `Jumping`, `FreeFalling`, `Landed`, `StateChanged(old, new)`, `Died`, `HealthChanged`.
 
+## Cielo (Lighting, Sky, Atmosphere, Clouds)
+Dentro de `Lighting` (Insertar → Environment): `Sky`, `Atmosphere` y `Clouds`. Sin ellos, el cielo es el de siempre; `ClockTime` y `GeographicLatitude` mueven el sol.
+- `Sky`: `SkyboxMode` = `Procedural` (atmósfera física), `Cubemap` (`SkyboxFt/Bk/Lf/Rt/Up/Dn`, seis imágenes; `Ft` es -Z, `Rt` es +X) o `HDRI` (`HdriPath`, un `.hdr` equirectangular que también ilumina la escena). `StarCount`, `StarBrightness`, `SunAngularSize`, `MoonVisible`, `MoonPhase` (0 nueva, 0.5 llena), `MoonAngularSize`, `MoonBrightness`, `CelestialBodiesShown`.
+- `Atmosphere`: `Haze` (densidad del aerosol, 6 = valle brumoso), `Decay` (tinte de la dispersión), `Density` (niebla extra), `Offset` (altura de referencia de la niebla), `Color` (tinte de la niebla), `Glare` (halo del sol).
+- `Clouds`: `Cover`, `Density`, `Color`, `Altitude`, `Size`, `WindSpeed`, `WindDirection` (grados), `Enabled`. Sustituye a `Lighting.CloudCover`.
+- De noche el sol baja del horizonte: la Luna es la luz direccional (sombras incluidas), salen las estrellas y la exposición baja sola.
+- Coste: la atmósfera solo se recalcula al cambiar sus propiedades; la luz de imagen (IBL) se rehace al cambiar el fondo o cuando el sol se mueve más de medio grado en modo Procedural. Los cielos Cubemap/HDRI no dibujan nubes ni estrellas (las nubes sobre el HDRI sí).
+- Limitación: el cubemap se convierte a un equirectangular de 2048 px al cargarlo (fondo e IBL); no hay cubemap nativo. `SunTextureSize` no existe.
+
 ## IA (MCP)
 Studio sirve MCP en `http://127.0.0.1:44755/mcp`. Con Claude Code:
 ```sh
