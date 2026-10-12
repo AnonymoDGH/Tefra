@@ -11,6 +11,7 @@
 #include "tefra/core/log.h"
 
 #include "tefra/renderer/camera.h"
+#include "tefra/renderer/model_import.h"
 #include "tefra/renderer/renderer.h"
 #include "tefra/rhi/resources.h"
 
@@ -148,6 +149,13 @@ class App {
     void open_place_dialog();
     void import_roblox_dialog(); // import.cpp
     bool import_roblox_file(const std::string& path);
+    void import_model_dialog(); // import.cpp: File > Import 3D Model...
+    // Converts (or copies) a model into the project's assets folder, or a cache folder when the place is unsaved, and
+    // returns the MeshId. .glb and .gltf are used as they are; FBX, OBJ, STL and PLY are converted to .glb.
+    bool import_model_asset(const std::string& src, const render::ModelImportOptions& opt, std::string& mesh_id,
+                            std::string& error, render::ModelImportReport* report);
+    // Imports a model file as a MeshPart in the Workspace, where the camera looks (or 12 m ahead), and selects it.
+    bool import_model_at_camera(const std::string& path, std::string& error);
     void export_game_dialog(); // export.cpp
     void draw_export_modal();
     void save_place(bool save_as);
