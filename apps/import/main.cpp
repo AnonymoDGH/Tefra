@@ -2,6 +2,7 @@
 // (ADR-017: only the user's own places; nothing is downloaded, rbxassetid:// references are kept as text).
 //
 //   tefra_import in.rbxl|in.rbxlx out.tefra [--report report.json] [--stud-meters 0.28] [--enable-scripts]
+//   [--all-properties]
 
 #include "tefra/rbx/importer.h"
 #include "tefra/world/datamodel.h"
@@ -16,7 +17,7 @@ namespace {
 void usage() {
     std::fprintf(stderr,
                  "usage: tefra_import <in.rbxl|in.rbxlx> <out.tefra> [--report report.json] [--stud-meters 0.28]\n"
-                 "                    [--enable-scripts]\n");
+                 "                    [--enable-scripts] [--all-properties]\n");
 }
 
 bool write_text(const char* path, const std::string& text) {
@@ -46,6 +47,8 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "tefra_import: --stud-meters must be positive\n");
                 return 2;
             }
+        } else if (std::strcmp(argv[i], "--all-properties") == 0) {
+            options.keep_all_properties = true;
         } else if (std::strcmp(argv[i], "--enable-scripts") == 0) {
             options.convert_scripts_disabled = false;
         } else {
@@ -69,7 +72,7 @@ int main(int argc, char** argv) {
     std::printf("%s\n", tefra::rbx::report_summary(report).c_str());
     for (const std::string& w : report.warnings) std::printf("warning: %s\n", w.c_str());
     for (const auto& [name, count] : report.unsupported_classes)
-        std::printf("kept as ImportedInstance: %s x%u\n", name.c_str(), count);
+        std::printf("placeholder (Folder + RobloxClass): %s x%u\n", name.c_str(), count);
     if (report_path) {
         if (!write_text(report_path, tefra::rbx::report_to_json(report).dump(true) + "\n")) {
             std::fprintf(stderr, "tefra_import: cannot write %s\n", report_path);

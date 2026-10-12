@@ -18,9 +18,11 @@ const float POM_NEAR = 16.0, POM_FADE = 9.0;
 struct Layer { vec3 albedo; vec3 n; vec3 arm; float h; };
 
 mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, s, -s, c); } // rot(a) * v rotates v by a
-float hash1(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float hash1(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 vec3 hash3(vec2 p) {
-    return fract(sin(vec3(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)), dot(p, vec2(419.2, 371.9)))) * 43758.5453);
+    vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    p3 += dot(p3, p3.yxz + 33.33);
+    return fract((p3.xxy + p3.yzz) * p3.zyx);
 }
 float vnoise(vec2 p) {
     vec2 i = floor(p), f = fract(p);

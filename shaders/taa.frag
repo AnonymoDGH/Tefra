@@ -4,7 +4,7 @@
 #include "common/bindless.glsl"
 // Temporal anti-aliasing: depth reprojection (static world), Catmull-Rom history, variance clipping in YCoCg,
 // luminance-weighted blend (Karis 2014, Salvi 2016).
-layout(push_constant) uniform Push { FrameBuffer frame; uint current; uint history; uint depth; uint valid; uint velocity; uint pad; vec4 sizes; } pc;
+layout(push_constant) uniform Push { FrameBuffer frame; uint current; uint history; uint depth; uint valid; uint velocity; uint reactive; vec4 sizes; } pc;
 // sizes: xy = input (render) size, zw = output size. Input may be smaller than output (TAAU).
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
@@ -14,7 +14,8 @@ vec3 from_ycocg(vec3 c) { return vec3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.
 
 vec3 fetch(ivec2 p) {
     ivec2 size = ivec2(pc.sizes.xy);
-    return texelFetch(TEX2D(pc.current, SMP_NEAREST_CLAMP), clamp(p, ivec2(0), size - 1), 0).rgb;
+    vec3 c = texelFetch(TEX2D(pc.current, SMP_NEAREST_CLAMP), clamp(p, ivec2(0), size - 1), 0).rgb;
+    return (any(isnan(c)) || any(isinf(c))) ? vec3(0.0) : c;
 }
 
 // 5-tap Catmull-Rom (bilinear-optimized, Jimenez).
@@ -41,6 +42,7 @@ void main() {
     vec2 in_pos = v_uv * pc.sizes.xy;
     ivec2 px = ivec2(in_pos);
     vec3 cur = pc.sizes.x < pc.sizes.z ? textureLod(TEX2D(pc.current, SMP_LINEAR_CLAMP), v_uv, 0.0).rgb : fetch(px);
+    if (any(isnan(cur)) || any(isinf(cur))) cur = vec3(0.0); // one bad pixel must not spread through the history
     if (pc.valid == 0u) { o_color = vec4(cur, 1.0); return; }
 
     // Closest depth in a 3x3 neighbourhood: reprojects edges with the foreground's motion.
@@ -81,6 +83,11 @@ void main() {
     float alpha = pc.sizes.x < pc.sizes.z ? 0.08 : 0.1;
     float wc = alpha / (1.0 + luma(cur)), wh = (1.0 - alpha) / (1.0 + luma(h));
     vec3 res = (cur * wc + h * wh) / (wc + wh);
+    // Reactive mask (particles): fast, bright effects without motion vectors take mostly the current frame.
+    if (pc.reactive != 0xFFFFFFFFu) {
+        float r = texelFetch(TEX2D(pc.reactive, SMP_NEAREST_CLAMP), clamp(px, ivec2(0), ivec2(pc.sizes.xy) - 1), 0).r;
+        res = mix(res, cur, r * 0.9);
+    }
     // Detail restoration (calibration report: TAA/TAAU removed ~5x high-frequency energy). Contrast-adaptive
     // unsharp mask against the neighbourhood mean, limited by the local range so it cannot ring.
     vec3 mean_rgb = from_ycocg(mean);
@@ -88,5 +95,6 @@ void main() {
     float range = max(hi.x - lo.x, 1e-4);
     float amount = 0.55 * clamp(1.0 - range / (mean.x + 1e-3) * 0.5, 0.2, 1.0);
     res = clamp(res + detail * amount, from_ycocg(lo) * 0.0 + min(res, mean_rgb) * 0.7, max(res, mean_rgb) * 1.3);
+    if (any(isnan(res)) || any(isinf(res))) res = cur;
     o_color = vec4(max(res, vec3(0.0)), 1.0);
 }

@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cmath>
 #include <initializer_list>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -247,6 +248,13 @@ JsonValue describe(DataModel& dm, const Instance& inst, bool full) {
     }
     j.set("properties", std::move(props));
 
+    JsonValue attrs = JsonValue::object();
+    for (const auto& [name, v] : inst.attributes()) attrs.set(name, DataModel::attribute_to_json(v));
+    j.set("attributes", std::move(attrs));
+    JsonValue tags = JsonValue::array();
+    for (const std::string& t : inst.tags()) tags.push(JsonValue(t));
+    j.set("tags", std::move(tags));
+
     JsonValue kids = JsonValue::array();
     for (const Instance* c : inst.children()) {
         JsonValue cj = JsonValue::object();
@@ -397,18 +405,179 @@ ToolResult tool_create_instance(DataModel& dm, const JsonValue& args) {
     return ToolResult::json(describe(dm, *inst, false));
 }
 
+// Many instances in one call (the same rules as create_instance, applied to each item; items may also omit the
+// parent and inherit the call's parent_path).
+ToolResult tool_create_instances(DataModel& dm, const JsonValue& args) {
+    const JsonValue& items = args["instances"];
+    if (!items.is_array() || items.items().empty()) return ToolResult::error("'instances' must be a non-empty array");
+    if (items.items().size() > 5000) return ToolResult::error("at most 5000 instances per call");
+    u32 created = 0;
+    JsonValue failures = JsonValue::array();
+    JsonValue ids = JsonValue::array();
+    for (usize i = 0; i < items.items().size(); ++i) {
+        JsonValue item = items.items()[i];
+        if (!item.is_object()) {
+            JsonValue f = JsonValue::object();
+            f.set("index", JsonValue(static_cast<f64>(i)));
+            f.set("error", JsonValue(std::string("not an object")));
+            failures.push(std::move(f));
+            continue;
+        }
+        if (!has_arg(item, "parent_path") && !has_arg(item, "parent_id"))
+            item.set("parent_path",
+                     JsonValue(has_arg(args, "parent_path") ? str_arg(args, "parent_path") : std::string("Workspace")));
+        const ToolResult r = tool_create_instance(dm, item);
+        if (r.is_error) {
+            JsonValue f = JsonValue::object();
+            f.set("index", JsonValue(static_cast<f64>(i)));
+            f.set("error", JsonValue(r.content.empty() ? std::string("?") : r.content[0].text));
+            failures.push(std::move(f));
+            if (failures.items().size() >= 20) break;
+            continue;
+        }
+        ++created;
+        JsonValue d;
+        if (!r.content.empty() && JsonValue::parse(r.content[0].text, d)) ids.push(d["id"]);
+    }
+    JsonValue out = JsonValue::object();
+    out.set("created", JsonValue(static_cast<f64>(created)));
+    out.set("ids", std::move(ids));
+    out.set("failures", std::move(failures));
+    return ToolResult::json(out);
+}
+
+// What the engine can do, for an AI that has never seen Tefra.
+ToolResult tool_engine_guide(DataModel&, const JsonValue&) {
+    return ToolResult::text(R"(Tefra engine guide (units: metres, +Y up; Orientation in degrees Y-X-Z; Color3 0..1)
+
+LANDSCAPES - do not build terrain or grass from parts. Create ONE Terrain under Workspace and set Kind:
+  Kind = "Plains": rolling meadow covered in tall, wind-animated grass and wildflowers, lone trees.
+  Kind = "Valley": misty forest valley (conifers, river, lake, undergrowth, grass).
+  Kind = "Coast":  tropical beach with palms and rocks; add an Ocean instance under Workspace for animated sea.
+  Seed changes the shape; Vegetation=false removes trees. Use terrain_height(x, z) / raycast to place things on it.
+  The templates tool (new_place_from_template) builds these with a spawn: meadow, beach, valley, obby, baseplate...
+
+PARTS: Part (Shape Block/Ball/Cylinder/Wedge), MeshPart (MeshId = path of a .glb/.gltf; see import_model),
+  SpawnLocation (where players appear), Model / Folder to group. Material: Plastic, SmoothPlastic, Wood,
+  WoodPlanks, Metal, Concrete, Brick, Cobblestone, Granite, Marble, Slate, Sand, Grass, Ground, Rock, Ice, Glass,
+  Neon (emissive), Fabric, Foil. Anchored=true for static scenery. Lights: PointLight / SpotLight under a part.
+
+MANY OBJECTS: use create_instances with an array (up to 5000 per call) instead of create_instance in a loop.
+
+SCRIPTS: Script / LocalScript / ModuleScript hold C# (.NET 8) compiled when Play starts. A script is a class
+  deriving from TefraScript with Start() / Update(float dt). API: Instance.New, FindFirstChild, Game.Workspace,
+  Players.LocalPlayer, BasePart.Touched, Humanoid.Health/Died, UserInputService, Sound.Play, RunService.Heartbeat,
+  Task.Wait, TweenService (Create, Play, Completed), TextLabel.Text... Scripts do not run in edit mode: generate
+  edit-time content with create_instances.
+  Messaging: BindableEvent/BindableFunction (run at once), RemoteEvent/RemoteFunction (loopback, delivered at the next step), Debris.AddItem(item, s), DataStoreService.GetDataStore(name).SetAsync/GetAsync, HttpService.JSONEncode/JSONDecode.
+  Spatial queries: Workspace.Raycast/Spherecast/Blockcast (RaycastParams), GetPartBoundsInRadius/Box and GetPartsInPart (OverlapParams), BasePart.ApplyImpulse/GetMass/GetTouchingParts.
+  Also: CFrame, UDim2, NumberSequence/ColorSequence, SetAttribute/GetAttribute, CollectionService tags.
+
+EFFECTS: ParticleEmitter under a part (real GPU particles, visible in edit mode too). Texture = builtin:fire /
+  smoke / spark / star / snow / ring / circle; Rate, Lifetime, Speed, SpreadAngle, Size->SizeEnd, Color->ColorEnd,
+  Transparency->TransparencyEnd, LightEmission (1 = additive glow), Acceleration (e.g. [0,-20,0] for sparks),
+  Drag, RotSpeed, Stretch, Shape (Box/Sphere/Disc/Point), EmissionDirection. Bursts from C#: emitter.Emit(30).
+  Do not fake particles with small parts.
+CHARACTERS: Humanoid events per character: Jumping, FreeFalling, Landed, StateChanged(old, new), Died,
+  HealthChanged. Hook every player's Humanoid (player.CharacterAdded for each of Players.GetPlayers()), not only player 0.
+  Checkpoints: SpawnLocation pads whose Touched sets player.RespawnLocation (see the obby template).
+
+UI: ScreenGui under StarterGui with Frame / TextLabel / TextButton / ImageLabel (Position/Size = scale + offset).
+AUDIO: Sound (SoundId = file path or builtin:click/jump/checkpoint/win/coin/wind_loop...).
+PLAY: play / stop / get_output (script errors) / capture_viewport (see the result) / set_camera.)");
+}
+
+// One attribute to set (remove = true for a null in the request) or a validated attribute value.
+struct AttributeChange {
+    std::string name;
+    bool remove = false;
+    Value value;
+};
+
 ToolResult tool_set_properties(DataModel& dm, const JsonValue& args) {
     std::string err;
     Instance* inst = find_arg(dm, args, "path", "id", err);
     if (!inst) return ToolResult::error(err);
-    if (!has_arg(args, "properties"))
-        return ToolResult::error("'properties' is required, an object such as {\"Anchored\": true}");
-    std::vector<Assignment> list;
+    const bool has_props = has_arg(args, "properties");
+    const bool has_attrs = has_arg(args, "attributes");
+    const bool has_tags = has_arg(args, "tags");
+    if (!has_props && !has_attrs && !has_tags)
+        return ToolResult::error("Give 'properties' (an object such as {\"Anchored\": true}), 'attributes' (such as "
+                                 "{\"Health\": 100}) or 'tags' (such as [\"Enemy\"]).");
+
+    // Everything is checked before anything changes.
     std::vector<std::string> problems;
-    if (!convert_properties(dm, inst->cls(), args["properties"], list, problems))
-        return problems_error("Properties not set; nothing was changed:", problems);
+    std::vector<Assignment> list;
+    const JsonValue none = JsonValue::object();
+    convert_properties(dm, inst->cls(), has_props ? args["properties"] : none, list, problems);
+
+    std::vector<AttributeChange> changes;
+    if (has_attrs) {
+        const JsonValue& attrs = args["attributes"];
+        if (!attrs.is_object()) {
+            problems.push_back("'attributes' must be an object such as {\"Health\": 100}");
+        } else {
+            for (const auto& [name, json] : attrs.members()) {
+                if (name.empty()) {
+                    problems.push_back("attribute names must not be empty");
+                    continue;
+                }
+                AttributeChange c;
+                c.name = name;
+                if (json.is_null()) {
+                    c.remove = true;
+                } else if (!DataModel::attribute_from_json(json, c.value)) {
+                    problems.push_back("'attributes." + name +
+                                       "' expects a bool, number, string, [x, y, z] or "
+                                       "{\"Color3\": [r, g, b]}, got " +
+                                       describe_json(json));
+                    continue;
+                }
+                changes.push_back(std::move(c));
+            }
+        }
+    }
+
+    std::set<std::string> tags;
+    if (has_tags) {
+        const JsonValue& list_json = args["tags"];
+        if (!list_json.is_array()) {
+            problems.push_back("'tags' must be an array of names such as [\"Enemy\"]");
+        } else {
+            for (const JsonValue& t : list_json.items()) {
+                if (!t.is_string() || t.as_string().empty()) {
+                    problems.push_back("tags must be non-empty strings, got " + describe_json(t));
+                    continue;
+                }
+                tags.insert(t.as_string());
+            }
+        }
+    }
+    if (!problems.empty()) return problems_error("Properties not set; nothing was changed:", problems);
+
     JsonValue out = describe(dm, *inst, false);
     out.set("updated", apply_assignments(*inst, list));
+    if (has_attrs) {
+        for (const AttributeChange& c : changes) {
+            if (c.remove)
+                inst->remove_attribute(c.name);
+            else
+                inst->set_attribute(c.name, c.value);
+        }
+    }
+    if (has_tags) {
+        // The tag list is replaced: tags not listed are removed, listed ones added.
+        const std::set<std::string> current(inst->tags().begin(), inst->tags().end());
+        for (const std::string& t : current)
+            if (!tags.count(t)) inst->remove_tag(t);
+        for (const std::string& t : tags) inst->add_tag(t);
+    }
+    JsonValue attrs_now = JsonValue::object();
+    for (const auto& [name, v] : inst->attributes()) attrs_now.set(name, DataModel::attribute_to_json(v));
+    out.set("attributes", std::move(attrs_now));
+    JsonValue tags_now = JsonValue::array();
+    for (const std::string& t : inst->tags()) tags_now.push(JsonValue(t));
+    out.set("tags", std::move(tags_now));
     return ToolResult::json(out);
 }
 
@@ -641,7 +810,8 @@ int register_world_tools(Server& server, std::function<DataModel&()> model) {
         tool_get_tree);
 
     add("get_instance",
-        "Returns every property of an instance with its type and current value, its path, parent id and children.",
+        "Returns every property of an instance with its type and current value, its path, parent id and children, "
+        "plus its attributes (name -> value) and tags.",
         schema({prop("path", "string", kPathDoc), prop("id", "integer", kIdDoc)}), tool_get_instance);
 
     add("list_classes",
@@ -664,12 +834,32 @@ int register_world_tools(Server& server, std::function<DataModel&()> model) {
                {"class"}),
         tool_create_instance);
 
+    add("create_instances",
+        "Creates many instances in one call (up to 5000): an array of {class, name, properties, parent_path} with the "
+        "same rules as create_instance. Items without a parent go under the call's parent_path (default Workspace). "
+        "Returns the ids created and the first failures. Use it for scattering scenery instead of one call per part.",
+        schema({prop("instances", "array", "Array of {class, name, properties, parent_path | parent_id}."),
+                prop("parent_path", "string", "Default parent for items that do not give one (default Workspace).")},
+               {"instances"}),
+        tool_create_instances);
+
+    add("engine_guide",
+        "Read this first: what Tefra can do (landscapes with real animated grass via Terrain.Kind, parts, materials, "
+        "batch creation, C# scripts, UI, audio) and which tools to use for common requests.",
+        schema({}), tool_engine_guide);
+
     add("set_properties",
-        "Sets several properties of one instance at once. All values are checked first; if any is invalid nothing "
-        "changes and every problem is listed.",
+        "Sets several properties of one instance at once, and optionally its attributes and tags. Attributes are "
+        "merged "
+        "into the existing ones (null removes one); tags replace the whole tag list. Everything is checked first; if "
+        "any "
+        "value is invalid nothing changes and every problem is listed.",
         schema({prop("path", "string", kPathDoc), prop("id", "integer", kIdDoc),
-                prop("properties", "object", "Property values by name, for example {\"Position\": [0, 5, 0]}.")},
-               {"properties"}),
+                prop("properties", "object", "Property values by name, for example {\"Position\": [0, 5, 0]}."),
+                prop("attributes", "object",
+                     "Attributes to set, for example {\"Health\": 100, \"Tint\": [1, 0, 0]}; null removes one."),
+                prop("tags", "array", "The complete tag list, for example [\"Enemy\", \"Breakable\"].")},
+               {}),
         tool_set_properties);
 
     add("delete_instance", "Deletes an instance and all its descendants. Services and the DataModel cannot be deleted.",

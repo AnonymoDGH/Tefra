@@ -86,6 +86,9 @@ class Vegetation {
     const rhi::Buffer& protos() const { return protos_; }
     const rhi::Buffer& draws_table() const { return draws_buf_; }
     const std::vector<DrawGPU>& draws() const { return draws_; }
+    // CPU copies of the GPU tables (CPU culling fallback for drivers whose compute culling is unreliable).
+    const std::vector<VegInstanceGPU>& cpu_instances() const { return cpu_; }
+    const std::vector<ProtoGPU>& cpu_protos() const { return protos_gpu_; }
     u32 visible_capacity() const { return visible_capacity_; }
 
     // Canopy footprints (world xz, top height in m, radius, density) of instances whose prototype has a canopy and
@@ -101,6 +104,7 @@ class Vegetation {
     std::vector<VegetationPrototype> protos_cpu_;
     std::vector<VegInstanceGPU> cpu_;
     std::vector<DrawGPU> draws_;
+    std::vector<ProtoGPU> protos_gpu_;
     rhi::Buffer instances_, protos_, draws_buf_;
     u32 visible_capacity_ = 0;
     u64 uid_ = 0;

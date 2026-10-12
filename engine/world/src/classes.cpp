@@ -59,6 +59,8 @@ void register_builtin_classes(ClassRegistry& r) {
     const EnumInfo* script_ctx = r.add_enum("RunContext", {"Server", "Client"});
     const EnumInfo* humanoid_state = r.add_enum("HumanoidState", {"Idle", "Walking", "Running", "Jumping", "Freefall",
                                                                   "Landed", "Dead", "Seated", "Climbing", "Swimming"});
+    const EnumInfo* normal_id = r.add_enum("NormalId", {"Top", "Bottom", "Front", "Back", "Left", "Right"});
+    const EnumInfo* particle_shape = r.add_enum("ParticleEmitterShape", {"Box", "Sphere", "Disc", "Point"});
     const EnumInfo* rig = r.add_enum("RigType", {"R15", "Custom"});
     const EnumInfo* text_x = r.add_enum("TextXAlignment", {"Left", "Center", "Right"});
     const EnumInfo* text_y = r.add_enum("TextYAlignment", {"Top", "Center", "Bottom"});
@@ -153,6 +155,8 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("Friction", Value::number(0.5), "Coulomb friction coefficient.");
     b.prop("Elasticity", Value::number(0.3), "Restitution (bounciness).");
     b.prop("AssemblyLinearVelocity", Value::vector3({0, 0, 0}), "Velocity (m/s).", kPropNotSerialized);
+    b.prop("AssemblyAngularVelocity", Value::vector3({0, 0, 0}), "Angular velocity (rad/s, world axes).",
+           kPropNotSerialized);
 
     b.cls("Part", "BasePart", "A primitive shape: block, ball, cylinder or wedge.", "Parts");
     b.group("Data").prop("Shape", Value::enumeration(0), "Primitive shape.", 0, shape);
@@ -301,6 +305,48 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("TimePosition", Value::number(0.0), "Current position (s).", kPropNotSerialized);
     b.prop("TimeLength", Value::number(0.0), "Length of the file (s).", kPropReadOnly | kPropNotSerialized);
 
+    // ---- Effects ---------------------------------------------------------------------------------------------
+    b.cls("ParticleEmitter", "Instance",
+          "Emits camera-facing particles (smoke, fire, sparks, dust, magic) from its parent part or attachment.",
+          "Effects");
+    b.group("Emission").prop("Enabled", Value::boolean(true), "Emits Rate particles per second while true.");
+    b.prop("Rate", Value::number(20.0), "Particles per second.");
+    b.prop("Lifetime", Value::number(2.0), "Seconds each particle lives.");
+    b.prop("Speed", Value::number(5.0), "Initial speed (m/s) along EmissionDirection.");
+    b.prop("SpreadAngle", Value::number(15.0), "Random deviation from EmissionDirection (degrees, 180 = all around).");
+    b.prop("Variation", Value::number(0.3), "Random +- fraction applied to lifetime, speed and size (0-1).");
+    b.prop("EmissionDirection", Value::enumeration(0), "Face of the parent part the particles leave from.", 0,
+           normal_id);
+    b.prop("Shape", Value::enumeration(0), "Volume particles spawn in: the parent's box, sphere, a disc, or a point.",
+           0, particle_shape);
+    b.group("Appearance")
+        .prop("Texture", Value::string("builtin:circle"),
+              "builtin:circle / smoke / spark / star / fire / snow / ring.");
+    b.prop("Color", Value::color3({1, 1, 1}), "Colour at birth.");
+    b.prop("ColorEnd", Value::color3({1, 1, 1}), "Colour at death (blended over the lifetime).");
+    b.prop("Size", Value::number(1.0), "Size at birth (m).");
+    b.prop("SizeEnd", Value::number(1.0), "Size at death (m).");
+    b.prop("Transparency", Value::number(0.0), "Transparency at birth (0 opaque, 1 invisible).");
+    b.prop("TransparencyEnd", Value::number(1.0), "Transparency at death.");
+    b.prop("LightEmission", Value::number(0.0), "0 = blended, 1 = additive glow (fire, sparks, magic).");
+    b.prop("Brightness", Value::number(1.0), "Glow strength of emissive particles (LightEmission > 0).");
+    b.prop("Stretch", Value::number(0.0), "Stretches particles along their velocity (sparks, rain).");
+    b.group("Motion").prop("Acceleration", Value::vector3({0, 0, 0}), "World acceleration (m/s^2), e.g. gravity.");
+    b.prop("Drag", Value::number(0.0), "Velocity decay per second.");
+    b.prop("RotSpeed", Value::number(0.0), "Spin (degrees per second, random sign).");
+    b.prop("LockedToPart", Value::boolean(false), "Particles follow the parent part as it moves.");
+    b.prop("TimeScale", Value::number(1.0), "Simulation speed (0 freezes).");
+    b.prop("EmitCount", Value::integer(0), "Pending burst (Emit(n) adds to it; consumed by the engine).",
+           kPropHidden | kPropNotSerialized);
+
+    // ---- Messaging (handlers live in managed code: BindableEvent, RemoteEvent... in managed/Tefra.Engine) ----
+    b.cls("BindableEvent", "Instance", "Fires an event to the scripts that connected to it (Fire / Event).", "Events");
+    b.cls("BindableFunction", "Instance", "A function scripts call with Invoke; the answer comes from OnInvoke.",
+          "Events");
+    b.cls("RemoteEvent", "Instance", "Sends events between server and client scripts (both run in this process).",
+          "Events");
+    b.cls("RemoteFunction", "Instance", "Calls a function on the other side and returns its result.", "Events");
+
     // ---- Characters ------------------------------------------------------------------------------------------
     b.cls("Humanoid", "Instance", "Makes a Model a character: health, walking, jumping, animation state.",
           "Characters");
@@ -342,6 +388,61 @@ void register_builtin_classes(ClassRegistry& r) {
     b.group("Data").prop("FieldOfView", Value::number(70.0), "Vertical field of view (degrees).");
     b.prop("Position", Value::vector3({0, 5, 10}), "Camera position (m).");
     b.prop("LookAt", Value::vector3({0, 0, 0}), "Point the camera looks at (m).");
+
+    // ---- Stored-only classes (imported from Roblox files; no engine behaviour yet) ---------------------------
+    b.cls("Attachment", "Instance", "A point on a part (imported from Roblox; not used by the engine yet).",
+          "Gameplay");
+    b.group("Transform").prop("Position", Value::vector3({0, 0, 0}), "Position in the parent part's space (m).");
+    b.prop("Orientation", Value::vector3({0, 0, 0}), "Rotation in degrees (Orientation order).");
+    b.cls("Decal", "Instance", "An image on one face of its parent part (stored; not rendered yet).", "Appearance");
+    b.group("Appearance")
+        .prop("Texture", Value::string(""), "Image path (a file next to the place, or rbxassetid text).");
+    b.prop("Face", Value::enumeration(2), "Face of the parent part.", 0, normal_id);
+    b.prop("Transparency", Value::number(0.0), "0 = opaque, 1 = invisible.");
+    b.prop("Color3", Value::color3({1, 1, 1}), "Tint.");
+    b.cls("Texture", "Decal", "A repeating image on one face of its parent part (stored; not rendered yet).",
+          "Appearance");
+    b.prop("StudsPerTileU", Value::number(2.0), "Tile width (m).");
+    b.prop("StudsPerTileV", Value::number(2.0), "Tile height (m).");
+    b.cls("WeldConstraint", "Instance", "Glues two parts together (stored; no constraint solver yet).", "Gameplay");
+    b.group("Data").prop("Part0", Value::reference(0), "First part.");
+    b.prop("Part1", Value::reference(0), "Second part.");
+    b.cls("Weld", "Instance", "Rigid joint between two parts with offsets (stored; no constraint solver yet).",
+          "Gameplay");
+    b.group("Data").prop("Part0", Value::reference(0), "Parent part.");
+    b.prop("Part1", Value::reference(0), "Child part.");
+    b.prop("C0", Value::vector3({0, 0, 0}), "Joint position in Part0's space (m).");
+    b.prop("C0Orientation", Value::vector3({0, 0, 0}), "Joint rotation in Part0's space (degrees).");
+    b.prop("C1", Value::vector3({0, 0, 0}), "Joint position in Part1's space (m).");
+    b.prop("C1Orientation", Value::vector3({0, 0, 0}), "Joint rotation in Part1's space (degrees).");
+    b.cls("SurfaceGui", "GuiBase", "UI drawn on a face of a part (stored; not rendered yet).", "UI");
+    b.group("Behavior").prop("Enabled", Value::boolean(true), "Drawn when true.");
+    b.prop("Face", Value::enumeration(2), "Face of the adornee part.", 0, normal_id);
+    b.prop("AlwaysOnTop", Value::boolean(false), "Draws through walls.");
+    b.prop("PixelsPerStud", Value::number(50.0), "Resolution on the surface (pixels per metre).");
+    b.cls("Team", "Instance", "A team of players (Roblox Teams).", "Gameplay");
+    b.group("Appearance").prop("TeamColor", Value::color3({1, 1, 1}), "Team colour.");
+    b.group("Behavior").prop("AutoAssignable", Value::boolean(true), "Players join it automatically.");
+
+    // Value objects (Roblox *Value): one typed value each.
+    b.cls("ValueBase", "Instance", "Base of the value objects.").abstract();
+    b.cls("StringValue", "ValueBase", "Holds a string.", "Data");
+    b.group("Data").prop("Value", Value::string(""), "The value.");
+    b.cls("IntValue", "ValueBase", "Holds an integer.", "Data");
+    b.group("Data").prop("Value", Value::integer(0), "The value.");
+    b.cls("NumberValue", "ValueBase", "Holds a number.", "Data");
+    b.group("Data").prop("Value", Value::number(0.0), "The value.");
+    b.cls("BoolValue", "ValueBase", "Holds true or false.", "Data");
+    b.group("Data").prop("Value", Value::boolean(false), "The value.");
+    b.cls("Vector3Value", "ValueBase", "Holds a vector.", "Data");
+    b.group("Data").prop("Value", Value::vector3({0, 0, 0}), "The value.");
+    b.cls("Color3Value", "ValueBase", "Holds a colour.", "Data");
+    b.group("Data").prop("Value", Value::color3({1, 1, 1}), "The value (sRGB, 0-1).");
+    b.cls("ObjectValue", "ValueBase", "Holds a reference to another instance.", "Data");
+    b.group("Data").prop("Value", Value::reference(0), "The referenced instance.");
+    b.cls("CFrameValue", "ValueBase", "Holds a position and an orientation (Roblox CFrame).", "Data");
+    b.group("Data").prop("Position", Value::vector3({0, 0, 0}), "Position (m).");
+    b.prop("Orientation", Value::vector3({0, 0, 0}), "Rotation in degrees (Orientation order).");
 }
 
 } // namespace tefra::world

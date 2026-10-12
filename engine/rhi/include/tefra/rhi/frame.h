@@ -25,6 +25,9 @@ class FrameLoop {
 
     // Waits until this slot's previous submission finished, then begins its command buffer.
     FrameContext& begin();
+    // Waits until the next begin() will not block (the GPU finished that slot). Call it before polling input so the
+    // frame is built from fresh input instead of input that waited behind the GPU.
+    void wait_next();
     // Ends and submits. Optional binary semaphores for swapchain acquire/present.
     void end(VkSemaphore wait_binary = VK_NULL_HANDLE,
              VkPipelineStageFlags2 wait_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,

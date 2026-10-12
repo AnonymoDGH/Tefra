@@ -132,9 +132,21 @@ void character_post_step(CharacterImpl& c, WorldImpl& w, f32 dt) {
     }
     root->set("AssemblyLinearVelocity", world::Value::vector3(c.velocity));
     hum->set("MoveDirection", world::Value::vector3(c.move_dir), true);
+    const world::Value* old_state = hum->get("State");
+    const u32 previous = old_state ? old_state->as_enum() : state;
     hum->set("State", world::Value::enumeration(state), true);
     w.writing_back = false;
     c.last_root_pos = new_root;
+    // Per-character signals: StateChanged(old, new), Jumping, FreeFalling, Landed (scripts react to each character,
+    // not only to the first player).
+    if (previous != state) {
+        const world::EnumInfo* e = world::ClassRegistry::get().find_enum("HumanoidState");
+        const std::string_view name = e && state < e->items.size() ? std::string_view(e->items[state]) : "";
+        w.model.fire_event(*hum, "StateChanged", nullptr, f64(previous), name);
+        if (state == state_index("Jumping")) w.model.fire_event(*hum, "Jumping");
+        if (state == state_index("Freefall")) w.model.fire_event(*hum, "FreeFalling");
+        if (state == state_index("Landed")) w.model.fire_event(*hum, "Landed");
+    }
 }
 
 void character_detach(CharacterImpl& c) {

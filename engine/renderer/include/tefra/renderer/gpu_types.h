@@ -29,7 +29,8 @@ struct MaterialGPU {
     u32 orm_tex = 0;
     u32 emissive_tex = 0;
     u32 flags = 0; // bit0: foliage (translucency, normal blended with the crown normal), bit1: double-sided,
-                   // bit2: bark (tint + moss), bit3: normal map alpha holds baked AO (needles)
+                   // bit2: bark (tint + moss), bit3: normal map alpha holds baked AO (needles),
+                   // bit4: procedural Part surface (pad[1] = Material enum index)
     f32 translucency = 0.0f;
     u32 pad[2] = {}; // bark: pad[0] = moss coverage (float bits)
 };
@@ -45,6 +46,18 @@ struct InstanceGPU {
     u32 pad[2] = {};
 };
 static_assert(sizeof(InstanceGPU) == 160);
+
+// One camera-facing particle (particles pass, shaders/particle.*). World position in float (as the water).
+struct ParticleGPU {
+    vec4 pos_size;         // world xyz, size (m)
+    vec4 color;            // linear rgb, opacity
+    vec4 vel_rot;          // world velocity (m/s, for Stretch), rotation (rad)
+    u32 shape = 0;         // 0 circle, 1 smoke, 2 spark, 3 star, 4 fire, 5 snow, 6 ring
+    f32 emission = 0.0f;   // LightEmission: 0 blended, 1 additive
+    f32 stretch = 0.0f;    // elongation along the screen velocity
+    f32 brightness = 1.0f; // glow of emissive particles
+};
+static_assert(sizeof(ParticleGPU) == 64);
 
 constexpr u32 kMaxCascades = 4;
 

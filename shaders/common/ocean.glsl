@@ -26,7 +26,7 @@ const uint OCEAN_GEOMETRY_WAVES = 16u; // Ocean::kGeometryWaves
 const uint OCEAN_DETAIL_WAVES = 14u;
 const float OCEAN_SHORE_RANGE = 2048.0; // Terrain::kShoreRange
 
-float ocean_hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float ocean_hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float ocean_vnoise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
     vec2 u = f * f * (3.0 - 2.0 * f);

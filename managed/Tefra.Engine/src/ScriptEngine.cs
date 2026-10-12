@@ -178,8 +178,11 @@ namespace Tefra
         {
             if (!_running) return;
             if (_dirty) Sync(null);
+            Remoting.Deliver(); // RemoteEvent messages sent during the previous step
             Yield.Advance(dt);
+            Debris.Advance(dt);
             RunService.Fire(dt);
+            TweenService.Step(dt);
             foreach (ScriptSlot s in Slots.ToArray())
             {
                 if (s.Obj == null || s.Failed || !s.Started) continue;
@@ -421,8 +424,11 @@ namespace Tefra
             // Drop every reference into the script assembly before unloading it: wrapper events, heartbeat and
             // pending tasks all hold user delegates.
             RunService.Clear();
+            TweenService.Clear();
             UserInputService.Clear();
             Yield.Clear();
+            EventTables.Clear();
+            Debris.Clear();
             Instance.ClearAll();
             foreach (ScriptSlot s in Slots)
             {

@@ -1,0 +1,12 @@
+radius Crate,Zone
+radius filtered Zone
+box Tilted
+inpart Crate
+ray Crate 8.0
+ray filtered Floor 10.0
+sphere Crate 7.5
+sphere filtered Floor 9.5
+block Pillar 5.5
+mass 700
+mover up
+touching Floor

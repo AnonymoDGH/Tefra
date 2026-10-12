@@ -6,6 +6,7 @@
 #include "tefra/core/log.h"
 #include "tefra/physics/character.h"
 #include "tefra/physics/physics_world.h"
+#include "tefra/physics/spatial.h"
 #include "tefra/renderer/terrain_field.h"
 #include "tefra/scripting/script_host.h"
 #include "tefra/world/datamodel.h"
@@ -25,6 +26,14 @@ Instance* find_spawn(world::DataModel& dm) {
     for (Instance* i : dm.workspace()->descendants())
         if (i->is_a("SpawnLocation") && i->get_bool("Enabled", true)) return i;
     return nullptr;
+}
+
+// A physics hit as the scripts see it (Workspace:Raycast and friends).
+void copy_hit(const physics::RaycastResult& hit, scripting::RayHit& out) {
+    out.instance = hit.instance;
+    out.position = hit.position;
+    out.normal = hit.normal;
+    out.distance = hit.distance;
 }
 
 // Copies every child of `from` into `to` (StarterGui -> PlayerGui, StarterPlayerScripts -> PlayerScripts).
@@ -117,15 +126,50 @@ bool GameRuntime::start() {
     if (cfg_.scripts && cfg_.scripts->available()) {
         // Scripts read the input snapshot (UserInputService) and cast rays against the physics world.
         cfg_.scripts->set_input(&input_);
-        cfg_.scripts->set_raycaster([this](vec3 origin, vec3 direction, f32 max_distance, scripting::RayHit& out) {
+        // Spatial queries and BasePart methods (Workspace:Raycast, Spherecast, GetPartBoundsInRadius, ...). The
+        // hooks capture this runtime: stop() clears them before the physics world goes.
+        scripting::PhysicsHooks hooks;
+        hooks.raycast = [this](vec3 origin, vec3 direction, f32 max_distance, const world::QueryFilter& filter,
+                               scripting::RayHit& out) {
             physics::RaycastResult hit;
-            if (!physics_ || !physics_->raycast(origin, direction, max_distance, hit) || !hit.instance) return false;
-            out.instance = hit.instance;
-            out.position = hit.position;
-            out.normal = hit.normal;
-            out.distance = hit.distance;
+            if (!physics_ || !physics_->raycast(origin, direction, max_distance, hit, &filter) || !hit.instance)
+                return false;
+            copy_hit(hit, out);
             return true;
-        });
+        };
+        hooks.spherecast = [this](vec3 origin, f32 radius, vec3 direction, const world::QueryFilter& filter,
+                                  scripting::RayHit& out) {
+            physics::RaycastResult hit;
+            if (!physics_ || !physics_->spherecast(origin, radius, direction, length(direction), hit, &filter) ||
+                !hit.instance)
+                return false;
+            copy_hit(hit, out);
+            return true;
+        };
+        hooks.blockcast = [this](vec3 center, vec3 orientation_deg, vec3 size, vec3 direction,
+                                 const world::QueryFilter& filter, scripting::RayHit& out) {
+            physics::RaycastResult hit;
+            if (!physics_ ||
+                !physics_->blockcast(center, orientation_deg, size, direction, length(direction), hit, &filter) ||
+                !hit.instance)
+                return false;
+            copy_hit(hit, out);
+            return true;
+        };
+        hooks.overlap = [this](const world::OverlapRequest& query, std::vector<world::Instance*>& out) {
+            physics::find_parts(model_, query, out);
+        };
+        hooks.touching = [this](const world::Instance& part, std::vector<world::Instance*>& out) {
+            if (physics_)
+                physics_->touching_parts(part, out);
+            else
+                out.clear();
+        };
+        hooks.impulse = [this](world::Instance& part, vec3 value, bool angular) {
+            return physics_ != nullptr && physics_->apply_impulse(part, value, angular);
+        };
+        hooks.mass = [](const world::Instance& part) { return physics::part_mass(part); };
+        cfg_.scripts->set_physics(std::move(hooks));
         cfg_.scripts->start(model_);
     }
     for (auto& s : systems_)
@@ -329,10 +373,10 @@ void GameRuntime::stop() {
     if (!running_) return;
     for (auto it = systems_.rbegin(); it != systems_.rend(); ++it) (*it)->stop(*this);
     if (cfg_.scripts && cfg_.scripts->running()) cfg_.scripts->stop();
-    // The raycaster captures this runtime and the input snapshot is a member of it: the host must not reach either
+    // The physics hooks capture this runtime and the input snapshot is a member of it: the host must not reach either
     // after the physics world or this runtime is gone.
     if (cfg_.scripts) {
-        cfg_.scripts->set_raycaster(nullptr);
+        cfg_.scripts->set_physics(scripting::PhysicsHooks{});
         cfg_.scripts->set_input(nullptr);
     }
     controller_.reset();

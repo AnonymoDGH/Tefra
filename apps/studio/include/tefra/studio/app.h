@@ -44,6 +44,7 @@ class Renderer;
 } // namespace tefra::render
 namespace tefra::world {
 class SceneSync;
+class ParticleSystem;
 }
 namespace tefra::scripting {
 class ScriptHost;
@@ -195,6 +196,8 @@ class App {
     std::unique_ptr<render::Atmosphere> atmosphere_;
     std::unique_ptr<render::Renderer> renderer_;
     std::unique_ptr<world::SceneSync> sync_;
+    std::unique_ptr<world::ParticleSystem> particles_;
+    f64 particles_time_ = -1.0;
     std::shared_ptr<void> environment_; // world::EnvironmentSync (type-erased: no world/renderer types here)
     u64 synced_generation_ = ~0ull;
 

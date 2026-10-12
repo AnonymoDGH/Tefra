@@ -71,6 +71,7 @@ namespace Tefra
         private static readonly PropRef FrictionP = new PropRef("BasePart", "Friction");
         private static readonly PropRef ElasticityP = new PropRef("BasePart", "Elasticity");
         private static readonly PropRef VelocityP = new PropRef("BasePart", "AssemblyLinearVelocity");
+        private static readonly PropRef AngularVelocityP = new PropRef("BasePart", "AssemblyAngularVelocity");
 
         internal BasePart(ulong id) : base(id) { }
 
@@ -78,6 +79,20 @@ namespace Tefra
         public Vector3 Position { get => GetVector3(PositionP); set => SetVector3(PositionP, value); }
         /// <summary>Rotation in degrees, applied Y, then X, then Z (Roblox order).</summary>
         public Vector3 Orientation { get => GetVector3(OrientationP); set => SetVector3(OrientationP, value); }
+        /// <summary>Position and rotation together (Position plus the rotation from Orientation).</summary>
+        public CFrame CFrame
+        {
+            get => CFrame.FromOrientation(Position, Orientation);
+            set
+            {
+                Position = value.Position;
+                Orientation = value.ToOrientation();
+            }
+        }
+        /// <summary>Moves the part so that its CFrame becomes target.</summary>
+        public void PivotTo(CFrame target) => CFrame = target;
+        /// <summary>The part's own CFrame, which is its pivot.</summary>
+        public CFrame GetPivot() => CFrame;
         /// <summary>Dimensions in metres.</summary>
         public Vector3 Size { get => GetVector3(SizeP); set => SetVector3(SizeP, value); }
         public Color3 Color { get => GetColor3(ColorP); set => SetColor3(ColorP, value); }
@@ -94,7 +109,60 @@ namespace Tefra
         public float Density { get => GetFloat(DensityP); set => SetFloat(DensityP, value); }
         public float Friction { get => GetFloat(FrictionP); set => SetFloat(FrictionP, value); }
         public float Elasticity { get => GetFloat(ElasticityP); set => SetFloat(ElasticityP, value); }
+        /// <summary>Velocity of an unanchored part (m/s). Ignored for anchored parts.</summary>
         public Vector3 AssemblyLinearVelocity { get => GetVector3(VelocityP); set => SetVector3(VelocityP, value); }
+        /// <summary>Spin of an unanchored part (rad/s, world axes). Ignored for anchored parts.</summary>
+        public Vector3 AssemblyAngularVelocity { get => GetVector3(AngularVelocityP); set => SetVector3(AngularVelocityP, value); }
+
+        /// <summary>
+        /// Adds a linear impulse (kg·m/s) to an unanchored part; it applies at the next physics step. Does nothing for
+        /// anchored parts or outside Play mode.
+        /// </summary>
+        public void ApplyImpulse(Vector3 impulse) => Native.ApplyImpulse(Id, impulse, false);
+
+        /// <summary>Adds an angular impulse (kg·m²/s, world axes) to an unanchored part.</summary>
+        public void ApplyAngularImpulse(Vector3 impulse) => Native.ApplyImpulse(Id, impulse, true);
+
+        /// <summary>Mass in kg: Density times the volume of the part's shape.</summary>
+        public float GetMass() => (float)Native.Mass(Id);
+
+        /// <summary>
+        /// Parts in contact with this one right now (sensors included). For a character's HumanoidRootPart, the parts
+        /// the character touches. Empty outside Play mode.
+        /// </summary>
+        public BasePart[] GetTouchingParts()
+        {
+            ulong[] buf = new ulong[32];
+            uint total = Native.TouchingParts(Id, buf);
+            if (total > buf.Length)
+            {
+                buf = new ulong[total];
+                total = Native.TouchingParts(Id, buf);
+            }
+            return ToParts(buf, total);
+        }
+
+        // Runs an overlap query (kind 0 Radius, 1 Box, 2 Part) and returns the matching parts.
+        internal static BasePart[] Overlap(int kind, Vector3 center, Vector3 orientation, Vector3 size, float radius,
+            ulong partId, OverlapParams p)
+        {
+            ulong[] buf = new ulong[64];
+            uint total = Native.Overlap(kind, center, orientation, size, radius, partId, p, p == null ? 0 : p.MaxParts, buf);
+            if (total > buf.Length)
+            {
+                buf = new ulong[total];
+                total = Native.Overlap(kind, center, orientation, size, radius, partId, p, p == null ? 0 : p.MaxParts, buf);
+            }
+            return ToParts(buf, total);
+        }
+
+        private static BasePart[] ToParts(ulong[] ids, uint total)
+        {
+            var list = new List<BasePart>((int)Math.Min(total, (uint)ids.Length));
+            for (int i = 0; i < ids.Length && i < total; ++i)
+                if (Instance.FromId(ids[i]) is BasePart part) list.Add(part);
+            return list.ToArray();
+        }
 
         /// <summary>Fires once when another part (or a character) starts touching this one. The argument is the other part.
         /// Characters report the touch with their HumanoidRootPart; sensors (CanCollide = false, CanTouch = true) report too.</summary>
@@ -154,6 +222,27 @@ namespace Tefra
             get => GetRef(PrimaryPartP) as BasePart;
             set => SetRef(PrimaryPartP, value);
         }
+
+        /// <summary>PrimaryPart's CFrame if set, else the first BasePart descendant's; identity for an empty model.</summary>
+        public CFrame GetPivot()
+        {
+            BasePart primary = PrimaryPart;
+            if (primary != null) return primary.CFrame;
+            foreach (Instance child in GetDescendants())
+                if (child is BasePart part) return part.CFrame;
+            return CFrame.Identity;
+        }
+
+        /// <summary>Moves every BasePart descendant rigidly so that the pivot ends at target.</summary>
+        public void PivotTo(CFrame target)
+        {
+            var parts = new List<BasePart>();
+            foreach (Instance child in GetDescendants())
+                if (child is BasePart part) parts.Add(part);
+            if (parts.Count == 0) return;
+            CFrame delta = target * GetPivot().Inverse();
+            foreach (BasePart part in parts) part.CFrame = delta * part.CFrame;
+        }
     }
 
     public class Folder : Instance
@@ -178,9 +267,74 @@ namespace Tefra
         /// </summary>
         public RaycastResult Raycast(Vector3 origin, Vector3 direction, float maxDistance = 1000f)
         {
+            return Raycast(origin, direction, maxDistance, null);
+        }
+
+        /// <summary>Raycast that skips the parts that params filters out (FilterDescendantsInstances, FilterType).</summary>
+        public RaycastResult Raycast(Vector3 origin, Vector3 direction, RaycastParams p)
+        {
+            return Raycast(origin, direction, 1000f, p);
+        }
+
+        public RaycastResult Raycast(Vector3 origin, Vector3 direction, float maxDistance, RaycastParams p)
+        {
             double[] hit;
-            ulong id = Native.Raycast(origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z, maxDistance, out hit);
-            if (id == 0) return null;
+            ulong id = Native.Raycast(origin.X, origin.Y, origin.Z, direction.X, direction.Y, direction.Z, maxDistance, p, out hit);
+            return ToResult(id, hit);
+        }
+
+        /// <summary>
+        /// Closest solid part hit by a sphere of the given radius moving from origin along direction. The length of
+        /// direction is the distance. Returns null on a miss. The contact point is on the hit part's surface.
+        /// </summary>
+        public RaycastResult Spherecast(Vector3 origin, float radius, Vector3 direction, RaycastParams p = null)
+        {
+            double[] hit;
+            return ToResult(Native.Spherecast(origin, radius, direction, p, out hit), hit);
+        }
+
+        /// <summary>
+        /// Closest solid part hit by a box (center, orientation in degrees Y, X, Z, size) moving along direction. The
+        /// length of direction is the distance. Returns null on a miss.
+        /// </summary>
+        public RaycastResult Blockcast(Vector3 center, Vector3 orientationDegrees, Vector3 size, Vector3 direction,
+            RaycastParams p = null)
+        {
+            double[] hit;
+            return ToResult(Native.Blockcast(center, orientationDegrees, size, direction, p, out hit), hit);
+        }
+
+        /// <summary>Parts whose box touches the sphere (center, radius). A Ball counts as its inscribed sphere.</summary>
+        public BasePart[] GetPartBoundsInRadius(Vector3 center, float radius, OverlapParams p = null)
+        {
+            return BasePart.Overlap(0, center, Vector3.Zero, Vector3.Zero, radius, 0, p);
+        }
+
+        /// <summary>Parts whose box overlaps the axis-aligned box centered at center with the given size.</summary>
+        public BasePart[] GetPartBoundsInBox(Vector3 center, Vector3 size, OverlapParams p = null)
+        {
+            return BasePart.Overlap(1, center, Vector3.Zero, size, 0, 0, p);
+        }
+
+        /// <summary>Parts whose box overlaps the box centered at center, rotated by orientationDegrees (Y, X, Z).</summary>
+        public BasePart[] GetPartBoundsInBox(Vector3 center, Vector3 orientationDegrees, Vector3 size, OverlapParams p = null)
+        {
+            return BasePart.Overlap(1, center, orientationDegrees, size, 0, 0, p);
+        }
+
+        /// <summary>
+        /// Parts whose box overlaps the box of part. The part itself is not returned. Boxes only (a Ball counts as
+        /// its box).
+        /// </summary>
+        public BasePart[] GetPartsInPart(BasePart part, OverlapParams p = null)
+        {
+            if (part == null) return new BasePart[0];
+            return BasePart.Overlap(2, Vector3.Zero, Vector3.Zero, Vector3.Zero, 0, part.Id, p);
+        }
+
+        private static RaycastResult ToResult(ulong id, double[] hit)
+        {
+            if (id == 0 || hit == null) return null;
             return new RaycastResult(
                 Instance.FromId(id),
                 new Vector3((float)hit[0], (float)hit[1], (float)hit[2]),
@@ -189,7 +343,46 @@ namespace Tefra
         }
     }
 
-    /// <summary>Answer of Workspace.Raycast.</summary>
+    /// <summary>Whether FilterDescendantsInstances lists the parts to ignore (Exclude) or the only ones to hit (Include).</summary>
+    public enum FilterType
+    {
+        Exclude, Include
+    }
+
+    /// <summary>
+    /// Filter shared by RaycastParams and OverlapParams (Roblox semantics). A part is filtered by its ancestry: the part
+    /// or one of its ancestors must be listed. Exclude (default) ignores listed parts; Include hits only listed parts,
+    /// so an Include filter with an empty list hits nothing.
+    /// </summary>
+    public abstract class QueryParams
+    {
+        /// <summary>Instances whose parts (and their descendants) are filtered by FilterType.</summary>
+        public List<Instance> FilterDescendantsInstances { get; set; } = new List<Instance>();
+        public FilterType FilterType { get; set; } = FilterType.Exclude;
+
+        internal ulong[] FilterIds()
+        {
+            var ids = new List<ulong>();
+            if (FilterDescendantsInstances != null)
+                foreach (Instance i in FilterDescendantsInstances)
+                    if (i != null) ids.Add(i.Id);
+            return ids.ToArray();
+        }
+    }
+
+    /// <summary>Parameters of Workspace.Raycast, Spherecast and Blockcast.</summary>
+    public sealed class RaycastParams : QueryParams
+    {
+    }
+
+    /// <summary>Parameters of Workspace.GetPartBoundsInRadius / GetPartBoundsInBox / GetPartsInPart.</summary>
+    public sealed class OverlapParams : QueryParams
+    {
+        /// <summary>At most this many parts are returned; 0 = no limit.</summary>
+        public int MaxParts { get; set; } = 0;
+    }
+
+    /// <summary>Answer of Workspace.Raycast, Spherecast and Blockcast.</summary>
     public sealed class RaycastResult
     {
         /// <summary>The part that was hit.</summary>
@@ -309,6 +502,34 @@ namespace Tefra
         {
             add => AddSignal("HealthChanged", value);
             remove => RemoveSignal("HealthChanged", value);
+        }
+
+        /// <summary>Fires when this character starts a jump (each character has its own).</summary>
+        public event Action Jumping
+        {
+            add => AddSignal("Jumping", value);
+            remove => RemoveSignal("Jumping", value);
+        }
+
+        /// <summary>Fires when this character starts falling.</summary>
+        public event Action FreeFalling
+        {
+            add => AddSignal("FreeFalling", value);
+            remove => RemoveSignal("FreeFalling", value);
+        }
+
+        /// <summary>Fires when this character touches the ground after a jump or a fall.</summary>
+        public event Action Landed
+        {
+            add => AddSignal("Landed", value);
+            remove => RemoveSignal("Landed", value);
+        }
+
+        /// <summary>Fires on every state change with (old state, new state).</summary>
+        public event Action<HumanoidState, HumanoidState> StateChanged
+        {
+            add => AddSignal("StateChanged", value);
+            remove => RemoveSignal("StateChanged", value);
         }
 
         /// <summary>Removes health (never below zero). Use it for hits; it fires HealthChanged and, at zero, Died.</summary>
@@ -698,6 +919,204 @@ namespace Tefra
         }
     }
 
+    /// <summary>Emits camera-facing particles from its parent part (smoke, fire, sparks, dust, magic).</summary>
+    public class ParticleEmitter : Instance
+    {
+        private static readonly PropRef EnabledP = new PropRef("ParticleEmitter", "Enabled");
+        private static readonly PropRef RateP = new PropRef("ParticleEmitter", "Rate");
+        private static readonly PropRef LifetimeP = new PropRef("ParticleEmitter", "Lifetime");
+        private static readonly PropRef SpeedP = new PropRef("ParticleEmitter", "Speed");
+        private static readonly PropRef SpreadAngleP = new PropRef("ParticleEmitter", "SpreadAngle");
+        private static readonly PropRef VariationP = new PropRef("ParticleEmitter", "Variation");
+        private static readonly PropRef TextureP = new PropRef("ParticleEmitter", "Texture");
+        private static readonly PropRef ColorP = new PropRef("ParticleEmitter", "Color");
+        private static readonly PropRef ColorEndP = new PropRef("ParticleEmitter", "ColorEnd");
+        private static readonly PropRef SizeP = new PropRef("ParticleEmitter", "Size");
+        private static readonly PropRef SizeEndP = new PropRef("ParticleEmitter", "SizeEnd");
+        private static readonly PropRef TransparencyP = new PropRef("ParticleEmitter", "Transparency");
+        private static readonly PropRef TransparencyEndP = new PropRef("ParticleEmitter", "TransparencyEnd");
+        private static readonly PropRef LightEmissionP = new PropRef("ParticleEmitter", "LightEmission");
+        private static readonly PropRef BrightnessP = new PropRef("ParticleEmitter", "Brightness");
+        private static readonly PropRef StretchP = new PropRef("ParticleEmitter", "Stretch");
+        private static readonly PropRef AccelerationP = new PropRef("ParticleEmitter", "Acceleration");
+        private static readonly PropRef DragP = new PropRef("ParticleEmitter", "Drag");
+        private static readonly PropRef RotSpeedP = new PropRef("ParticleEmitter", "RotSpeed");
+        private static readonly PropRef LockedToPartP = new PropRef("ParticleEmitter", "LockedToPart");
+        private static readonly PropRef TimeScaleP = new PropRef("ParticleEmitter", "TimeScale");
+        private static readonly PropRef EmissionDirectionP = new PropRef("ParticleEmitter", "EmissionDirection");
+        private static readonly PropRef ShapeP = new PropRef("ParticleEmitter", "Shape");
+        private static readonly PropRef EmitCountP = new PropRef("ParticleEmitter", "EmitCount");
+
+        internal ParticleEmitter(ulong id) : base(id) { }
+
+        /// <summary>Emits Rate particles per second while true.</summary>
+        public bool Enabled { get => GetBool(EnabledP); set => SetBool(EnabledP, value); }
+        /// <summary>Particles per second.</summary>
+        public float Rate { get => GetFloat(RateP); set => SetFloat(RateP, value); }
+        /// <summary>Seconds each particle lives.</summary>
+        public float Lifetime { get => GetFloat(LifetimeP); set => SetFloat(LifetimeP, value); }
+        /// <summary>Initial speed (m/s) along EmissionDirection.</summary>
+        public float Speed { get => GetFloat(SpeedP); set => SetFloat(SpeedP, value); }
+        /// <summary>Random deviation from EmissionDirection (degrees).</summary>
+        public float SpreadAngle { get => GetFloat(SpreadAngleP); set => SetFloat(SpreadAngleP, value); }
+        /// <summary>Random +- fraction applied to lifetime, speed and size.</summary>
+        public float Variation { get => GetFloat(VariationP); set => SetFloat(VariationP, value); }
+        /// <summary>builtin:circle / smoke / spark / star / fire / snow / ring.</summary>
+        public string Texture { get => GetString(TextureP); set => SetString(TextureP, value); }
+        /// <summary>Colour at birth.</summary>
+        public Color3 Color { get => GetColor3(ColorP); set => SetColor3(ColorP, value); }
+        /// <summary>Colour at death.</summary>
+        public Color3 ColorEnd { get => GetColor3(ColorEndP); set => SetColor3(ColorEndP, value); }
+        /// <summary>Size at birth (m).</summary>
+        public float Size { get => GetFloat(SizeP); set => SetFloat(SizeP, value); }
+        /// <summary>Size at death (m).</summary>
+        public float SizeEnd { get => GetFloat(SizeEndP); set => SetFloat(SizeEndP, value); }
+        /// <summary>Transparency at birth.</summary>
+        public float Transparency { get => GetFloat(TransparencyP); set => SetFloat(TransparencyP, value); }
+        /// <summary>Transparency at death.</summary>
+        public float TransparencyEnd { get => GetFloat(TransparencyEndP); set => SetFloat(TransparencyEndP, value); }
+        /// <summary>0 = blended, 1 = additive glow.</summary>
+        public float LightEmission { get => GetFloat(LightEmissionP); set => SetFloat(LightEmissionP, value); }
+        /// <summary>Glow strength of emissive particles.</summary>
+        public float Brightness { get => GetFloat(BrightnessP); set => SetFloat(BrightnessP, value); }
+        /// <summary>Stretch along the velocity (sparks, rain).</summary>
+        public float Stretch { get => GetFloat(StretchP); set => SetFloat(StretchP, value); }
+        /// <summary>World acceleration (m/s^2).</summary>
+        public Vector3 Acceleration { get => GetVector3(AccelerationP); set => SetVector3(AccelerationP, value); }
+        /// <summary>Velocity decay per second.</summary>
+        public float Drag { get => GetFloat(DragP); set => SetFloat(DragP, value); }
+        /// <summary>Spin (degrees per second).</summary>
+        public float RotSpeed { get => GetFloat(RotSpeedP); set => SetFloat(RotSpeedP, value); }
+        /// <summary>Particles follow the parent part.</summary>
+        public bool LockedToPart { get => GetBool(LockedToPartP); set => SetBool(LockedToPartP, value); }
+        /// <summary>Simulation speed (0 freezes).</summary>
+        public float TimeScale { get => GetFloat(TimeScaleP); set => SetFloat(TimeScaleP, value); }
+        public NormalId EmissionDirection { get => (NormalId)GetInt(EmissionDirectionP); set => SetEnum(EmissionDirectionP, (int)value); }
+        public ParticleEmitterShape Shape { get => (ParticleEmitterShape)GetInt(ShapeP); set => SetEnum(ShapeP, (int)value); }
+
+        /// <summary>Emits a burst of count particles now (in addition to Rate).</summary>
+        public void Emit(int count = 16)
+        {
+            if (count > 0) SetInt(EmitCountP, GetInt(EmitCountP) + count);
+        }
+    }
+
+    // ---- Messaging (Events category). The handlers are in EventTables (Events.cs), keyed by the instance id. ----
+
+    /// <summary>Fires an event to the scripts connected to it. Handlers run inside Fire, with its arguments.</summary>
+    public class BindableEvent : Instance
+    {
+        internal BindableEvent(ulong id) : base(id) { }
+
+        /// <summary>Called by Fire with its arguments, in the order the handlers were added.</summary>
+        public event Action<object[]> Event
+        {
+            add => EventTables.BindableEvents.Add(Id, value);
+            remove => EventTables.BindableEvents.Remove(Id, value);
+        }
+
+        /// <summary>Same as adding a handler to Event.</summary>
+        public void Connect(Action<object[]> handler) => EventTables.BindableEvents.Add(Id, handler);
+
+        /// <summary>Runs every handler now. A destroyed BindableEvent fires nothing.</summary>
+        public void Fire(params object[] args)
+        {
+            if (!Native.Exists(Id)) return;
+            EventTables.BindableEvents.Each(Id, "BindableEvent.Event", fn => ((Action<object[]>)fn)(args));
+        }
+    }
+
+    /// <summary>A function other scripts call with Invoke. Set OnInvoke to answer.</summary>
+    public class BindableFunction : Instance
+    {
+        internal BindableFunction(ulong id) : base(id) { }
+
+        /// <summary>Receives the arguments of Invoke and returns the result.</summary>
+        public Func<object[], object> OnInvoke
+        {
+            get => EventTables.BindableFunctions.Get(Id).Fn as Func<object[], object>;
+            set => EventTables.BindableFunctions.Set(Id, value);
+        }
+
+        /// <summary>Calls OnInvoke now and returns its result (null when OnInvoke is not set).</summary>
+        public object Invoke(params object[] args) =>
+            EventTables.BindableFunctions.Call(Id, fn => ((Func<object[], object>)fn)(args));
+    }
+
+    /// <summary>Events between the server and the client. Both run in this process: the message is queued and
+    /// delivered at the next script step, as it would be over a network.</summary>
+    public class RemoteEvent : Instance
+    {
+        internal RemoteEvent(ulong id) : base(id) { }
+
+        /// <summary>Server side. Gets the sending player (the local player) and the arguments of FireServer.</summary>
+        public event Action<Player, object[]> OnServerEvent
+        {
+            add => EventTables.ServerRemotes.Add(Id, value);
+            remove => EventTables.ServerRemotes.Remove(Id, value);
+        }
+
+        /// <summary>Client side. Gets the arguments of FireClient or FireAllClients.</summary>
+        public event Action<object[]> OnClientEvent
+        {
+            add => EventTables.ClientRemotes.Add(Id, value);
+            remove => EventTables.ClientRemotes.Remove(Id, value);
+        }
+
+        /// <summary>Queues the arguments for OnServerEvent, with the local player as the sender.</summary>
+        public void FireServer(params object[] args) => Remoting.Enqueue(Id, true, Players.LocalPlayer, args);
+
+        /// <summary>Queues the arguments for OnClientEvent. A single process has one client, so every player
+        /// receives it.</summary>
+        public void FireClient(Player player, params object[] args)
+        {
+            if (player == null)
+            {
+                Native.Log(Native.LogWarn, "RemoteEvent.FireClient: no player given, the event was dropped");
+                return;
+            }
+            Remoting.Enqueue(Id, false, null, args);
+        }
+
+        /// <summary>Queues the arguments for OnClientEvent of the client.</summary>
+        public void FireAllClients(params object[] args) => Remoting.Enqueue(Id, false, null, args);
+    }
+
+    /// <summary>A call with an answer. Set OnServerInvoke / OnClientInvoke to answer the other side.</summary>
+    public class RemoteFunction : Instance
+    {
+        internal RemoteFunction(ulong id) : base(id) { }
+
+        /// <summary>Answers InvokeServer. Gets the calling player (the local player) and the arguments.</summary>
+        public Func<Player, object[], object> OnServerInvoke
+        {
+            get => EventTables.ServerInvokers.Get(Id).Fn as Func<Player, object[], object>;
+            set => EventTables.ServerInvokers.Set(Id, value);
+        }
+
+        /// <summary>Answers InvokeClient. Gets the arguments.</summary>
+        public Func<object[], object> OnClientInvoke
+        {
+            get => EventTables.ClientInvokers.Get(Id).Fn as Func<object[], object>;
+            set => EventTables.ClientInvokers.Set(Id, value);
+        }
+
+        /// <summary>Calls OnServerInvoke now, as the local player, and returns its result (null when unset).</summary>
+        public object InvokeServer(params object[] args) =>
+            EventTables.ServerInvokers.Call(Id, fn => ((Func<Player, object[], object>)fn)(Players.LocalPlayer, args));
+
+        /// <summary>Calls OnClientInvoke now and returns its result (null when unset or when no player is given).</summary>
+        public object InvokeClient(Player player, params object[] args)
+        {
+            if (player == null)
+            {
+                Native.Log(Native.LogWarn, "RemoteFunction.InvokeClient: no player given");
+                return null;
+            }
+            return EventTables.ClientInvokers.Call(Id, fn => ((Func<object[], object>)fn)(args));
+        }
+    }
+
     // Factory table: the most derived wrapper for each class name. Classes without a wrapper use Instance.
 
     public enum HorizontalAlignment { Left, Center, Right }
@@ -709,6 +1128,10 @@ namespace Tefra
     public enum SortOrder { LayoutOrder, Name }
 
     public enum HumanoidDisplayDistanceType { Viewer, Subject, None }
+
+    public enum NormalId { Top, Bottom, Front, Back, Left, Right }
+
+    public enum ParticleEmitterShape { Box, Sphere, Disc, Point }
 
     /// <summary>A UI layer drawn over the world, positioned at an Adornee (or the parent part).</summary>
     public class BillboardGui : GuiBase
@@ -844,6 +1267,90 @@ namespace Tefra
         public float AspectRatio { get => GetFloat(RatioP); set => SetFloat(RatioP, value); }
     }
 
+    // ---- Value objects (Roblox *Value; engine/world/src/classes.cpp) -----------------------------------------------
+
+    /// <summary>Base of the value objects: one typed value each (`Value` property).</summary>
+    public abstract class ValueBase : Instance
+    {
+        internal ValueBase(ulong id) : base(id) { }
+    }
+
+    public class StringValue : ValueBase
+    {
+        private static readonly PropRef ValueP = new PropRef("StringValue", "Value");
+
+        internal StringValue(ulong id) : base(id) { }
+
+        public string Value { get => GetString(ValueP); set => SetString(ValueP, value); }
+    }
+
+    public class IntValue : ValueBase
+    {
+        private static readonly PropRef ValueP = new PropRef("IntValue", "Value");
+
+        internal IntValue(ulong id) : base(id) { }
+
+        public int Value { get => GetInt(ValueP); set => SetInt(ValueP, value); }
+    }
+
+    public class NumberValue : ValueBase
+    {
+        private static readonly PropRef ValueP = new PropRef("NumberValue", "Value");
+
+        internal NumberValue(ulong id) : base(id) { }
+
+        public float Value { get => GetFloat(ValueP); set => SetFloat(ValueP, value); }
+    }
+
+    public class BoolValue : ValueBase
+    {
+        private static readonly PropRef ValueP = new PropRef("BoolValue", "Value");
+
+        internal BoolValue(ulong id) : base(id) { }
+
+        public bool Value { get => GetBool(ValueP); set => SetBool(ValueP, value); }
+    }
+
+    public class Vector3Value : ValueBase
+    {
+        private static readonly PropRef ValueP = new PropRef("Vector3Value", "Value");
+
+        internal Vector3Value(ulong id) : base(id) { }
+
+        public Vector3 Value { get => GetVector3(ValueP); set => SetVector3(ValueP, value); }
+    }
+
+    public class Color3Value : ValueBase
+    {
+        private static readonly PropRef ValueP = new PropRef("Color3Value", "Value");
+
+        internal Color3Value(ulong id) : base(id) { }
+
+        public Color3 Value { get => GetColor3(ValueP); set => SetColor3(ValueP, value); }
+    }
+
+    /// <summary>Holds a reference to another instance (nil = null).</summary>
+    public class ObjectValue : ValueBase
+    {
+        private static readonly PropRef ValueP = new PropRef("ObjectValue", "Value");
+
+        internal ObjectValue(ulong id) : base(id) { }
+
+        public Instance Value { get => GetRef(ValueP); set => SetRef(ValueP, value); }
+    }
+
+    /// <summary>A position and an orientation (Roblox CFrame, kept as Position + Orientation in degrees).</summary>
+    public class CFrameValue : ValueBase
+    {
+        private static readonly PropRef PositionP = new PropRef("CFrameValue", "Position");
+        private static readonly PropRef OrientationP = new PropRef("CFrameValue", "Orientation");
+
+        internal CFrameValue(ulong id) : base(id) { }
+
+        public Vector3 Position { get => GetVector3(PositionP); set => SetVector3(PositionP, value); }
+        public Vector3 Orientation { get => GetVector3(OrientationP); set => SetVector3(OrientationP, value); }
+    }
+
     internal static class ClassMap
     {
         internal static readonly Dictionary<string, Func<ulong, Instance>> Map =
@@ -888,6 +1395,19 @@ namespace Tefra
                 ["ImageButton"] = id => new ImageButton(id),
                 ["SoundService"] = id => new SoundService(id),
                 ["Sound"] = id => new Sound(id),
+                ["ParticleEmitter"] = id => new ParticleEmitter(id),
+                ["BindableEvent"] = id => new BindableEvent(id),
+                ["BindableFunction"] = id => new BindableFunction(id),
+                ["RemoteEvent"] = id => new RemoteEvent(id),
+                ["RemoteFunction"] = id => new RemoteFunction(id),
+                ["StringValue"] = id => new StringValue(id),
+                ["IntValue"] = id => new IntValue(id),
+                ["NumberValue"] = id => new NumberValue(id),
+                ["BoolValue"] = id => new BoolValue(id),
+                ["Vector3Value"] = id => new Vector3Value(id),
+                ["Color3Value"] = id => new Color3Value(id),
+                ["ObjectValue"] = id => new ObjectValue(id),
+                ["CFrameValue"] = id => new CFrameValue(id),
             };
     }
 }

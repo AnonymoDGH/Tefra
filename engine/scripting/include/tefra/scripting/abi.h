@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define TEFRA_SCRIPT_ABI_VERSION 2u
+#define TEFRA_SCRIPT_ABI_VERSION 4u
 
 // Log levels: same numbering as tefra::LogLevel.
 enum TefraLogLevel {
@@ -32,7 +32,8 @@ enum TefraEventKind {
     TEFRA_EVENT_REMOVING = 2,   // id
     TEFRA_EVENT_ADDED = 3,      // id (every instance of an added subtree)
     TEFRA_EVENT_REPARENTED = 4, // id, other = old parent (0 if none)
-    TEFRA_EVENT_SIGNAL = 5      // gameplay signal: id = source, other, number, name ("Touched"...), text
+    TEFRA_EVENT_SIGNAL = 5      // gameplay signal: id = source, other, number, name ("Touched"...), text.
+                                // "AttributeChanged" (text = attribute name), "TagAdded" / "TagRemoved" (text = tag).
 };
 
 // A property value in flat form. `type` is a tefra::world::PropType. Bool/Int/Float/Enum use n[0]; Vector3 and
@@ -55,6 +56,15 @@ typedef struct TefraEvent {
     const char* name; // signals: event name, NUL-terminated
     const char* text; // signals: text payload (key name), NUL-terminated, "" when unused
 } TefraEvent;
+
+// Instance filter of a spatial query (RaycastParams / OverlapParams). ids are instance ids; each one is filtered with
+// its descendants. include = 1: FilterType.Include (only listed parts are hit); 0: Exclude. count 0 and include 0 =
+// no filter.
+typedef struct TefraFilter {
+    const uint64_t* ids;
+    uint32_t count;
+    int32_t include;
+} TefraFilter;
 
 // Functions implemented by the host and handed to the managed side in Bridge.Init. Instance ids are u64; 0 is nil.
 // Negative/zero results mean failure unless noted. All `const char*` arguments are NUL-terminated UTF-8.
@@ -79,12 +89,45 @@ typedef struct TefraNativeApi {
     uint64_t (*find_path)(const char* path);
     void (*log)(int32_t level, const char* message);
     // Workspace:Raycast. origin[3], direction[3] (need not be unit), out[7] = position[3], normal[3], distance.
-    // Returns the hit instance id, 0 on a miss or when no game is running.
-    uint64_t (*raycast)(const double* origin, const double* direction, double max_distance, double* out);
+    // Returns the hit instance id, 0 on a miss or when no game is running. filter may be nullptr.
+    uint64_t (*raycast)(const double* origin, const double* direction, double max_distance, const TefraFilter* filter,
+                        double* out);
     int32_t (*input_key_down)(int32_t key_code);     // tefra::Key index; 1 = held this frame
     int32_t (*input_mouse_down)(int32_t button);     // 0 = left, 1 = right, 2 = middle
     int32_t (*input_mouse_location)(double* xy_out); // game-view pixels (top-left origin); 1 = ok
     uint64_t (*root)(void);                          // the DataModel root (source of InputBegan / InputEnded)
+    // Attributes (ABI 3). Values use TefraValue; attr_get/attr_set accept Bool, Int, Float, String, Vector3, Color3.
+    // String pointers returned here stay valid until the next call that mutates the model.
+    int32_t (*attr_count)(uint64_t id);                                         // -1 if the id is gone
+    const char* (*attr_name_at)(uint64_t id, int32_t index);                    // nullptr when out of range
+    int32_t (*attr_get)(uint64_t id, const char* name, TefraValue* out);        // 1 = found
+    int32_t (*attr_set)(uint64_t id, const char* name, const TefraValue* value); // 1 = ok, 0 = rejected
+    int32_t (*attr_remove)(uint64_t id, const char* name);                      // 1 = removed
+    // Tags (ABI 3).
+    int32_t (*tag_add)(uint64_t id, const char* tag);    // 1 = added, 0 = already tagged or rejected
+    int32_t (*tag_remove)(uint64_t id, const char* tag); // 1 = removed
+    int32_t (*tag_has)(uint64_t id, const char* tag);
+    int32_t (*tag_count)(uint64_t id);                   // -1 if the id is gone
+    const char* (*tag_at)(uint64_t id, int32_t index);   // nullptr when out of range
+    int32_t (*tagged_count)(const char* tag);
+    uint64_t (*tagged_at)(const char* tag, int32_t index); // attached instances, in id order; 0 when out of range
+    // Workspace:Spherecast(origin, radius, direction): the length of direction is the distance. Same out[7] and result.
+    uint64_t (*spherecast)(const double* origin, double radius, const double* direction, const TefraFilter* filter,
+                           double* out);
+    // Workspace:Blockcast(center, orientation in degrees, size, direction). Same out[7] and result.
+    uint64_t (*blockcast)(const double* center, const double* orientation, const double* size, const double* direction,
+                          const TefraFilter* filter, double* out);
+    // Workspace:GetPartBoundsInRadius / GetPartBoundsInBox / GetPartsInPart. kind: 0 Radius, 1 Box, 2 Part.
+    // geom[10] = center[3], orientation[3] (degrees), size[3], radius. part_id is used by kind 2 only.
+    // Writes up to `capacity` ids into out_ids and returns how many parts matched (may exceed capacity: call again).
+    uint32_t (*overlap)(int32_t kind, const double* geom, uint64_t part_id, const TefraFilter* filter,
+                        uint32_t max_parts, uint64_t* out_ids, uint32_t capacity);
+    // BasePart:GetTouchingParts. Same output convention as overlap.
+    uint32_t (*touching_parts)(uint64_t part_id, uint64_t* out_ids, uint32_t capacity);
+    // BasePart:ApplyImpulse (angular = 0) / ApplyAngularImpulse (angular = 1). value[3]. 1 = queued, 0 = not simulated.
+    int32_t (*apply_impulse)(uint64_t part_id, const double* value, int32_t angular);
+    // BasePart:GetMass, kg. 0 when the id is not a part.
+    double (*mass)(uint64_t part_id);
 } TefraNativeApi;
 
 // Functions exported by the managed side. The host fills nothing here; the managed side fills it in Init.

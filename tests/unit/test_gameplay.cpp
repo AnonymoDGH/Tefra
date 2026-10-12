@@ -7,11 +7,16 @@
 #include "tefra/world/datamodel.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
 using namespace tefra;
 using namespace tefra::world;
+
+#ifndef TEFRA_SCRIPTING_FIXTURES
+#define TEFRA_SCRIPTING_FIXTURES "tests/scripting/fixtures"
+#endif
 
 namespace {
 
@@ -230,4 +235,49 @@ TEST_CASE("gameplay: Workspace.Raycast from a script's Start hits the floor") {
     host.stop();
     CHECK_FALSE(any_contains(logs, "error CS"));
     CHECK(any_contains(logs, "ray hit Floor"));
+}
+
+// Spatial queries from scripts (M3c), through the whole runtime: the queries.tefra fixture runs its checks in Start and
+// Update. Same lines as tests/scripting/fixtures/queries.expect (the ctest scripting_queries runs the place headless).
+TEST_CASE("gameplay: spatial queries and ApplyImpulse from scripts") {
+    scripting::ScriptHost host;
+    std::string err;
+    if (!host.init(&err)) {
+        MESSAGE("scripting unavailable, skipped: " << err);
+        return;
+    }
+    DataModel dm;
+    REQUIRE(dm.load((std::string(TEFRA_SCRIPTING_FIXTURES) + "/queries.tefra").c_str(), &err));
+
+    std::vector<std::string> logs;
+    host.set_log_callback([&logs](LogLevel, std::string_view message) { logs.emplace_back(message); });
+    runtime::RuntimeConfig cfg;
+    cfg.scripts = &host;
+    cfg.spawn_character = false;
+    runtime::GameRuntime game(dm, cfg);
+    REQUIRE(game.start());
+    const f32 dt = 1.0f / 60.0f;
+    for (int i = 0; i < 300; ++i) game.step(dt, InputState{});
+
+    CHECK_FALSE(any_contains(logs, "error CS"));
+    CHECK_FALSE(any_contains(logs, "exception in"));
+    CHECK(any_contains(logs, "radius Crate,Zone"));
+    CHECK(any_contains(logs, "radius filtered Zone"));
+    CHECK(any_contains(logs, "box Tilted"));
+    CHECK(any_contains(logs, "inpart Crate"));
+    CHECK(any_contains(logs, "ray Crate 8.0"));
+    CHECK(any_contains(logs, "ray filtered Floor 10.0"));
+    CHECK(any_contains(logs, "sphere Crate 7.5"));
+    CHECK(any_contains(logs, "sphere filtered Floor 9.5"));
+    CHECK(any_contains(logs, "block Pillar 5.5"));
+    CHECK(any_contains(logs, "mass 700"));
+    CHECK(any_contains(logs, "mover up"));
+    CHECK(any_contains(logs, "touching Floor"));
+    // The impulse lifted the 1 m block, it fell back and rests on the floor (top at y = 0): its centre is at 0.5 m.
+    Instance* mover = dm.find_path("Workspace.Mover");
+    REQUIRE(mover != nullptr);
+    CHECK(mover->get_vec3("Position").y == doctest::Approx(0.5f).epsilon(0.05));
+    CHECK(std::abs(mover->get_vec3("AssemblyLinearVelocity").y) < 0.5f);
+    game.stop();
+    host.stop();
 }

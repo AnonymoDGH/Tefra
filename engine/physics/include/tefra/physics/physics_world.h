@@ -11,9 +11,11 @@
 
 #include "tefra/core/math.h"
 #include "tefra/world/datamodel.h"
+#include "tefra/world/query.h"
 
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace tefra::physics {
 
@@ -51,7 +53,24 @@ class PhysicsWorld {
     void sync();
 
     // Closest solid (non-sensor) part along the ray. direction need not be normalised; max_distance in metres.
-    bool raycast(vec3 origin, vec3 direction, f32 max_distance, RaycastResult& out) const;
+    // filter (optional) skips the parts it rejects (RaycastParams).
+    bool raycast(vec3 origin, vec3 direction, f32 max_distance, RaycastResult& out,
+                 const world::QueryFilter* filter = nullptr) const;
+    // Closest solid part hit by a sphere (origin, radius) or an oriented box (center, orientation in degrees Y-X-Z,
+    // size) moving along direction for max_distance metres. A start that already overlaps a part reports that part.
+    bool spherecast(vec3 origin, f32 radius, vec3 direction, f32 max_distance, RaycastResult& out,
+                    const world::QueryFilter* filter = nullptr) const;
+    bool blockcast(vec3 center, vec3 orientation_deg, vec3 size, vec3 direction, f32 max_distance, RaycastResult& out,
+                   const world::QueryFilter* filter = nullptr) const;
+
+    // Parts within 5 cm of `part`'s shape right now (a shape query, so a part at rest still counts). Sensors count.
+    // For a character's HumanoidRootPart, the parts the character touches. Only meaningful while the world exists.
+    void touching_parts(const world::Instance& part, std::vector<world::Instance*>& out) const;
+
+    // Queues a linear impulse (kg m/s) or an angular impulse (kg m^2/s) for an unanchored part of the Workspace. It is
+    // applied at the start of the next step, so it works from scripts between steps. Returns false (nothing queued)
+    // for parts that are anchored, outside the Workspace or part of a character.
+    bool apply_impulse(const world::Instance& part, vec3 impulse, bool angular);
 
     // Static landscape heightfield (one per world; a new call replaces the old one): n x n samples, row-major, the
     // sample (x, z) sits at origin_xz + (x, z) * cell with height heights[z * n + x]. n must be even (Jolt's block

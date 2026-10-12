@@ -108,6 +108,11 @@ u32 SceneSync::material_for(const Instance& part) {
     m.orm_tex = scene_.white_texture();
     m.emissive_tex = render::kNoTexture;
     m.occlusion_strength = 0.0f;
+    // Procedural world-space surface for every material with a texture of its own (shaders/common/surface.glsl).
+    if (mat != 1 && mat != 17 && mat != 18) {
+        m.flags |= 16u;
+        m.pad[1] = mat;
+    }
     if (look.emissive > 0.0f) m.emissive_cutoff = vec4(lin * 40.0f, 0.0f); // Neon glows
     const u32 idx = scene_.add_material(m);
     material_cache_[key] = idx;
@@ -152,7 +157,10 @@ void SceneSync::rebuild() {
     for (Instance* i : ws->descendants()) {
         if (!is_visible_part(*i, ws)) continue;
         if (i->is_a("MeshPart")) {
-            const std::string& path = i->get_string("MeshId");
+            std::string path = i->get_string("MeshId");
+            if (!asset_root_.empty() && !path.empty() && path[0] != '/' && path[0] != '\\' &&
+                !(path.size() > 1 && path[1] == ':'))
+                path = path_join(asset_root_, path);
             if (path.empty() || !file_exists(path.c_str())) continue;
             std::vector<GltfPrim> prims;
             if (auto sk = skinned_parts_.find(i->id()); sk != skinned_parts_.end() && sk->second.path == path) {

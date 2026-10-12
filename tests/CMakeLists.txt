@@ -2,7 +2,8 @@
 tefra_add_executable(tefra_unit_tests
     SOURCES unit/main.cpp unit/test_math.cpp unit/test_memory.cpp unit/test_jobs.cpp unit/test_json.cpp
             unit/test_stats.cpp unit/test_image.cpp unit/test_environment.cpp unit/test_foliage.cpp unit/test_palm.cpp unit/test_world.cpp unit/test_studio.cpp unit/test_projects.cpp unit/test_anim.cpp
-            unit/test_mcp.cpp unit/test_physics.cpp unit/test_scripting.cpp unit/test_rbx.cpp unit/test_gameplay.cpp unit/test_landscape.cpp unit/test_audio.cpp unit/test_skin.cpp unit/test_character.cpp
+            unit/test_mcp.cpp unit/test_physics.cpp unit/test_scripting.cpp unit/test_rbx.cpp unit/test_gameplay.cpp unit/test_landscape.cpp unit/test_audio.cpp unit/test_skin.cpp unit/test_character.cpp unit/test_particles.cpp
+            unit/test_spatial.cpp
     DEPS tefra_renderer tefra_world tefra_studio_core tefra_runtime tefra_anim tefra_mcp tefra_physics tefra_scripting tefra_rbx tefra_doctest tefra_audio)
 # The in-game UI needs Dear ImGui, which is only built with windowing support.
 if(TEFRA_WITH_WINDOW)
@@ -39,10 +40,38 @@ add_test(NAME scripting_gameplay COMMAND tefra_run
     --place ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/gameplay.tefra --frames 1800 --press E:300:3 --require-scripts
     --expect-file ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/gameplay.expect)
 set_tests_properties(scripting_gameplay PROPERTIES LABELS "scripting" SKIP_RETURN_CODE 77)
+
+# Value types (CFrame, PivotTo on a Model, UDim2, sequences, Color3 HSV/hex, TefraRandom) evaluated in a script.
+add_test(NAME scripting_mathtypes COMMAND tefra_run
+    --place ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/mathtypes.tefra --frames 3 --require-scripts
+    --expect-file ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/mathtypes.expect)
+set_tests_properties(scripting_mathtypes PROPERTIES LABELS "scripting" SKIP_RETURN_CODE 77)
+# Messaging and services (M3c): BindableEvent / BindableFunction, RemoteEvent / RemoteFunction loopback, Debris,
+# DataStore and HttpService. The datastores go to the build tree, not to the user's application data.
+add_test(NAME scripting_services COMMAND tefra_run
+    --place ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/services.tefra --frames 60 --require-scripts
+    --expect-file ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/services.expect)
+set_tests_properties(scripting_services PROPERTIES LABELS "scripting" SKIP_RETURN_CODE 77
+    ENVIRONMENT "TEFRA_DATASTORE_DIR=${CMAKE_BINARY_DIR}/tests/datastores")
+# Attributes and tags (ABI 3): SetAttribute / GetAttribute / AttributeChanged / GetAttributeChangedSignal, AddTag /
+# RemoveTag / GetTags, CollectionService.GetTagged and the InstanceAdded / InstanceRemoved signals of one tag.
+add_test(NAME scripting_attributes COMMAND tefra_run
+    --place ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/attributes.tefra --frames 10 --require-scripts
+    --expect-file ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/attributes.expect)
+set_tests_properties(scripting_attributes PROPERTIES LABELS "scripting" SKIP_RETURN_CODE 77)
+# Spatial queries (M3c): Workspace.GetPartBoundsInRadius / GetPartBoundsInBox / GetPartsInPart, Raycast with
+# RaycastParams, Spherecast, Blockcast, BasePart.ApplyImpulse / GetMass / GetTouchingParts. Every line must appear.
+add_test(NAME scripting_queries COMMAND tefra_run
+    --place ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/queries.tefra --frames 300 --require-scripts
+    --expect-file ${CMAKE_CURRENT_SOURCE_DIR}/scripting/fixtures/queries.expect)
+set_tests_properties(scripting_queries PROPERTIES LABELS "scripting" SKIP_RETURN_CODE 77)
 if(TEFRA_ASAN)
     # The .NET runtime keeps its heap for the life of the process; suppress only its modules (see lsan.supp).
     set(_tefra_lsan "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/lsan.supp")
-    set_tests_properties(unit scripting_run scripting_game scripting_gameplay PROPERTIES ENVIRONMENT "${_tefra_lsan}")
+    set_tests_properties(unit scripting_run scripting_game scripting_gameplay scripting_mathtypes scripting_attributes
+        scripting_queries PROPERTIES ENVIRONMENT "${_tefra_lsan}")
+    set_tests_properties(scripting_services PROPERTIES ENVIRONMENT
+        "${_tefra_lsan};TEFRA_DATASTORE_DIR=${CMAKE_BINARY_DIR}/tests/datastores")
 endif()
 
 # MCP end-to-end (ADR-015): starts tefra_mcp_demo, speaks Streamable HTTP to it, then drives the stdio bridge.

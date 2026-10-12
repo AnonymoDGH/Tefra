@@ -50,7 +50,7 @@ vec3 apply_fog_volumetric(Frame f, vec3 color, vec3 dir, float dist, vec4 vol) {
 
 // Caustics on the sea floor: the refracted sun is focused by the curvature of the surface. For a small-slope height
 // field h, the intensity at depth d is ~ 1 / (1 + d (1 - 1/n) lap(h)), n = 1.33. A few short wind waves give lap(h).
-float c_hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float c_hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float c_noise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
     vec2 u = f * f * (3.0 - 2.0 * f);

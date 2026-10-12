@@ -45,9 +45,9 @@ void ScriptHost::set_log_callback(LogCallback callback) { log_ = std::move(callb
 
 void ScriptHost::set_input(const InputState* input) { detail::set_input(input); }
 
-void ScriptHost::set_raycaster(RaycastFn fn) {
-    raycaster_ = std::move(fn);
-    detail::set_raycaster(raycaster_ ? &raycaster_ : nullptr);
+void ScriptHost::set_physics(PhysicsHooks hooks) {
+    hooks_ = std::move(hooks);
+    detail::set_physics_hooks(&hooks_);
 }
 
 bool ScriptHost::start(world::DataModel& model) {

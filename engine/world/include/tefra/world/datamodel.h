@@ -8,7 +8,9 @@
 #include "tefra/core/math.h"
 
 #include <functional>
+#include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -110,6 +112,9 @@ struct PropInfo {
     u32 index = 0; // global index in the instance's property array (base properties first)
 };
 
+// Attributes hold these value types only (see Instance::set_attribute).
+bool attribute_type_supported(PropType t);
+
 struct ClassInfo {
     std::string name;
     const ClassInfo* base = nullptr;
@@ -180,6 +185,21 @@ class Instance {
     bool get_bool(std::string_view prop, bool def = false) const;
     const std::string& get_string(std::string_view prop) const;
 
+    // Attributes (Roblox-style, not reflected properties): name -> Bool, Int, Float, String, Vector3 or Color3 value.
+    // Names are non-empty. set_attribute returns false for another type or an empty name; an equal value changes
+    // nothing. A change bumps the revision and fires "AttributeChanged" (text = name).
+    const Value* get_attribute(std::string_view name) const;
+    bool set_attribute(std::string_view name, Value v);
+    bool remove_attribute(std::string_view name); // false when there was no such attribute
+    const std::map<std::string, Value, std::less<>>& attributes() const { return attributes_; }
+
+    // Tags (CollectionService): a sorted set of non-empty names. add_tag / remove_tag return whether the set changed.
+    // A change fires "TagAdded" / "TagRemoved" (text = tag). DataModel::tagged() lists the tagged instances.
+    bool add_tag(std::string_view tag);
+    bool remove_tag(std::string_view tag);
+    bool has_tag(std::string_view tag) const;
+    const std::set<std::string, std::less<>>& tags() const { return tags_; }
+
   private:
     friend class DataModel;
     Instance() = default;
@@ -189,6 +209,8 @@ class Instance {
     Instance* parent_ = nullptr;
     std::vector<Instance*> children_;
     std::vector<Value> props_;
+    std::map<std::string, Value, std::less<>> attributes_;
+    std::set<std::string, std::less<>> tags_;
 };
 
 struct GameEvent;
@@ -205,7 +227,8 @@ struct WorldListener {
 // A gameplay signal raised by an engine system (physics, UI, humanoids) and delivered to scripts. Names follow the
 // Roblox events: "Touched" / "TouchEnded" (other = the other part), "Activated" / "MouseButton1Click" (GUI buttons),
 // "Died" / "HealthChanged" (Humanoid; number = health), "Ended" / "Looped" (Sound), "InputBegan" / "InputEnded"
-// (source = UserInputService-less: the DataModel root; text = key name).
+// (source = UserInputService-less: the DataModel root; text = key name), "AttributeChanged" (text = attribute name),
+// "TagAdded" / "TagRemoved" (text = tag). Attribute and tag events are not sent for detached instances.
 struct GameEvent {
     Instance* source = nullptr;
     std::string_view name;
@@ -238,6 +261,8 @@ class DataModel {
 
     Instance* find(u64 id) const;
     Instance* find_path(std::string_view path) const; // "Workspace.Model.Part" (root name optional)
+    // Instances attached under the DataModel that carry the tag, in id order (CollectionService:GetTagged).
+    std::vector<Instance*> tagged(std::string_view tag) const;
 
     // Serialization (.tefra JSON). load() replaces everything under the services; returns false with an error.
     JsonValue to_json() const;
@@ -267,6 +292,10 @@ class DataModel {
     // Value <-> JSON (by property type).
     static JsonValue value_to_json(const PropInfo& p, const Value& v);
     static bool value_from_json(const PropInfo& p, const JsonValue& j, Value& out);
+    // Attribute value <-> JSON. Bool -> bool, Int -> integer, Float -> number (an integral Float reloads as Int),
+    // String -> string, Vector3 -> [x, y, z], Color3 -> {"Color3": [r, g, b]}.
+    static JsonValue attribute_to_json(const Value& v);
+    static bool attribute_from_json(const JsonValue& j, Value& out);
 
   private:
     friend class Instance;
@@ -276,10 +305,15 @@ class DataModel {
     void notify_changed(Instance& inst, u32 prop);
     void notify_added(Instance& inst);
     void notify_removing(Instance& inst);
+    void notify_attribute(Instance& inst, std::string_view name);
+    void notify_tag(Instance& inst, std::string_view tag, bool added);
+    void index_tag(u64 id, std::string_view tag, bool add);
     void clear_services();
 
     std::unordered_map<u64, std::unique_ptr<Instance>> instances_;
     std::unordered_map<u64, SkinPose> skin_poses_;
+    // Tag -> ids of every instance carrying it (attached or not). Kept in step with Instance::tags_.
+    std::map<std::string, std::set<u64>, std::less<>> tag_index_;
     Instance* root_ = nullptr;
     u64 next_id_ = 1;
     u64 revision_ = 0;

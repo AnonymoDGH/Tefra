@@ -4,7 +4,8 @@
 // lighting pass and the ocean reflections. f.clouds: x coverage (0 = off), y base altitude (m), z feature size (m),
 // w drift (m, wind * time). Radiance is un-exposed.
 
-float cl_hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+// Sin-free hash (Hoskins): sin() of large arguments loses precision on Intel and draws blocky patterns.
+float cl_hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 float cl_noise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
     vec2 u = f * f * (3.0 - 2.0 * f);
