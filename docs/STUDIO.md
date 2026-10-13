@@ -297,3 +297,13 @@ Para clientes que solo hablan stdio (Claude Desktop) hay un puente, `tefra_mcp`;
 - Plantilla **Backrooms**:
   - Laberinto de oficinas amarillas con moqueta húmeda, techo de placas y fluorescentes que zumban (algunos parpadean o están fundidos).
   - Props modelados con Blender: `tools/blender/make_backrooms_props.py` (bpy) genera `resources/models/backrooms/*.glb`, que se usan con `MeshId = builtin:models/backrooms/<nombre>.glb`.
+
+## Controles de juego (Play y juegos exportados)
+- **Moverse:** WASD. Shift para correr (×1,6, la cámara abre un poco el campo de visión).
+- **Saltar:** Space. Mantenerlo salta otra vez al aterrizar y soltarlo pronto hace un salto corto. Un salto pulsado justo antes de aterrizar o justo después de salir de un borde también vale.
+- **Cámara:**
+  - Botón derecho para orbitar; el cursor se bloquea y no choca con el borde de la pantalla.
+  - Left Ctrl activa o desactiva el shift-lock: cámara sobre el hombro y el personaje mira hacia donde mira la cámara.
+  - La rueda hace zoom; con todo el zoom metido pasa a primera persona.
+  - La cámara no atraviesa paredes y suaviza los escalones.
+- **Física fluida:** el personaje se dibuja interpolado entre pasos de física de 60 Hz, sin tirones a ningún framerate. Acelera y frena con inercia y gira con suavidad.

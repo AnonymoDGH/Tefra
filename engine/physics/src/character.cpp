@@ -18,7 +18,10 @@ namespace {
 constexpr f32 kStepUpHeight = 0.4f;     // walks up steps this high (Jolt's default, stated explicitly)
 constexpr f32 kMaxSlopeDegrees = 45.0f; // steeper ground is not walkable
 constexpr f32 kLandedSeconds = 0.15f;   // Humanoid.State stays Landed this long after touchdown
-constexpr f32 kMoveEpsilon = 0.01f;     // root part moved by someone else by more than this: teleport
+constexpr f32 kMoveEpsilon = 0.01f;
+constexpr f32 kJumpBuffer = 0.15f; // s: a jump pressed this early before landing still happens
+constexpr f32 kCoyoteTime = 0.12f; // s: a jump still works this long after walking off a ledge     // root part moved
+                                   // by someone else by more than this: teleport
 constexpr f32 kMoveSpeedThreshold = 0.1f;
 constexpr f32 kMinRadius = 0.2f;
 constexpr f32 kMaxRadius = 1.0f;
@@ -56,39 +59,76 @@ void character_pre_step(CharacterImpl& c, WorldImpl& w, f32 dt) {
     if (length(root_pos - c.last_root_pos) > kMoveEpsilon) {
         c.cv->SetPosition(JPH::RVec3(to_jolt(root_pos - vec3{0.0f, root_offset(*hum, *root), 0.0f})));
         c.cv->SetLinearVelocity(JPH::Vec3::sZero());
+        c.hvel = {};
+        c.have_prev = false; // no interpolation across a teleport
     }
 
     const f32 g = w.gravity();
     const bool ground = c.cv->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
     JPH::Vec3 v = c.cv->GetLinearVelocity();
-    const f32 walk = hum->get_float("WalkSpeed", 6.0f);
+    const f32 walk = hum->get_float("WalkSpeed", 6.0f) * max(c.speed_scale, 0.0f);
     // On a moving part (a platform moved by a script, a kinematic body) the character must move with its ground: the
     // ground velocity is part of the desired velocity (Jolt's samples do the same).
     const JPH::Vec3 ground_v = ground ? c.cv->GetGroundVelocity() : JPH::Vec3::sZero();
-    v.SetX(c.move_dir.x * walk + ground_v.GetX());
-    v.SetZ(c.move_dir.z * walk + ground_v.GetZ());
-    // CharacterVirtual does not integrate gravity itself: the caller adds it to the vertical velocity.
-    if (ground) {
-        if (c.jump_requested) {
-            v.SetY(std::sqrt(2.0f * g * max(hum->get_float("JumpHeight", 1.6f), 0.0f)) + ground_v.GetY());
-            c.jumping = true;
-        } else {
-            v.SetY(ground_v.GetY() < 0.0f ? ground_v.GetY() : max(ground_v.GetY(), 0.0f));
-        }
-    } else {
-        v.SetY(v.GetY() - g * dt);
-    }
+    // Momentum: the horizontal velocity eases towards the intent (quick on the ground, weaker steering in the air), so
+    // starts, stops and turns read as a body with weight instead of an instant switch.
+    const vec3 want{c.move_dir.x * walk, 0.0f, c.move_dir.z * walk};
+    const f32 accel = ground ? (length(want) > 0.01f ? 55.0f : 70.0f) : 14.0f; // m/s^2
+    const vec3 dv = want - c.hvel;
+    const f32 dl = length(dv), step = accel * dt;
+    c.hvel = dl <= step ? want : c.hvel + dv * (step / dl);
+    v.SetX(c.hvel.x + ground_v.GetX());
+    v.SetZ(c.hvel.z + ground_v.GetZ());
+    // Jump buffering and coyote time.
+    if (c.jump_requested) c.jump_buffer = kJumpBuffer;
     c.jump_requested = false;
+    c.coyote = ground ? kCoyoteTime : max(c.coyote - dt, 0.0f);
+    // CharacterVirtual does not integrate gravity itself: the caller adds it to the vertical velocity.
+    if (c.jump_buffer > 0.0f && c.coyote > 0.0f && !c.jumping) {
+        v.SetY(std::sqrt(2.0f * g * max(hum->get_float("JumpHeight", 1.6f), 0.0f)) + ground_v.GetY());
+        c.jumping = true;
+        c.jump_cut = false;
+        c.jump_buffer = 0.0f;
+        c.coyote = 0.0f;
+    } else if (ground && !c.jumping) {
+        v.SetY(ground_v.GetY() < 0.0f ? ground_v.GetY() : max(ground_v.GetY(), 0.0f));
+    } else {
+        // Releasing jump early cuts the rise once (short hops); falling is a little heavier than rising.
+        if (c.jumping && !c.jump_held && !c.jump_cut && v.GetY() > 0.0f) {
+            v.SetY(v.GetY() * 0.5f);
+            c.jump_cut = true;
+        }
+        v.SetY(v.GetY() - g * dt * (v.GetY() < 0.0f ? 1.35f : 1.0f));
+    }
+    c.jump_buffer = max(c.jump_buffer - dt, 0.0f);
     c.cv->SetLinearVelocity(v);
+    if (!c.have_prev) c.cur_feet = from_jolt(c.cv->GetPosition());
+    c.prev_feet = c.cur_feet;
 
     JPH::CharacterVirtual::ExtendedUpdateSettings settings;
     settings.mWalkStairsStepUp = JPH::Vec3(0.0f, kStepUpHeight, 0.0f);
     c.cv->ExtendedUpdate(dt, JPH::Vec3(0.0f, -g, 0.0f), settings,
                          w.system.GetDefaultBroadPhaseLayerFilter(kLayerDynamic),
                          w.system.GetDefaultLayerFilter(kLayerDynamic), {}, {}, w.temp);
+    c.cur_feet = from_jolt(c.cv->GetPosition());
+    c.have_prev = true;
+    // Smooth turning towards the facing override or the movement (AutoRotate).
+    const vec3 face = length(c.facing) > 0.01f ? c.facing : c.move_dir;
+    if (length(face) > kMoveEpsilon) {
+        const f32 target = std::atan2(-face.x, -face.z);
+        if (!c.yaw_init) {
+            c.yaw = target;
+            c.yaw_init = true;
+        }
+        f32 d = target - c.yaw;
+        while (d > 3.14159265f) d -= 6.2831853f;
+        while (d < -3.14159265f) d += 6.2831853f;
+        const f32 rate = length(c.facing) > 0.01f ? 30.0f : 14.0f;
+        c.yaw += d * (1.0f - std::exp(-rate * dt));
+    }
 }
 
-void character_post_step(CharacterImpl& c, WorldImpl& w, f32 dt) {
+void character_post_step(CharacterImpl& c, WorldImpl& w, f32 dt, f32 alpha) {
     if (!c.cv || !c.world) return;
     world::Instance* model = w.model.find(c.model_id);
     world::Instance* root = w.model.find(c.root_id);
@@ -97,7 +137,9 @@ void character_post_step(CharacterImpl& c, WorldImpl& w, f32 dt) {
 
     c.velocity = from_jolt(c.cv->GetLinearVelocity());
     const bool grounded = c.cv->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
-    const vec3 feet = from_jolt(c.cv->GetPosition());
+    // Render between the last two physics states (fixed 60 Hz steps) so motion is smooth at any frame rate.
+    const vec3 feet = c.have_prev ? c.prev_feet + (c.cur_feet - c.prev_feet) * clamp(alpha, 0.0f, 1.0f)
+                                  : from_jolt(c.cv->GetPosition());
     const vec3 new_root = feet_to_root(feet, *hum, *root);
     // Walking speed for the animation: the motion relative to the ground (a moving platform does not make us run).
     const vec3 ground_v = grounded ? from_jolt(c.cv->GetGroundVelocity()) : vec3{};
@@ -125,10 +167,9 @@ void character_post_step(CharacterImpl& c, WorldImpl& w, f32 dt) {
     // Writes into the model are our own: the listener must not treat them as edits.
     w.writing_back = true;
     root->set("Position", world::Value::vector3(new_root));
-    if (hum->get_bool("AutoRotate", true) && length(c.move_dir) > kMoveEpsilon) {
-        // Forward of a part is -Z; yaw that turns -Z towards the movement direction.
-        const f32 yaw = degrees(std::atan2(-c.move_dir.x, -c.move_dir.z));
-        root->set("Orientation", world::Value::vector3({0.0f, yaw, 0.0f}));
+    if (c.yaw_init && (hum->get_bool("AutoRotate", true) || length(c.facing) > 0.01f)) {
+        // Forward of a part is -Z; yaw turns -Z towards the facing.
+        root->set("Orientation", world::Value::vector3({0.0f, degrees(c.yaw), 0.0f}));
     }
     root->set("AssemblyLinearVelocity", world::Value::vector3(c.velocity));
     hum->set("MoveDirection", world::Value::vector3(c.move_dir), true);
@@ -222,6 +263,20 @@ void CharacterController::set_move_direction(vec3 dir) {
 
 void CharacterController::jump() {
     if (impl_) impl_->jump_requested = true;
+}
+
+void CharacterController::set_jump_held(bool held) {
+    if (impl_) impl_->jump_held = held;
+}
+
+void CharacterController::set_speed_scale(f32 scale) {
+    if (impl_) impl_->speed_scale = scale;
+}
+
+void CharacterController::set_facing(vec3 dir) {
+    if (!impl_) return;
+    dir.y = 0.0f;
+    impl_->facing = length(dir) > 1e-4f ? normalize(dir) : vec3{};
 }
 
 vec3 CharacterController::position() const { return valid() ? from_jolt(impl_->cv->GetPosition()) : vec3{}; }

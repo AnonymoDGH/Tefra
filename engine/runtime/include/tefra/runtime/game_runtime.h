@@ -98,6 +98,11 @@ class GameRuntime {
     world::Instance* humanoid() const;
     const InputState& input() const { return input_; }
     const CameraState& camera() const { return camera_; }
+    // The host should hide and lock the cursor (relative mouse) while this is true: orbiting with the right button,
+    // shift lock (Left Ctrl toggles it) or first person (zoomed all the way in).
+    bool mouse_locked() const { return mouse_locked_; }
+    bool shift_lock() const { return shift_lock_; }
+    bool first_person() const { return cam_dist_ < kFirstPersonDist; }
     void set_camera(const CameraState& c) { camera_ = c; } // e.g. a script or the host overriding the view
     const std::string& project_dir() const { return cfg_.project_dir; }
     std::string resolve_asset(std::string_view path) const; // relative -> project_dir/path
@@ -127,7 +132,14 @@ class GameRuntime {
     u64 frame_ = 0;
     InputState input_;
     CameraState camera_;
+    static constexpr f32 kFirstPersonDist = 0.6f;
     f32 orbit_yaw_ = 0.0f, orbit_pitch_ = radians(-15.0f), orbit_dist_ = 9.0f;
+    f32 cam_dist_ = 9.0f;     // smoothed zoom (orbit_dist_ is the target)
+    f32 cam_hit_dist_ = 1e9f; // collision-limited distance, eased back out
+    f32 cam_target_y_ = 0.0f; // smoothed follow height (softens stair steps)
+    f32 cam_fov_ = radians(70.0f);
+    bool cam_init_ = false;
+    bool shift_lock_ = false, mouse_locked_ = false, sprinting_ = false;
     f32 last_health_ = 0.0f; // last seen health of the local humanoid (HealthChanged)
 };
 

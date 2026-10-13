@@ -490,7 +490,7 @@ void PhysicsWorld::step(f32 dt) {
     }
     if (substeps == detail::kMaxSubsteps) w.accumulator = 0.0f; // fell behind: drop the backlog
     w.write_back();
-    for (detail::CharacterImpl* c : w.characters) detail::character_post_step(*c, w, dt);
+    for (detail::CharacterImpl* c : w.characters) detail::character_post_step(*c, w, dt, w.accumulator / kPhysicsStep);
     w.destroy_fallen();
     w.scan_character_touches();
     w.dispatch_touched();

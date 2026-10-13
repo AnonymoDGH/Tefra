@@ -701,7 +701,7 @@ void App::draw_viewport(f32 dt) {
         ImDrawList* pdl = ImGui::GetWindowDrawList();
         pdl->AddRect(origin, {origin.x + avail.x, origin.y + avail.y}, IM_COL32(60, 200, 90, 255), 0.0f, 0, 3.0f);
         pdl->AddText({origin.x + 8, origin.y + avail.y - 20}, IM_COL32(230, 230, 230, 180),
-                     "PLAY  |  WASD move  |  Space jump  |  RMB orbit  |  wheel zoom  |  F5 stop");
+                     "PLAY  |  WASD move  |  Shift sprint  |  Space jump  |  RMB orbit  |  Ctrl shift-lock  |  wheel zoom (all in = 1st person)  |  F5 stop");
         ImGui::End();
         return;
     }

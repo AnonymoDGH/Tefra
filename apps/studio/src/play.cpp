@@ -8,6 +8,7 @@
 #include "tefra/core/log.h"
 #include "tefra/mcp/server.h"
 #include "tefra/mcp/world_tools.h"
+#include "tefra/platform/window.h"
 #include "tefra/rbx/importer.h"
 #include "tefra/rhi/commands.h"
 #include "tefra/rhi/device.h"
@@ -21,6 +22,7 @@
 #include "tefra/world/environment_sync.h"
 #include "tefra/world/scene_sync.h"
 
+#include <GLFW/glfw3.h>
 #include <imgui.h>
 
 #include <cmath>
@@ -96,9 +98,31 @@ void App::play_step(world::DataModel& dm, f32 dt) {
     camera_.position = {f64(c.position.x), f64(c.position.y), f64(c.position.z)};
     camera_.yaw = c.yaw;
     camera_.pitch = c.pitch;
+    camera_.fovy = c.fov_y;
+    camera_.z_near = runtime_->first_person() ? 0.05f : 0.1f;
+    // Relative mouse while the game steers the camera with it (orbit, shift lock, first person).
+    auto* win = static_cast<GLFWwindow*>(window_->native_handle());
+    const bool lock = runtime_->mouse_locked();
+    if (lock != cursor_locked_) {
+        glfwSetInputMode(win, GLFW_CURSOR, lock ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+        if (glfwRawMouseMotionSupported()) glfwSetInputMode(win, GLFW_RAW_MOUSE_MOTION, lock ? GLFW_TRUE : GLFW_FALSE);
+        ImGuiIO& io = ImGui::GetIO();
+        if (lock)
+            io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+        else
+            io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+        cursor_locked_ = lock;
+    }
 }
 
 void App::play_stop() {
+    if (cursor_locked_) {
+        glfwSetInputMode(static_cast<GLFWwindow*>(window_->native_handle()), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+        cursor_locked_ = false;
+    }
+    camera_.fovy = radians(70.0f);
+    camera_.z_near = 0.1f;
     if (runtime_) runtime_->stop();
     runtime_.reset();
     camera_ = edit_camera_;
@@ -108,7 +132,7 @@ void App::play_stop() {
 // UI is drawn over it and gets the clicks first.
 void App::play_input(vec2 view_min, vec2 view_size) {
     const ImGuiIO& io = ImGui::GetIO();
-    ui::input_from_imgui(play_input_, view_min, view_size, viewport_hovered_, !io.WantTextInput);
+    ui::input_from_imgui(play_input_, view_min, view_size, viewport_hovered_ || cursor_locked_, !io.WantTextInput);
     if (runtime_ && game_gui_) {
         game_gui_->set_fonts(font_regular_, font_bold_, font_mono_);
         game_gui_->enable_textures(*device_);

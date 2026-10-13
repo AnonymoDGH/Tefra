@@ -30,8 +30,16 @@ class CharacterController {
     bool valid() const;
     // Horizontal intent in world space (y is ignored). Speed = Humanoid.WalkSpeed x |dir| (|dir| is clamped to 1).
     void set_move_direction(vec3 dir);
-    // Jumps on the next step when grounded: reaches Humanoid.JumpHeight.
+    // Jumps when grounded: reaches Humanoid.JumpHeight. Buffered for a moment before landing and allowed shortly after
+    // leaving a ledge ("coyote time"), so jumps feel responsive.
     void jump();
+    // Space still held: releasing it early cuts the rise (short hops). Defaults to held.
+    void set_jump_held(bool held);
+    // Multiplies Humanoid.WalkSpeed (sprint). 1 = walk.
+    void set_speed_scale(f32 scale);
+    // Facing override (shift lock / first person): the character turns towards dir instead of its movement.
+    // A zero vector restores AutoRotate towards the movement.
+    void set_facing(vec3 dir);
 
     vec3 position() const; // feet (m); the root part centre is HipHeight + Size.y / 2 above it
     vec3 velocity() const; // m/s

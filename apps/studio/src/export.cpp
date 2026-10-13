@@ -167,7 +167,7 @@ void App::draw_export_modal() {
                                  kExeSuffix + " to play. Requires a GPU with Vulkan 1.2.\n";
             if (scripts)
                 readme += "This game uses C# scripts: install the .NET 8 runtime (https://dotnet.microsoft.com).\n";
-            readme += "\nControls: WASD move, Space jump, right mouse orbits the camera, wheel zooms, Esc menu.\n";
+            readme += "\nControls: WASD move, Shift sprint, Space jump (hold to keep hopping), right mouse orbits the camera, Left Ctrl toggles shift lock, wheel zooms (all the way in = first person), Esc menu.\n";
             file_write_all(path_join(out, "README.txt").c_str(), readme.data(), readme.size());
             char buf[256];
             std::snprintf(buf, sizeof(buf), "Exported to %s\n%u asset file(s), %.1f MB in total%s", out.c_str(),

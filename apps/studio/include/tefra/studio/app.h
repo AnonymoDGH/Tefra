@@ -207,6 +207,7 @@ class App {
     std::unique_ptr<render::Renderer> renderer_;
     std::unique_ptr<world::SceneSync> sync_;
     std::unique_ptr<world::ParticleSystem> particles_;
+    bool cursor_locked_ = false; // play mode: relative mouse (GameRuntime::mouse_locked)
     f64 particles_time_ = -1.0;
     std::shared_ptr<void> environment_; // world::EnvironmentSync (type-erased: no world/renderer types here)
     u64 synced_generation_ = ~0ull;

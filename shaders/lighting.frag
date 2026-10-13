@@ -257,7 +257,7 @@ void main() {
         color += (diff_col / BRDF_PI * (1.0 - Fl) + specl) * lt.color.rgb * (atten * nl);
     }
     // Emission: display-referred (glows the same at any exposure; 1 = a few times a sunlit white wall, so it blooms).
-    color += albedo * g2.b * (4.0 / f.exposure.x);
+    color += albedo * g2.b * (1.6 / f.exposure.x);
     // Flat bounce light for interiors (Lighting.IndoorAmbient): diffuse only, occluded by AO.
     color += diff_col * f.ambient.xyz / BRDF_PI * ao;
 
