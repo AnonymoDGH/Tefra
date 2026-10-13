@@ -16,7 +16,9 @@ float fog_transmittance(Frame f, vec3 dir, float dist) {
 }
 // Sky ambient of the fog: average of the SH irradiance up and down.
 vec3 fog_ambient(Frame f) {
-    return (sh9_eval(f, vec3(0, 1, 0)) + sh9_eval(f, vec3(0, -1, 0))) / (2.0 * FOG_PI) * f.exposure.y;
+    // Plus the flat indoor/bounce light (Lighting.IndoorAmbient): a city at night lights its own haze.
+    return (sh9_eval(f, vec3(0, 1, 0)) + sh9_eval(f, vec3(0, -1, 0))) / (2.0 * FOG_PI) * f.exposure.y +
+           f.ambient.xyz / FOG_PI;
 }
 // Henyey-Greenstein phase for the sun (dir = view ray direction, away from the camera).
 float fog_phase(Frame f, vec3 dir) {

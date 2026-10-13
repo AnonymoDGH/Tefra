@@ -287,7 +287,7 @@ Herramientas disponibles:
 Para clientes que solo hablan stdio (Claude Desktop) hay un puente, `tefra_mcp`; ver `docs/research/m3-mcp/REPORT.md`.
 
 ## Interiores y luces locales
-- `PointLight` y `SpotLight` bajo una Part son luces reales: `Brightness` 1 ≈ 400 cd y `Range` en metros. Se sombrean las 64 más cercanas que estén a la vista.
+- `PointLight` y `SpotLight` bajo una Part son luces reales: `Brightness` 1 ≈ 400 cd y `Range` en metros. Se reparten por tiles de 16×16 px en la GPU (hasta 64 por tile; 128–1024 visibles según el preset).
 - Para un interior sin luz del día, en Lighting:
   - `SunBrightness` 0;
   - `EnvironmentDiffuseScale` 0;
@@ -323,3 +323,22 @@ Para clientes que solo hablan stdio (Claude Desktop) hay un puente, `tefra_mcp`;
 
 - Con `Volumetric = false` (por defecto) se usa la capa 2D, más barata.
 - Captura: `docs/captures/volumetric-clouds.png`.
+
+## Lluvia y ciudad nocturna
+- Clase `Rain` bajo Lighting:
+  - `Intensity`: densidad de las gotas;
+  - `Wetness`: oscurece y abrillanta todas las superficies;
+  - `Puddles`: charcos en superficies horizontales, con ondas de impacto;
+  - `Wind` y `DropSpeed`.
+- Las gotas son trazos procedurales en la GPU, iluminados por las 24 luces más cercanas.
+- Reflejos en pantalla (SSR) sobre suelos mojados y charcos. Se desactivan en Low.
+- Halos de luz en la niebla: con la volumétrica activada usan las 16 luces más cercanas; sin ella, un halo analítico barato.
+- Materiales nuevos:
+  - `Facade`: rejilla de ventanas, algunas encendidas y otras con el parpadeo de una tele;
+  - `Asphalt`.
+- Plantilla **Rainy City** (`city_rain`): manzanas de 5×5 con:
+  - rascacielos, escaparates, neones, toldos y escaleras de incendios;
+  - farolas de sodio y LED, semáforos, pasos de cebra y alcantarillas con vapor;
+  - coches aparcados y mobiliario urbano;
+  - sonido de lluvia.
+- Props generados con Blender: `tools/blender/make_city_props.py` → `builtin:models/city/*.glb`.

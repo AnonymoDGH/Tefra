@@ -16,6 +16,7 @@ determinista: mismos bytes en cada ejecución).
 | `death.wav` | "bloop" descendente y suave al morir | 16 bit mono, 22050 Hz |
 | `click.wav` | clic de interfaz | 16 bit mono, 22050 Hz |
 | `coin.wav` | moneda (dos notas ascendentes) | 16 bit mono, 22050 Hz |
+| `rain_loop.wav` | lluvia constante en bucle (4 s: siseo, gotas sobre superficies duras, rumor del agua) | 16 bit mono, 8000 Hz |
 | `hum_loop.wav` | zumbido de tubo fluorescente en bucle (2 s, 120 Hz y armónicos) | 16 bit mono, 8000 Hz |
 | `wind_loop.wav` | viento en bucle sin costura (3,6 s, periódico por construcción) | 16 bit mono, 8000 Hz |
 

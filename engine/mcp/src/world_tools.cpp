@@ -455,14 +455,16 @@ LANDSCAPES - do not build terrain or grass from parts. Create ONE Terrain under 
   Kind = "Valley": misty forest valley (conifers, river, lake, undergrowth, grass).
   Kind = "Coast":  tropical beach with palms and rocks; add an Ocean instance under Workspace for animated sea.
   Seed changes the shape; Vegetation=false removes trees. Use terrain_height(x, z) / raycast to place things on it.
-  The templates tool (new_place_from_template) builds these with a spawn: meadow, beach, valley, obby, baseplate...
+  The templates tool (new_place_from_template) builds these with a spawn: meadow, beach, valley, obby, backrooms, city_rain, baseplate...
 
 PARTS: Part (Shape Block/Ball/Cylinder/Wedge), MeshPart (MeshId = path of a .glb/.gltf; see import_model),
   SpawnLocation (where players appear), Model / Folder to group. Material: Plastic, SmoothPlastic, Wood,
   WoodPlanks, Metal, Concrete, Brick, Cobblestone, Granite, Marble, Slate, Sand, Grass, Ground, Rock, Ice, Glass,
-  Neon (emissive), Fabric, Foil, Wallpaper, Carpet, CeilingTile. Anchored=true for static scenery. Lights: PointLight / SpotLight under a part (real
+  Neon (emissive), Fabric, Foil, Wallpaper, Carpet, CeilingTile, Facade (building windows), Asphalt. Anchored=true for static scenery. Lights: PointLight / SpotLight under a part (real
   local lights; Brightness 1 ~ 400 cd, Range m). Interiors: Lighting.SunBrightness 0, EnvironmentDiffuseScale 0,
-  IndoorAmbient + IndoorAmbientBrightness, ExposureCompensation ~7. MeshId accepts builtin:models/backrooms/*.glb.
+  IndoorAmbient + IndoorAmbientBrightness, ExposureCompensation ~7. MeshId accepts builtin:models/backrooms/*.glb
+  and builtin:models/city/*.glb (lamps, cars, signs...). Weather: Rain under Lighting (Intensity, Wetness, Puddles,
+  Wind, DropSpeed) gives wet reflective streets; template city_rain is a rainy night city.
 
 MANY OBJECTS: use create_instances with an array (up to 5000 per call) instead of create_instance in a loop.
 

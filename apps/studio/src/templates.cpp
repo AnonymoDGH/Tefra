@@ -704,6 +704,252 @@ void build_backrooms(DataModel& dm) {
     l->set("Contrast", Value::number(1.0));
 }
 
+// ---- Rainy city at night: wet streets, street lamps, neon, lit windows, parked cars ------------------------------
+
+const char* kSteam = R"cs(using Tefra;
+
+// Steam from a manhole: puffs come and go.
+public class Steam : TefraScript
+{
+    System.Random rng = new System.Random();
+    float t;
+
+    public override void Update(float dt)
+    {
+        t += dt;
+        if (t < 0.5f) return;
+        t = 0f;
+        var e = Parent.FindFirstChildOfClass("ParticleEmitter") as ParticleEmitter;
+        if (e != null) e.Rate = (float)(4 + rng.NextDouble() * 8);
+    }
+}
+)cs";
+
+void build_city_rain(DataModel& dm) {
+    Instance* ws = dm.workspace();
+    constexpr int kBlocks = 5;
+    constexpr f32 kLot = 46.0f, kStreet = 16.0f, kPitch = kLot + kStreet, kSidewalk = 3.0f, kCurb = 0.15f;
+    const f32 span = f32(kBlocks) * kPitch;
+    u32 seed = 0xC17Bu;
+    auto rnd = [&seed] {
+        seed = seed * 1664525u + 1013904223u;
+        return f32(seed >> 8) / 16777216.0f;
+    };
+    auto yaw_to = [](vec3 d) { return degrees(std::atan2(-d.x, -d.z)); };
+    auto prop = [&dm](Instance* parent, const char* name, const char* model, vec3 pos, f32 yaw) {
+        Instance* m = dm.create("MeshPart", parent, name);
+        m->set("MeshId", Value::string(std::string("builtin:models/city/") + model + ".glb"));
+        m->set("Size", Value::vector3({1, 1, 1}));
+        m->set("Position", Value::vector3(pos));
+        m->set("Orientation", Value::vector3({0, yaw, 0}));
+        m->set("Anchored", Value::boolean(true));
+        return m;
+    };
+    auto light_at = [&dm](Instance* parent, vec3 pos, vec3 color, f32 brightness, f32 range) {
+        Instance* src = dm.create("Part", parent, "LightSource");
+        src->set("Position", Value::vector3(pos));
+        src->set("Size", Value::vector3({0.1f, 0.1f, 0.1f}));
+        src->set("Transparency", Value::number(1.0));
+        src->set("CanCollide", Value::boolean(false));
+        src->set("CastShadow", Value::boolean(false));
+        src->set("Anchored", Value::boolean(true));
+        Instance* l = dm.create("PointLight", src, "Light");
+        l->set("Color", Value::color3(color));
+        l->set("Brightness", Value::number(brightness));
+        l->set("Range", Value::number(range));
+        return src;
+    };
+    auto center = [&](int i) { return (f32(i) - f32(kBlocks - 1) * 0.5f) * kPitch; };
+
+    Instance* city = dm.create("Model", ws, "City");
+    Instance* streets = dm.create("Folder", city, "Streets");
+    part(dm, streets, "Road", {0, -0.1f, 0}, {span + 60, 0.2f, span + 60}, {0.11f, 0.11f, 0.12f}, "Asphalt");
+    Instance* buildings = dm.create("Folder", city, "Buildings");
+    Instance* furniture = dm.create("Folder", city, "StreetFurniture");
+    Instance* lamps = dm.create("Folder", city, "StreetLamps");
+    Instance* cars = dm.create("Folder", city, "Cars");
+    const vec3 palette[] = {{0.55f, 0.53f, 0.50f}, {0.45f, 0.30f, 0.25f}, {0.62f, 0.58f, 0.50f},
+                            {0.35f, 0.36f, 0.38f}, {0.50f, 0.42f, 0.34f}, {0.28f, 0.30f, 0.33f}};
+    const vec3 neon_cols[] = {{1.0f, 0.2f, 0.6f}, {0.2f, 0.85f, 1.0f}, {0.7f, 0.3f, 1.0f}, {1.0f, 0.55f, 0.15f}};
+
+    for (int bx = 0; bx < kBlocks; ++bx)
+        for (int bz = 0; bz < kBlocks; ++bz) {
+            const f32 cx = center(bx), cz = center(bz);
+            // Sidewalk slab with its curb, over the asphalt.
+            part(dm, streets, "Sidewalk", {cx, kCurb * 0.5f, cz}, {kLot, kCurb, kLot}, {0.42f, 0.41f, 0.40f},
+                 "Concrete");
+            // Buildings: 2 x 2 lots, set back behind the sidewalk.
+            const f32 inner = kLot - 2.0f * kSidewalk, lot = inner * 0.5f;
+            for (int lx = 0; lx < 2; ++lx)
+                for (int lz = 0; lz < 2; ++lz) {
+                    const f32 w = lot - 0.4f - rnd() * 1.5f, d = lot - 0.4f - rnd() * 1.5f;
+                    // Outer faces flush with the sidewalk edge (shops open onto the street).
+                    const f32 ox = cx + (lx == 0 ? -1.0f : 1.0f) * (inner * 0.5f - w * 0.5f);
+                    const f32 oz = cz + (lz == 0 ? -1.0f : 1.0f) * (inner * 0.5f - d * 0.5f);
+                    const bool tall = rnd() < 0.3f;
+                    const f32 h = tall ? 45.0f + rnd() * 40.0f : 13.0f + rnd() * 22.0f;
+                    const vec3 col = palette[u32(rnd() * 6.0f) % 6];
+                    part(dm, buildings, "Building", {ox, kCurb + h * 0.5f, oz}, {w, h, d}, col, "Facade");
+                    // Street-facing faces: x side and z side of this lot.
+                    const vec3 nx{lx == 0 ? -1.0f : 1.0f, 0, 0}, nz{0, 0, lz == 0 ? -1.0f : 1.0f};
+                    for (int face = 0; face < 2; ++face) {
+                        const vec3 n = face == 0 ? nx : nz;
+                        const f32 along = face == 0 ? d : w;
+                        const vec3 fc =
+                            face == 0 ? vec3{ox + n.x * w * 0.5f, kCurb, oz} : vec3{ox, kCurb, oz + n.z * d * 0.5f};
+                        const vec3 t = face == 0 ? vec3{0, 0, 1} : vec3{1, 0, 0};
+                        const int shops = int(along / 6.6f);
+                        for (int k = 0; k < shops; ++k) {
+                            const f32 off = (f32(k) - f32(shops - 1) * 0.5f) * 6.6f;
+                            const vec3 at = fc + t * off + n * 0.3f;
+                            if (rnd() < 0.8f) {
+                                prop(furniture, "Storefront", "storefront", at, yaw_to(n));
+                                light_at(furniture, at + n * 1.2f + vec3{0, 2.6f, 0},
+                                         rnd() < 0.5f ? vec3{1.0f, 0.82f, 0.6f} : vec3{0.85f, 0.92f, 1.0f}, 1.6f, 8.0f);
+                                if (rnd() < 0.45f) {
+                                    const vec3 nc = neon_cols[u32(rnd() * 4.0f) % 4];
+                                    prop(furniture, "NeonSign", rnd() < 0.5f ? "neon_sign_open" : "neon_sign_bar",
+                                         at + vec3{0, 4.1f, 0} + n * 0.05f, yaw_to(n));
+                                    light_at(furniture, at + n * 0.9f + vec3{0, 4.1f, 0}, nc, 1.4f, 6.0f);
+                                } else if (rnd() < 0.5f) {
+                                    prop(furniture, "Awning", "awning", at + vec3{0, 3.55f, 0}, yaw_to(n));
+                                }
+                            }
+                        }
+                        // AC units and a fire escape on some faces.
+                        const int floors = int((h - 4.0f) / 3.2f);
+                        for (int fl = 1; fl < min(floors, 14); ++fl)
+                            if (rnd() < 0.18f)
+                                prop(furniture, "AC", "ac_unit",
+                                     fc + t * ((rnd() - 0.5f) * (along - 3.0f)) +
+                                         vec3{0, 4.2f + f32(fl) * 3.2f - 0.6f, 0},
+                                     yaw_to(n));
+                        if (rnd() < 0.25f && floors > 2) {
+                            const vec3 base = fc + t * ((rnd() - 0.5f) * (along - 6.0f));
+                            for (int fl = 1; fl < min(floors, 7); ++fl)
+                                prop(furniture, "FireEscape", "fire_escape",
+                                     base + vec3{0, 4.2f + f32(fl - 1) * 3.2f, 0}, yaw_to(n));
+                        }
+                    }
+                }
+            // Sidewalk furniture and street lamps along the four curbs of this block.
+            for (int side = 0; side < 4; ++side) {
+                const vec3 n = side == 0   ? vec3{1, 0, 0}
+                               : side == 1 ? vec3{-1, 0, 0}
+                               : side == 2 ? vec3{0, 0, 1}
+                                           : vec3{0, 0, -1};
+                const vec3 t{std::fabs(n.z), 0, std::fabs(n.x)};
+                const vec3 curb = vec3{cx, kCurb, cz} + n * (kLot * 0.5f - 0.6f);
+                int slot = 0;
+                for (f32 a = -kLot * 0.5f + 6.0f; a <= kLot * 0.5f - 6.0f; a += 11.0f, ++slot) {
+                    const vec3 p = curb + t * a;
+                    if (slot % 2 == 0) {
+                        // Street lamp: arm over the road, head light 7.2 m up and 1.8 m out.
+                        prop(lamps, "StreetLamp", "street_lamp", p, yaw_to(n));
+                        const bool sodium = rnd() < 0.35f;
+                        light_at(lamps, p + n * 1.8f + vec3{0, 7.0f, 0},
+                                 sodium ? vec3{1.0f, 0.68f, 0.32f} : vec3{0.88f, 0.94f, 1.0f}, 16.0f, 28.0f);
+                    } else {
+                        const f32 r = rnd();
+                        const char* what = r < 0.2f    ? "trash_bin"
+                                           : r < 0.32f ? "fire_hydrant"
+                                           : r < 0.42f ? "bench"
+                                           : r < 0.55f ? "parking_meter"
+                                           : r < 0.65f ? "bollard"
+                                                       : nullptr;
+                        if (what) prop(furniture, what, what, p - n * 0.2f, yaw_to(-n));
+                    }
+                }
+                // Parked cars along this curb, nose along the street.
+                for (f32 a = -kLot * 0.5f + 5.0f; a <= kLot * 0.5f - 5.0f; a += 5.8f) {
+                    if (rnd() < 0.45f) continue;
+                    const vec3 p = vec3{cx, 0.0f, cz} + n * (kLot * 0.5f + 1.3f) + t * a;
+                    prop(cars, "Car", rnd() < 0.5f ? "car_sedan" : "car_hatch", p, yaw_to(rnd() < 0.5f ? t : -t));
+                }
+            }
+        }
+    // Intersections: lane markings, crosswalks, traffic lights, steam from manholes.
+    for (int ix = 0; ix < kBlocks - 1; ++ix)
+        for (int iz = 0; iz < kBlocks - 1; ++iz) {
+            const f32 x = center(ix) + kPitch * 0.5f, z = center(iz) + kPitch * 0.5f;
+            for (int k = 0; k < 7; ++k) {
+                const f32 o = (f32(k) - 3.0f) * 1.3f;
+                for (int side = 0; side < 4; ++side) {
+                    const f32 d = kStreet * 0.5f + 1.6f;
+                    const vec3 c = side == 0   ? vec3{x + o, 0.003f, z + d}
+                                   : side == 1 ? vec3{x + o, 0.003f, z - d}
+                                   : side == 2 ? vec3{x + d, 0.003f, z + o}
+                                               : vec3{x - d, 0.003f, z + o};
+                    const vec3 sz = side < 2 ? vec3{0.6f, 0.01f, 2.6f} : vec3{2.6f, 0.01f, 0.6f};
+                    part(dm, streets, "Crosswalk", c, sz, {0.85f, 0.85f, 0.82f}, "SmoothPlastic");
+                }
+            }
+            for (int c = 0; c < 4; ++c) {
+                const f32 sx = (c & 1) ? 1.0f : -1.0f, sz = (c & 2) ? 1.0f : -1.0f;
+                const vec3 p{x + sx * (kStreet * 0.5f + 0.5f), kCurb, z + sz * (kStreet * 0.5f + 0.5f)};
+                const bool ns = (c == 0 || c == 3);
+                const vec3 face = ns ? vec3{0, 0, -sz} : vec3{-sx, 0, 0};
+                prop(furniture, "TrafficLight", ns ? "traffic_light_red" : "traffic_light_green", p, yaw_to(face));
+                light_at(furniture, p + vec3{0, 3.6f, 0} + face * 0.5f,
+                         ns ? vec3{1, 0.12f, 0.08f} : vec3{0.2f, 1, 0.45f}, 1.2f, 6.0f);
+            }
+            if (rnd() < 0.5f) {
+                Instance* mh = prop(furniture, "Manhole", "manhole", {x + 3.0f, 0.0f, z - 4.0f}, 0.0f);
+                Instance* steam = dm.create("ParticleEmitter", mh, "Steam");
+                steam->set("Texture", Value::string("builtin:smoke"));
+                steam->set("Rate", Value::number(8.0));
+                steam->set("Lifetime", Value::number(3.5));
+                steam->set("Speed", Value::number(1.2));
+                steam->set("SpreadAngle", Value::number(25.0));
+                steam->set("Size", Value::number(0.8));
+                steam->set("SizeEnd", Value::number(3.5));
+                steam->set("Color", Value::color3({0.75f, 0.75f, 0.78f}));
+                steam->set("ColorEnd", Value::color3({0.6f, 0.6f, 0.65f}));
+                steam->set("Transparency", Value::number(0.55));
+                steam->set("TransparencyEnd", Value::number(1.0));
+                steam->set("Acceleration", Value::vector3({0.4f, 0.6f, 0.0f}));
+                steam->set("RotSpeed", Value::number(25.0));
+                script(dm, mh, "Script", "Steam", kSteam);
+            }
+        }
+    // Dashed centre lines along every street.
+    for (int i = 0; i < kBlocks - 1; ++i) {
+        const f32 c = center(i) + kPitch * 0.5f;
+        for (f32 a = -span * 0.5f; a < span * 0.5f; a += 9.0f) {
+            bool crossing = false;
+            for (int j = 0; j < kBlocks - 1; ++j)
+                if (std::fabs(a - (center(j) + kPitch * 0.5f)) < kStreet * 0.5f + 3.5f) crossing = true;
+            if (crossing) continue;
+            part(dm, streets, "LaneMark", {c, 0.003f, a}, {0.14f, 0.01f, 3.0f}, {0.85f, 0.75f, 0.3f}, "SmoothPlastic");
+            part(dm, streets, "LaneMark", {a, 0.003f, c}, {3.0f, 0.01f, 0.14f}, {0.85f, 0.75f, 0.3f}, "SmoothPlastic");
+        }
+    }
+    // Spawn on a sidewalk corner.
+    part(dm, ws, "SpawnLocation", {center(2) + kLot * 0.5f - 1.5f, kCurb + 0.02f, center(2) + kLot * 0.5f - 1.5f},
+         {2, 0.04f, 2}, {0.42f, 0.41f, 0.40f}, "Concrete", "SpawnLocation");
+    sound(dm, ws, "Rain", "builtin:rain_loop", 0.55f, true, true);
+    // Night, heavy overcast, rain, haze that catches the lamps.
+    Instance* l = dm.service("Lighting");
+    l->set("ClockTime", Value::number(23.0));
+    l->set("CloudCover", Value::number(0.95));
+    l->set("SunBrightness", Value::number(0.0));
+    l->set("EnvironmentDiffuseScale", Value::number(0.05));
+    l->set("IndoorAmbient", Value::color3({0.85f, 0.62f, 0.45f})); // sodium-orange city glow
+    l->set("IndoorAmbientBrightness", Value::number(0.012));
+    l->set("ExposureCompensation", Value::number(2.4));
+    l->set("FogDensity", Value::number(0.0045));
+    l->set("FogHeightFalloff", Value::number(0.015));
+    l->set("Saturation", Value::number(1.1));
+    l->set("Contrast", Value::number(1.08));
+    Instance* rain = dm.create("Rain", l, "Rain");
+    rain->set("Intensity", Value::number(0.85));
+    rain->set("Wetness", Value::number(0.92));
+    rain->set("Puddles", Value::number(0.55));
+    Instance* sky = dm.create("Sky", l, "Sky");
+    sky->set("StarCount", Value::number(0.0));
+    sky->set("MoonVisible", Value::boolean(false));
+}
+
 const std::vector<TemplateInfo> kTemplates = {
     {"baseplate", "Baseplate", "A grey baseplate and a spawn: the usual starting point.", "Basic"},
     {"classic_baseplate", "Classic Baseplate", "The bright green baseplate of old-school games.", "Basic"},
@@ -713,6 +959,8 @@ const std::vector<TemplateInfo> kTemplates = {
     {"meadow", "Meadow", "Rolling grassland covered in tall grass and wildflowers that sway in the wind.",
      "Environment"},
     {"valley", "Valley", "Misty forest valley with trees, grass and morning light.", "Environment"},
+    {"city_rain", "Rainy City", "A city block grid at night in the rain: wet streets, neon, street lamps, lit windows.",
+     "Environment"},
     {"backrooms", "Backrooms", "Endless yellow rooms, damp carpet and buzzing fluorescent lights.", "Environment"},
 };
 
@@ -739,6 +987,8 @@ bool build_template(std::string_view id, DataModel& dm) {
         build_beach(dm);
     else if (id == "valley")
         build_valley(dm);
+    else if (id == "city_rain")
+        build_city_rain(dm);
     else if (id == "backrooms")
         build_backrooms(dm);
     else if (id == "meadow")

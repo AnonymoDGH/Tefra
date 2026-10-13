@@ -218,7 +218,7 @@ vec3 light_halos(Frame f, vec3 dir, float tmax) {
         float fade = 1.0 - smoothstep(0.4 * r * r, r * r, h2);
         sum += l.color.rgb * integral * fade;
     }
-    return sum * sigma * (1.0 / (4.0 * BRDF_PI)) * 2.5;
+    return sum * sigma * (1.0 / (4.0 * BRDF_PI)) * 1.2;
 }
 
 // Sky with the volumetric clouds over it (reduced resolution, bilinear: clouds are soft).

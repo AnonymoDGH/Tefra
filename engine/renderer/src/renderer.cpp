@@ -250,7 +250,8 @@ Renderer::~Renderer() {
          {p_gbuffer_,        p_gbuffer_2s_,  p_shadow_,   p_lighting_,   p_tonemap_,     p_skyview_,    p_terrain_,
           p_terrain_shadow_, p_veg_,         p_veg_2s_,   p_veg_shadow_, p_veg_cull_,    p_water_,      p_taa_,
           p_gtao_,           p_bloom_down_,  p_bloom_up_, p_expo_first_, p_expo_reduce_, p_expo_adapt_, p_volumetric_,
-          p_grass_,          p_grass_count_, p_ocean_,    p_ocean_copy_, p_skin_,        p_particles_,  p_clouds_, p_light_cull_, p_rain_})
+          p_grass_,          p_grass_count_, p_ocean_,    p_ocean_copy_, p_skin_,        p_particles_,  p_clouds_,
+          p_light_cull_,     p_rain_})
         if (p) vkDestroyPipeline(dev_.device(), p, nullptr);
     vkDestroyPipelineLayout(dev_.device(), layout_, nullptr);
 }
@@ -261,7 +262,7 @@ void Renderer::create_pipelines(VkFormat output_format) {
                           &p_veg_shadow_, &p_veg_cull_,   &p_water_,          &p_taa_,         &p_gtao_,
                           &p_bloom_down_, &p_bloom_up_,   &p_expo_first_,     &p_expo_reduce_, &p_expo_adapt_,
                           &p_volumetric_, &p_grass_,      &p_grass_count_,    &p_ocean_,       &p_ocean_copy_,
-                          &p_skin_,       &p_particles_,  &p_clouds_,  &p_light_cull_, &p_rain_}) {
+                          &p_skin_,       &p_particles_,  &p_clouds_,         &p_light_cull_,  &p_rain_}) {
         if (*p) vkDestroyPipeline(dev_.device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -482,7 +483,7 @@ void Renderer::create_pipelines(VkFormat output_format) {
                              water_fs,      particle_vs,   particle_fs,     taa_fs,         gtao_fs,
                              bloom_down_fs, bloom_up_fs,   expo_first_fs,   expo_reduce_fs, expo_adapt_cs,
                              volumetric_fs, grass_vs,      grass_fs,        grass_count_cs, skin_cs,
-                             clouds_fs,     light_cull_cs, rain_vs, rain_fs})
+                             clouds_fs,     light_cull_cs, rain_vs,         rain_fs})
         vkDestroyShaderModule(dev_.device(), m, nullptr);
 }
 
@@ -1374,7 +1375,6 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             });
     }
 
-
     // TAA history (imported before the lighting pass: screen-space reflections read last frame's image).
     rg::TextureHandle taa_prev{}, taa_next{};
     u32 taa_valid = 0;
@@ -1831,6 +1831,12 @@ void limit_quality(RenderSettings& s, Quality q) {
     static const u32 cloud_div[4] = {4, 4, 2, 2};
     s.cloud_steps = min(s.cloud_steps, cloud_steps[static_cast<u32>(q)]);
     s.cloud_res_div = max(s.cloud_res_div, cloud_div[static_cast<u32>(q)]);
+    // Rain streaks, screen-space reflections and local lights per frame.
+    static const u32 rain_drops[4] = {5000, 9000, 16000, 24000};
+    static const u32 max_lights[4] = {128, 256, 512, 1024};
+    s.rain_drops = min(s.rain_drops, rain_drops[static_cast<u32>(q)]);
+    s.max_lights = min(s.max_lights, max_lights[static_cast<u32>(q)]);
+    if (q == Quality::Low) s.ssr = false;
     if (q == Quality::Low) {
         s.film_effects = false;
         s.auto_exposure = false;

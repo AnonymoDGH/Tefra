@@ -239,6 +239,26 @@ def hum_loop():
     return normalize(out, 0.4)
 
 
+def rain_loop():
+    # Steady rain: dense filtered noise (the hiss), random drop ticks on hard surfaces, a low rumble of water. 4 s,
+    # the noise filtered over two laps so the loop point is seamless; drop ticks wrap around the loop.
+    dur = 4.0
+    n = secs(dur, SR_WIND)
+    raw = noise(n, 23)
+    hiss = lowpass(highpass(raw + raw, 300.0, SR_WIND), 3200.0, SR_WIND)[n:]
+    low = lowpass(lowpass(raw + raw, 160.0, SR_WIND), 160.0, SR_WIND)[n:]
+    out = [hiss[i] * 0.55 + low[i] * 1.8 for i in range(n)]
+    rng = Rng(77)
+    for _ in range(420):
+        at = int((rng.next() * 0.5 + 0.5) * n)
+        amp = 0.08 + 0.25 * (rng.next() * 0.5 + 0.5) ** 3
+        f = 1800.0 + 2600.0 * (rng.next() * 0.5 + 0.5)
+        for k in range(int(0.012 * SR_WIND)):
+            t = k / SR_WIND
+            out[(at + k) % n] += amp * math.sin(TAU * f * t) * math.exp(-t * 420.0)
+    return normalize(out, 0.42)
+
+
 EFFECTS = [
     ("jump", jump, SR),
     ("land", land, SR),
@@ -251,6 +271,7 @@ EFFECTS = [
     ("coin", coin, SR),
     ("wind_loop", wind_loop, SR_WIND),
     ("hum_loop", hum_loop, SR_WIND),
+    ("rain_loop", rain_loop, SR_WIND),
 ]
 
 
