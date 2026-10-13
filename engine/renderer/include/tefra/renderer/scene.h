@@ -38,6 +38,17 @@ struct Instance {
     u32 skin = kNoSkin; // index into Scene::skins(): the mesh is drawn from the skinned copy of its vertices
 };
 
+// A local light (PointLight / SpotLight): photometric intensity in candela, windowed inverse-square falloff to range.
+struct LocalLight {
+    dvec3 position{};
+    vec3 direction{0.0f, 0.0f, -1.0f}; // spot axis (unit)
+    vec3 color{1.0f, 1.0f, 1.0f};      // linear rgb
+    f32 intensity = 800.0f;            // cd
+    f32 range = 16.0f;                 // m
+    f32 cos_outer = -2.0f;             // spot cone (cos of the half angle); < -1 = point light
+    f32 cos_inner = -2.0f;
+};
+
 // A skeleton's palette (joint matrices in the mesh's own space: joint_global * inverse_bind). The renderer keeps the
 // previous frame's palette too; set_skin_palette() rotates them.
 struct SkinState {
@@ -74,6 +85,9 @@ class Scene {
     const std::vector<MeshRange>& meshes() const { return meshes_; }
     const std::vector<Instance>& instances() const { return instances_; }
     std::vector<Instance>& instances() { return instances_; }
+    // Local lights, rewritten by the owner whenever they change (no upload needed: the renderer copies them).
+    const std::vector<LocalLight>& lights() const { return lights_; }
+    std::vector<LocalLight>& lights() { return lights_; }
     const std::vector<MaterialGPU>& materials() const { return materials_; }
     const rhi::Buffer& vertex_buffer() const { return vbuf_; }
     const rhi::Buffer& index_buffer() const { return ibuf_; }
@@ -92,6 +106,7 @@ class Scene {
     std::vector<MeshRange> meshes_;
     std::vector<MaterialGPU> materials_;
     std::vector<Instance> instances_;
+    std::vector<LocalLight> lights_;
     std::vector<SkinAttr> skin_attrs_;
     std::vector<SkinState> skins_;
     std::vector<rhi::Image> textures_;

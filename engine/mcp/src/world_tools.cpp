@@ -460,7 +460,9 @@ LANDSCAPES - do not build terrain or grass from parts. Create ONE Terrain under 
 PARTS: Part (Shape Block/Ball/Cylinder/Wedge), MeshPart (MeshId = path of a .glb/.gltf; see import_model),
   SpawnLocation (where players appear), Model / Folder to group. Material: Plastic, SmoothPlastic, Wood,
   WoodPlanks, Metal, Concrete, Brick, Cobblestone, Granite, Marble, Slate, Sand, Grass, Ground, Rock, Ice, Glass,
-  Neon (emissive), Fabric, Foil. Anchored=true for static scenery. Lights: PointLight / SpotLight under a part.
+  Neon (emissive), Fabric, Foil, Wallpaper, Carpet, CeilingTile. Anchored=true for static scenery. Lights: PointLight / SpotLight under a part (real
+  local lights; Brightness 1 ~ 400 cd, Range m). Interiors: Lighting.SunBrightness 0, EnvironmentDiffuseScale 0,
+  IndoorAmbient + IndoorAmbientBrightness, ExposureCompensation ~7. MeshId accepts builtin:models/backrooms/*.glb.
 
 MANY OBJECTS: use create_instances with an array (up to 5000 per call) instead of create_instance in a loop.
 

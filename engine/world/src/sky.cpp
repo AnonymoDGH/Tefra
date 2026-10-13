@@ -98,6 +98,12 @@ void sky_settings(const DataModel& dm, render::RenderSettings& s) {
     // Exposure follows the sun height (bright noon, dark night), plus the user's compensation.
     const f32 day = saturate((sun.y + 0.05f) / 0.45f);
     s.ev100 = lerp(8.5f, 14.8f, day) - light->get_float("ExposureCompensation", 0.0f);
+    s.sun_scale = max(light->get_float("SunBrightness", 1.0f), 0.0f);
+    s.ibl_intensity = max(light->get_float("EnvironmentDiffuseScale", 1.0f), 0.0f);
+    {
+        const vec3 c = light->get_vec3("IndoorAmbient", vec3{0, 0, 0});
+        s.ambient = c * (max(light->get_float("IndoorAmbientBrightness", 0.0f), 0.0f) * 100.0f);
+    }
     s.grade_saturation = light->get_float("Saturation", 1.05f);
     s.grade_contrast = light->get_float("Contrast", 1.05f);
     s.fog_density = light->get_float("FogDensity", 0.0f);

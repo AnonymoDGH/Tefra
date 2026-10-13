@@ -9,7 +9,9 @@
 #include "common/shadow.glsl"
 #include "common/clouds.glsl"
 #include "common/sky.glsl"
-layout(push_constant) uniform Push { FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; uint ao; uint vol; } pc;
+layout(push_constant) uniform Push {
+    FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; uint ao; uint vol; LightBuffer lights; uint light_count; uint pad;
+} pc;
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
 
@@ -235,6 +237,29 @@ void main() {
         vec3 trans_col = albedo * vec3(1.1, 1.25, 0.6); // light through chlorophyll is yellow-green
         color += trans_col * translucency * (0.35 * back + 1.6 * forward) / BRDF_PI * (f.sun_color.rgb * f.sun_dir.w) * sh * ao;
     }
+
+    // Local lights (PointLight / SpotLight): GGX + Lambert, windowed inverse-square falloff (Karis 2013).
+    for (uint i = 0u; i < pc.light_count; ++i) {
+        LightGPU lt = pc.lights.l[i];
+        vec3 dl = lt.pos_range.xyz - p;
+        float d2 = dot(dl, dl);
+        float range = lt.pos_range.w;
+        if (d2 >= range * range) continue;
+        vec3 Ll = dl * inversesqrt(max(d2, 1e-8));
+        float nl = dot(N, Ll);
+        if (nl <= 0.0) continue;
+        float win = clamp(1.0 - (d2 * d2) / (range * range * range * range), 0.0, 1.0);
+        float atten = win * win / max(d2, 0.04);
+        if (lt.spot.w >= -1.0) atten *= smoothstep(lt.spot.w, max(lt.extra.x, lt.spot.w + 1e-3), dot(-Ll, lt.spot.xyz));
+        vec3 Hl = normalize(V + Ll);
+        vec3 Fl = F_Schlick(f0, max(dot(V, Hl), 0.0));
+        vec3 specl = D_GGX(max(dot(N, Hl), 0.0), a) * V_SmithGGX(ndv, nl, a) * Fl;
+        color += (diff_col / BRDF_PI * (1.0 - Fl) + specl) * lt.color.rgb * (atten * nl);
+    }
+    // Emission: display-referred (glows the same at any exposure; 1 = a few times a sunlit white wall, so it blooms).
+    color += albedo * g2.b * (4.0 / f.exposure.x);
+    // Flat bounce light for interiors (Lighting.IndoorAmbient): diffuse only, occluded by AO.
+    color += diff_col * f.ambient.xyz / BRDF_PI * ao;
 
     // Image-based lighting (split-sum, multi-scatter compensation).
     vec2 ab = texture(TEX2D(f.brdf_lut, SMP_LINEAR_CLAMP), vec2(ndv, rough)).rg;

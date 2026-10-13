@@ -42,6 +42,9 @@ MaterialLook material_look(u32 m) {
         {0.5f, 0.0f, 1.0f},  // Neon
         {0.95f, 0.0f, 0.0f}, // Fabric
         {0.2f, 1.0f, 0.0f},  // Foil
+        {0.92f, 0.0f, 0.0f}, // Wallpaper
+        {1.0f, 0.0f, 0.0f},  // Carpet
+        {0.95f, 0.0f, 0.0f}, // CeilingTile
     };
     return m < std::size(table) ? table[m] : table[0];
 }
@@ -113,7 +116,7 @@ u32 SceneSync::material_for(const Instance& part) {
         m.flags |= 16u;
         m.pad[1] = mat;
     }
-    if (look.emissive > 0.0f) m.emissive_cutoff = vec4(lin * 40.0f, 0.0f); // Neon glows
+    if (look.emissive > 0.0f) m.emissive_cutoff = vec4(lin, 0.0f); // Neon glows (strength 1, display-referred)
     const u32 idx = scene_.add_material(m);
     material_cache_[key] = idx;
     materials_dirty_ = true;
@@ -158,8 +161,11 @@ void SceneSync::rebuild() {
         if (!is_visible_part(*i, ws)) continue;
         if (i->is_a("MeshPart")) {
             std::string path = i->get_string("MeshId");
-            if (!asset_root_.empty() && !path.empty() && path[0] != '/' && path[0] != '\\' &&
-                !(path.size() > 1 && path[1] == ':'))
+            // builtin:models/... = a model shipped in <exe>/resources (templates use them).
+            if (path.rfind("builtin:", 0) == 0)
+                path = path_join(path_join(exe_dir(), "resources"), path.substr(8));
+            else if (!asset_root_.empty() && !path.empty() && path[0] != '/' && path[0] != '\\' &&
+                     !(path.size() > 1 && path[1] == ':'))
                 path = path_join(asset_root_, path);
             if (path.empty() || !file_exists(path.c_str())) continue;
             std::vector<GltfPrim> prims;
@@ -214,7 +220,43 @@ void SceneSync::rebuild() {
     }
 }
 
+void SceneSync::sync_lights() {
+    // Light instances are found again when the tree changes; their values are read every frame (scripts animate them).
+    if (lights_revision_ != model_->revision()) {
+        lights_revision_ = model_->revision();
+        light_ids_.clear();
+        if (const Instance* ws = model_->workspace())
+            for (const Instance* i : ws->descendants())
+                if (i->is_a("Light")) light_ids_.push_back(i->id());
+    }
+    std::vector<render::LocalLight>& out = scene_.lights();
+    out.clear();
+    for (u64 id : light_ids_) {
+        const Instance* l = model_->find(id);
+        if (!l || !l->get_bool("Enabled", true)) continue;
+        const Instance* part = l->parent();
+        while (part && !part->is_a("BasePart")) part = part->parent();
+        if (!part) continue;
+        render::LocalLight ll;
+        const vec3 p = part->get_vec3("Position");
+        ll.position = {f64(p.x), f64(p.y), f64(p.z)};
+        const vec3 c = l->get_vec3("Color", {1, 0.95f, 0.85f});
+        ll.color = {srgb_to_linear(c.x), srgb_to_linear(c.y), srgb_to_linear(c.z)};
+        ll.intensity = max(l->get_float("Brightness", 2.0f), 0.0f) * 400.0f; // Brightness 1 ~ a 400 cd lamp
+        ll.range = clamp(l->get_float("Range", 16.0f), 0.1f, 120.0f);
+        if (l->is_a("SpotLight")) {
+            const quat q = orientation_to_quat(part->get_vec3("Orientation"));
+            ll.direction = normalize(rotate(q, vec3{0.0f, 0.0f, -1.0f}));
+            const f32 half = clamp(l->get_float("Angle", 45.0f), 1.0f, 179.0f) * 0.5f * 0.0174533f;
+            ll.cos_outer = std::cos(half);
+            ll.cos_inner = std::cos(half * 0.8f);
+        }
+        out.push_back(ll);
+    }
+}
+
 bool SceneSync::update() {
+    sync_lights();
     bool changed = false;
     // Skinned MeshParts: upload the palette the animator wrote for them (DataModel::skin_pose), once per version.
     for (auto it = skinned_parts_.begin(); it != skinned_parts_.end();) {

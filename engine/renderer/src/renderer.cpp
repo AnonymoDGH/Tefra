@@ -16,6 +16,7 @@
 
 #include "tefra/core/log.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
@@ -48,6 +49,8 @@ struct SkinDraw {
 struct LightingPush {
     VkDeviceAddress frame;
     u32 depth, rt0, rt1, rt2, ao, vol;
+    VkDeviceAddress lights;
+    u32 light_count, pad;
 };
 struct VolumetricPush {
     VkDeviceAddress frame;
@@ -219,6 +222,7 @@ Renderer::~Renderer() {
     for (auto& f : frames_) {
         rhi::destroy_buffer(dev_, f.constants);
         rhi::destroy_buffer(dev_, f.exposure);
+        rhi::destroy_buffer(dev_, f.lights);
         rhi::destroy_buffer(dev_, f.particles);
         rhi::destroy_buffer(dev_, f.instances);
         rhi::destroy_buffer(dev_, f.terrain);
@@ -548,6 +552,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         s.sun_illuminance = s.moon_illuminance;
         s.sun_color = vec3{0.80f, 0.88f, 1.0f};
     }
+    s.sun_illuminance *= max(s.sun_scale, 0.0f);
     FrameBuffers& fb = frames_[slot];
     // The slot's fence has been waited on, so last frame's grass counter copy in this slot is complete.
     if (s.grass_stats && fb.grass_readback.mapped) {
@@ -625,6 +630,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         fc.cloud_wind = {s.cloud_wind_dir.x, s.cloud_wind_dir.y, 0.0f, 0.0f};
         fc.sun_true = {sun_true.x, sun_true.y, sun_true.z, 0.0f};
     }
+    fc.ambient = {s.ambient.x, s.ambient.y, s.ambient.z, 0.0f};
     if (world.ocean) {
         const OceanDesc& od = world.ocean->desc();
         fc.ocean = {od.level, 1.0f, 0.0f, 0.0f};
@@ -1239,6 +1245,54 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             });
     }
 
+    // ---- Local lights: the nearest visible ones, camera-relative -------------------------------------------
+    u32 light_count = 0;
+    {
+        const auto& src = scene.lights();
+        vec4 lplanes[6];
+        frustum_planes(fc.view_proj, lplanes);
+        struct Pick {
+            f32 d2;
+            u32 index;
+            vec3 rel;
+        };
+        std::vector<Pick> picks;
+        picks.reserve(src.size());
+        for (u32 i = 0; i < src.size(); ++i) {
+            const LocalLight& l = src[i];
+            if (l.intensity <= 0.0f || l.range <= 0.0f) continue;
+            const vec3 rel{f32(l.position.x - camera.position.x), f32(l.position.y - camera.position.y),
+                           f32(l.position.z - camera.position.z)};
+            bool in_view = true;
+            for (int k = 0; k < 5 && in_view; ++k)
+                if (dot(lplanes[k].xyz(), rel) + lplanes[k].w < -l.range) in_view = false;
+            if (in_view) picks.push_back({dot(rel, rel), i, rel});
+        }
+        const u32 cap = min<u32>(s.max_lights, 256u);
+        if (picks.size() > cap) {
+            std::nth_element(picks.begin(), picks.begin() + cap, picks.end(),
+                             [](const Pick& x, const Pick& y) { return x.d2 < y.d2; });
+            picks.resize(cap);
+        }
+        light_count = static_cast<u32>(picks.size());
+        if (fb.light_capacity < max(light_count, 1u) || !fb.lights.buffer) {
+            rhi::destroy_buffer(dev_, fb.lights);
+            fb.light_capacity = max<u32>(64u, light_count * 2u);
+            fb.lights = rhi::create_buffer(dev_, sizeof(LightGPU) * fb.light_capacity,
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, rhi::MemoryUsage::Upload, "lights");
+        }
+        auto* dst = static_cast<LightGPU*>(fb.lights.mapped);
+        for (u32 i = 0; i < light_count; ++i) {
+            const LocalLight& l = src[picks[i].index];
+            dst[i].pos_range = vec4(picks[i].rel, l.range);
+            dst[i].color = vec4(l.color * l.intensity, 0.0f);
+            dst[i].spot = vec4(l.direction, l.cos_outer);
+            dst[i].extra = vec4(l.cos_inner, 0.0f, 0.0f, 0.0f);
+        }
+        if (light_count) vmaFlushAllocation(dev_.allocator(), fb.lights.allocation, 0, VK_WHOLE_SIZE);
+    }
+    const VkDeviceAddress lights_addr = fb.lights.address;
+
     graph_.add_pass(
         "lighting", rg::PassType::Raster,
         [&](rg::PassBuilder& b) {
@@ -1263,7 +1317,10 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                            ctx.sampled(rt1),
                            ctx.sampled(rt2),
                            ao.valid() ? ctx.sampled(ao) : 0xFFFFFFFFu,
-                           vol.valid() ? ctx.sampled(vol) : 0xFFFFFFFFu};
+                           vol.valid() ? ctx.sampled(vol) : 0xFFFFFFFFu,
+                           lights_addr,
+                           light_count,
+                           0u};
             vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
             vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
         });

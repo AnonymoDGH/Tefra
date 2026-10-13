@@ -101,7 +101,17 @@ struct FrameConstants {
     vec4 cloud_look; // xyz colour of the cumulus, w optical depth multiplier
     vec4 cloud_wind; // xy unit wind direction (world x, z)
     vec4 sun_true;   // xyz towards the sun itself (sun_dir is the moon at night)
+    vec4 ambient;    // xyz flat indoor/bounce irradiance (lux), added to the image-based ambient
 };
+
+// Local light as the lighting pass reads it (camera-relative position).
+struct LightGPU {
+    vec4 pos_range; // xyz camera-relative position (m), w range (m)
+    vec4 color;     // rgb = linear colour x intensity (cd)
+    vec4 spot;      // xyz spot axis, w cos outer (< -1: point light)
+    vec4 extra;     // x cos inner
+};
+static_assert(sizeof(LightGPU) == 64);
 static_assert(sizeof(FrameConstants) % 16 == 0);
 
 } // namespace tefra::render

@@ -218,6 +218,27 @@ def wind_loop():
     return normalize(out, 0.45)
 
 
+def hum_loop():
+    # Fluorescent ballast hum: a 120 Hz buzz (twice the mains frequency) rich in odd and even harmonics, a slight
+    # rattle and hiss. Every component has whole cycles in the 2 s loop, so it repeats without a click.
+    dur = 2.0
+    n = secs(dur, SR_WIND)
+    raw = noise(n, 57)
+    hiss = highpass(lowpass(raw + raw, 2600.0, SR_WIND), 900.0, SR_WIND)[n:]
+    out = []
+    harmonics = ((1, 1.0), (2, 0.55), (3, 0.42), (4, 0.22), (5, 0.18), (6, 0.1), (8, 0.07), (11, 0.05))
+    for i in range(n):
+        t = i / SR_WIND
+        phase = t / dur
+        buzz = 0.0
+        for k, a in harmonics:
+            buzz += a * math.sin(TAU * 120.0 * k * t + k * 0.7)
+        # Ballast rattle: the buzz clips a little and swells twice per loop.
+        buzz = math.tanh(buzz * 1.6) * (0.85 + 0.15 * math.sin(TAU * 2 * phase))
+        out.append(buzz * 0.5 + hiss[i] * 0.35)
+    return normalize(out, 0.4)
+
+
 EFFECTS = [
     ("jump", jump, SR),
     ("land", land, SR),
@@ -229,6 +250,7 @@ EFFECTS = [
     ("click", click, SR),
     ("coin", coin, SR),
     ("wind_loop", wind_loop, SR_WIND),
+    ("hum_loop", hum_loop, SR_WIND),
 ]
 
 

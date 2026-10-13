@@ -40,7 +40,10 @@ struct Frame {
     vec4 cloud_look; // xyz colour of the cumulus, w optical depth multiplier
     vec4 cloud_wind; // xy unit wind direction (world x, z)
     vec4 sun_true;   // xyz towards the sun itself (sun_dir is the moon at night)
+    vec4 ambient;    // xyz flat indoor/bounce irradiance (lux)
 };
+struct LightGPU { vec4 pos_range; vec4 color; vec4 spot; vec4 extra; };
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer LightBuffer { LightGPU l[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VertexBuffer { Vertex v[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer MaterialBuffer { Material m[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer InstanceBuffer { Instance i[]; };

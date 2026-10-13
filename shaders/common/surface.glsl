@@ -212,6 +212,50 @@ Surface surface_pattern(uint kind, vec3 P, vec3 N, float fp) {
         float c = 1.0 - abs(value_noise(P * 12.0) * 2.0 - 1.0);
         s.height = c * 0.004 * band(12.0, fp);
         s.rough = 0.8 + 0.6 * c;
+    } else if (kind == 21u) { // Wallpaper: 53 cm rolls, thin stripes and a faint diamond motif, aged and stained
+        float u = top ? uv.x : uv.x, v = top ? uv.y : P.y;
+        float bs = band(30.0, fp), bm = band(9.0, fp);
+        float stripe = 1.0 - smoothstep(0.0, 0.08, abs(fract(u / 0.105) - 0.5) - 0.42);
+        vec2 c = vec2(fract(u / 0.105) - 0.5, fract(v / 0.16) - 0.5);
+        float diamond = 1.0 - smoothstep(0.02, 0.06, abs(abs(c.x) * 1.5 + abs(c.y) - 0.32));
+        float seam = 1.0 - smoothstep(0.0, 0.002, abs(fract(u / 0.53) - 0.5) - 0.497);
+        float paper = value_noise(P * 90.0) * band(90.0, fp);
+        float blot = smoothstep(0.52, 0.8, fbm3(P * vec3(0.5, 0.35, 0.5) + 3.0));
+        float drip = smoothstep(0.6, 0.9, value_noise(vec3(u * 9.0, v * 0.8, 1.0))) * smoothstep(0.62, 0.3, fract(v * 0.37));
+        vec3 t = vec3(1.0);
+        t *= mix(1.0, 0.88, stripe * bs * 0.8) * mix(1.0, 0.9, diamond * bm * 0.7);
+        t *= mix(1.0, 0.8, seam * bs) * (0.96 + 0.08 * paper);
+        t *= mix(vec3(1.0), vec3(0.78, 0.7, 0.52), blot * 0.6) * mix(vec3(1.0), vec3(0.82, 0.76, 0.6), drip * 0.5);
+        s.tint *= t * (0.94 + 0.1 * fbm3(P * 1.3));
+        s.height = (paper * 0.0004 - seam * 0.0008) + stripe * 0.0002 * bs;
+        s.rough = 0.95;
+    } else if (kind == 22u) { // Carpet: dense fibre noise, worn paths and damp patches
+        float bf = band(160.0, fp);
+        float fib = hash13(floor(P * 320.0)) * band(320.0, fp);
+        float tuft = value_noise(P * 160.0) * bf;
+        float mott = fbm3(P * 1.6);
+        float damp = smoothstep(0.55, 0.78, fbm3(P * 0.45 + 7.0));
+        s.tint *= (0.82 + 0.3 * mott) * (0.86 + 0.22 * tuft) * (0.92 + 0.12 * fib);
+        s.tint *= mix(vec3(1.0), vec3(0.62, 0.58, 0.48), damp * 0.7);
+        s.height = tuft * 0.002 + fib * 0.0006;
+        s.rough = mix(1.0, 0.75, damp); // wet carpet catches a dull sheen
+        s.ao = 0.85 + 0.15 * tuft;
+    } else if (kind == 23u) { // CeilingTile: 61 x 122 cm acoustic tiles in a white T-bar grid
+        vec2 g = vec2(uv.x / 0.61, uv.y / 1.22);
+        vec2 f = fract(g) * vec2(0.61, 1.22);
+        float edge = min(min(f.x, 0.61 - f.x), min(f.y, 1.22 - f.y));
+        float tbar = 1.0 - smoothstep(0.012, 0.02, edge);
+        float id = hash13(vec3(floor(g), 9.0));
+        float pores = smoothstep(0.7, 0.85, value_noise(P * 140.0)) * band(140.0, fp);
+        float fissure = smoothstep(0.8, 0.95, value_noise(vec3(P.x * 30.0, P.z * 8.0, 3.0))) * band(30.0, fp) * 0.5;
+        float stain = step(0.86, id) * smoothstep(0.3, 0.7, fbm3(P * 2.2 + id * 13.0));
+        float bb = band(18.0, fp);
+        vec3 tile = vec3(0.97 + 0.04 * id) * (1.0 - 0.3 * pores - 0.2 * fissure);
+        tile *= mix(vec3(1.0), vec3(0.75, 0.62, 0.42), stain * 0.8);
+        s.tint *= mix(tile, vec3(1.05), tbar * bb);
+        s.height = (1.0 - tbar) * 0.006 * bb - pores * 0.0008 - fissure * 0.0006;
+        s.rough = mix(1.0, 0.45, tbar * bb);
+        s.ao = mix(1.0, 0.8, (1.0 - smoothstep(0.02, 0.04, edge)) * (1.0 - tbar) * bb);
     }
     return s;
 }

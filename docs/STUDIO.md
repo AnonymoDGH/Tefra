@@ -285,3 +285,15 @@ Herramientas disponibles:
 - import_model (glTF/GLB, FBX, OBJ, STL o PLY → MeshPart; los modelos se convierten a GLB en `assets/`; opciones `unit_scale` y `max_triangles`), import_roblox.
 
 Para clientes que solo hablan stdio (Claude Desktop) hay un puente, `tefra_mcp`; ver `docs/research/m3-mcp/REPORT.md`.
+
+## Interiores y luces locales
+- `PointLight` y `SpotLight` bajo una Part son luces reales: `Brightness` 1 ≈ 400 cd y `Range` en metros. Se sombrean las 64 más cercanas que estén a la vista.
+- Para un interior sin luz del día, en Lighting:
+  - `SunBrightness` 0;
+  - `EnvironmentDiffuseScale` 0;
+  - `IndoorAmbient` + `IndoorAmbientBrightness` (rebote de luz cálido);
+  - `ExposureCompensation` ≈ 7.
+- Materiales nuevos: `Wallpaper`, `Carpet` y `CeilingTile`. `Neon` ahora brilla de verdad (emisivo, con bloom).
+- Plantilla **Backrooms**:
+  - Laberinto de oficinas amarillas con moqueta húmeda, techo de placas y fluorescentes que zumban (algunos parpadean o están fundidos).
+  - Props modelados con Blender: `tools/blender/make_backrooms_props.py` (bpy) genera `resources/models/backrooms/*.glb`, que se usan con `MeshId = builtin:models/backrooms/<nombre>.glb`.

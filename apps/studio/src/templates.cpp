@@ -512,6 +512,198 @@ void build_obby(DataModel& dm) {
     script(dm, hud, "LocalScript", "Hud", kHud);
 }
 
+// ---- Backrooms: endless yellow office rooms under buzzing fluorescent panels -------------------------------------
+
+const char* kFlicker = R"cs(using Tefra;
+
+// A dying fluorescent tube: mostly on, with irregular stutters and short blackouts.
+public class Flicker : TefraScript
+{
+    System.Random rng = new System.Random();
+    BasePart panel;
+    Instance lamp;
+    Color3 on;
+    float t, next = 1f;
+
+    public override void Start()
+    {
+        panel = (BasePart)Parent;
+        lamp = panel.FindFirstChild("Source")?.FindFirstChildOfClass("PointLight");
+        on = panel.Color;
+    }
+
+    public override void Update(float dt)
+    {
+        t += dt;
+        if (t < next) return;
+        t = 0f;
+        bool off = rng.NextDouble() < 0.4;
+        if (lamp != null) lamp["Enabled"] = !off;
+        panel.Color = off ? new Color3(0.22f, 0.21f, 0.18f) : on;
+        next = off ? (float)(0.03 + rng.NextDouble() * 0.15) : (float)(0.04 + rng.NextDouble() * (rng.NextDouble() < 0.7 ? 0.25 : 3.0));
+    }
+}
+)cs";
+
+void build_backrooms(DataModel& dm) {
+    Instance* ws = dm.workspace();
+    constexpr int kCells = 18;     // per side
+    constexpr f32 kCell = 5.0f;    // m
+    constexpr f32 kHeight = 2.75f; // floor to ceiling
+    constexpr f32 kWall = 0.18f;
+    const f32 half = f32(kCells) * kCell * 0.5f;
+    const f32 span = f32(kCells) * kCell;
+    const vec3 wall_col{0.80f, 0.72f, 0.40f}, carpet_col{0.50f, 0.45f, 0.28f}, ceiling_col{0.86f, 0.83f, 0.70f};
+    const vec3 base_col{0.42f, 0.33f, 0.18f};
+    u32 seed = 0x5EEDu;
+    auto rnd = [&seed] {
+        seed = seed * 1664525u + 1013904223u;
+        return f32(seed >> 8) / 16777216.0f;
+    };
+
+    Instance* rooms = dm.create("Model", ws, "Level0");
+    part(dm, rooms, "Carpet", {0, -0.05f, 0}, {span + 2, 0.1f, span + 2}, carpet_col, "Carpet");
+    part(dm, rooms, "Ceiling", {0, kHeight + 0.05f, 0}, {span + 2, 0.1f, span + 2}, ceiling_col, "CeilingTile");
+    // Outer walls.
+    for (int side = 0; side < 4; ++side) {
+        const bool x_axis = side < 2;
+        const f32 off = (side % 2 == 0 ? -1.0f : 1.0f) * (half + kWall * 0.5f);
+        const vec3 pos = x_axis ? vec3{0, kHeight * 0.5f, off} : vec3{off, kHeight * 0.5f, 0};
+        const vec3 size = x_axis ? vec3{span + 1, kHeight, kWall} : vec3{kWall, kHeight, span + 1};
+        part(dm, rooms, "OuterWall", pos, size, wall_col, "Wallpaper");
+    }
+    // Props modelled in Blender (tools/blender/make_backrooms_props.py), shipped in resources/models/backrooms.
+    auto prop = [&dm](Instance* parent, const char* name, const char* model, vec3 pos, f32 yaw) {
+        Instance* m = dm.create("MeshPart", parent, name);
+        m->set("MeshId", Value::string(std::string("builtin:models/backrooms/") + model + ".glb"));
+        m->set("Size", Value::vector3({1, 1, 1}));
+        m->set("Position", Value::vector3(pos));
+        m->set("Orientation", Value::vector3({0, yaw, 0}));
+        m->set("Anchored", Value::boolean(true));
+        return m;
+    };
+    // Interior walls on the cell edges: solid runs, doorways (frame + header above), some missing, a few pillars.
+    // Outlets near the floor and switches beside the doorways, on random faces.
+    Instance* walls = dm.create("Folder", rooms, "Walls");
+    Instance* fixtures = dm.create("Folder", rooms, "Fixtures");
+    constexpr f32 kDoor = 0.92f, kDoorH = 2.1f;
+    auto wall_run = [&](bool along_x, f32 x, f32 z, f32 a0, f32 a1) { // a0..a1 along the edge, from (x, z)
+        const f32 len = a1 - a0;
+        if (len <= 0.05f) return;
+        const f32 mid = (a0 + a1) * 0.5f;
+        const vec3 c = along_x ? vec3{x + mid, kHeight * 0.5f, z} : vec3{x, kHeight * 0.5f, z + mid};
+        const vec3 size = along_x ? vec3{len, kHeight, kWall} : vec3{kWall, kHeight, len};
+        part(dm, walls, "Wall", c, size, wall_col, "Wallpaper");
+        const vec3 bsize = along_x ? vec3{len, 0.12f, kWall + 0.03f} : vec3{kWall + 0.03f, 0.12f, len};
+        part(dm, walls, "Baseboard", {c.x, 0.06f, c.z}, bsize, base_col, "Wood");
+        if (len > 1.5f && rnd() < 0.35f) {
+            const f32 side = rnd() < 0.5f ? -1.0f : 1.0f;
+            const f32 at = a0 + 0.4f + rnd() * (len - 0.8f);
+            const f32 off = side * (kWall * 0.5f + 0.001f);
+            // Plate fronts face the prop's -Z: yaw turns them towards the room on that side.
+            const vec3 p = along_x ? vec3{x + at, 0.32f, z + off} : vec3{x + off, 0.32f, z + at};
+            const f32 yaw = along_x ? (side > 0 ? 180.0f : 0.0f) : (side > 0 ? -90.0f : 90.0f);
+            prop(fixtures, "Outlet", "outlet", p, yaw);
+        }
+    };
+    auto edge = [&](bool along_x, f32 x, f32 z) {
+        const f32 r = rnd();
+        if (r < 0.5f) return; // open
+        if (r < 0.78f) {      // solid
+            wall_run(along_x, x, z, -kWall * 0.5f, kCell + kWall * 0.5f);
+            return;
+        }
+        // Doorway somewhere along the edge.
+        const f32 d0 = 0.5f + rnd() * (kCell - kDoor - 1.0f), d1 = d0 + kDoor;
+        wall_run(along_x, x, z, -kWall * 0.5f, d0);
+        wall_run(along_x, x, z, d1, kCell + kWall * 0.5f);
+        const f32 dm_ = (d0 + d1) * 0.5f;
+        const vec3 head =
+            along_x ? vec3{x + dm_, (kHeight + kDoorH) * 0.5f, z} : vec3{x, (kHeight + kDoorH) * 0.5f, z + dm_};
+        const vec3 hsize = along_x ? vec3{kDoor, kHeight - kDoorH, kWall} : vec3{kWall, kHeight - kDoorH, kDoor};
+        part(dm, walls, "Header", head, hsize, wall_col, "Wallpaper");
+        prop(fixtures, "DoorFrame", "door_frame", along_x ? vec3{x + dm_, 0, z} : vec3{x, 0, z + dm_},
+             along_x ? 0.0f : 90.0f);
+        if (rnd() < 0.5f) {
+            const f32 side = rnd() < 0.5f ? -1.0f : 1.0f, off = side * (kWall * 0.5f + 0.001f);
+            const f32 at = d1 + 0.18f;
+            if (at < kCell - 0.1f) {
+                const vec3 p = along_x ? vec3{x + at, 1.2f, z + off} : vec3{x + off, 1.2f, z + at};
+                const f32 yaw = along_x ? (side > 0 ? 180.0f : 0.0f) : (side > 0 ? -90.0f : 90.0f);
+                prop(fixtures, "Switch", "switch", p, yaw);
+            }
+        }
+    };
+    for (int gx = 0; gx <= kCells; ++gx)
+        for (int gz = 0; gz <= kCells; ++gz) {
+            const f32 x = -half + f32(gx) * kCell, z = -half + f32(gz) * kCell;
+            const bool border_x = gx == 0 || gx == kCells, border_z = gz == 0 || gz == kCells;
+            if (gx < kCells && !border_z) edge(true, x, z);
+            if (gz < kCells && !border_x) edge(false, x, z);
+            if (!border_x && !border_z && rnd() < 0.06f)
+                part(dm, walls, "Pillar", {x, kHeight * 0.5f, z}, {0.5f, kHeight, 0.5f}, wall_col, "Wallpaper");
+        }
+    // Fluorescent troffers: one per cell, a few dead, some flickering (a Neon lens over the fixture lets the script
+    // switch it); return-air vents and the odd abandoned chair.
+    Instance* lights = dm.create("Folder", rooms, "Lights");
+    for (int cx = 0; cx < kCells; ++cx)
+        for (int cz = 0; cz < kCells; ++cz) {
+            const f32 x = -half + (f32(cx) + 0.5f) * kCell, z = -half + (f32(cz) + 0.5f) * kCell;
+            const f32 r = rnd();
+            const bool dead = r < 0.06f, flicker = !dead && r < 0.12f;
+            const f32 yaw = rnd() < 0.5f ? 0.0f : 90.0f;
+            Instance* fixture =
+                prop(lights, "Troffer", "troffer", {x, kHeight - 0.013f, z}, yaw); // lens just below the tiles
+            fixture->set("CastShadow", Value::boolean(false));
+            Instance* holder = fixture;
+            if (dead || flicker) {
+                Instance* lens =
+                    part(dm, fixture, "Lens", {x, kHeight - 0.016f, z},
+                         yaw == 0.0f ? vec3{0.54f, 0.004f, 1.16f} : vec3{1.16f, 0.004f, 0.54f},
+                         dead ? vec3{0.32f, 0.31f, 0.27f} : vec3{1.0f, 0.95f, 0.8f}, dead ? "SmoothPlastic" : "Neon");
+                lens->set("CastShadow", Value::boolean(false));
+                holder = lens;
+            }
+            if (!dead) {
+                // The light hangs 25 cm under the fixture (an invisible part) so the tiles around it catch light too.
+                Instance* src = part(dm, holder, "Source", {x, kHeight - 0.25f, z}, {0.1f, 0.1f, 0.1f}, {1, 1, 1});
+                src->set("Transparency", Value::number(1.0));
+                src->set("CanCollide", Value::boolean(false));
+                src->set("CastShadow", Value::boolean(false));
+                Instance* lamp = dm.create("PointLight", src, "Light");
+                lamp->set("Color", Value::color3({1.0f, 0.93f, 0.76f}));
+                lamp->set("Brightness", Value::number(3.4 + rnd() * 0.8));
+                lamp->set("Range", Value::number(11.0));
+                if (flicker) script(dm, holder, "Script", "Flicker", kFlicker);
+            }
+            if (rnd() < 0.18f) {
+                const f32 vx = x + (rnd() < 0.5f ? -1.6f : 1.6f), vz = z + (rnd() - 0.5f) * 2.0f;
+                prop(fixtures, "Vent", "vent", {vx, kHeight - 0.006f, vz}, rnd() < 0.5f ? 0.0f : 90.0f);
+            }
+            if (rnd() < 0.03f)
+                prop(fixtures, "Chair", "chair", {x + (rnd() - 0.5f) * 3.0f, 0, z + (rnd() - 0.5f) * 3.0f},
+                     rnd() * 360.0f);
+        }
+    // Spawn on the carpet, nearly invisible.
+    Instance* s = part(dm, ws, "SpawnLocation", {kCell * 0.5f, 0.02f, kCell * 0.5f}, {3, 0.04f, 3}, carpet_col,
+                       "Carpet", "SpawnLocation");
+    (void)s;
+    sound(dm, ws, "Hum", "builtin:hum_loop", 0.35f, true, true);
+    // Lighting: no daylight, warm bounce light, a faint haze that swallows the distance.
+    Instance* l = dm.service("Lighting");
+    l->set("ClockTime", Value::number(14.0));
+    l->set("CloudCover", Value::number(0.0));
+    l->set("SunBrightness", Value::number(0.0));
+    l->set("EnvironmentDiffuseScale", Value::number(0.0));
+    l->set("IndoorAmbient", Value::color3({1.0f, 0.88f, 0.58f}));
+    l->set("IndoorAmbientBrightness", Value::number(0.22));
+    l->set("ExposureCompensation", Value::number(7.5));
+    l->set("FogDensity", Value::number(0.035));
+    l->set("FogHeightFalloff", Value::number(0.0));
+    l->set("Saturation", Value::number(0.95));
+    l->set("Contrast", Value::number(1.0));
+}
+
 const std::vector<TemplateInfo> kTemplates = {
     {"baseplate", "Baseplate", "A grey baseplate and a spawn: the usual starting point.", "Basic"},
     {"classic_baseplate", "Classic Baseplate", "The bright green baseplate of old-school games.", "Basic"},
@@ -521,6 +713,7 @@ const std::vector<TemplateInfo> kTemplates = {
     {"meadow", "Meadow", "Rolling grassland covered in tall grass and wildflowers that sway in the wind.",
      "Environment"},
     {"valley", "Valley", "Misty forest valley with trees, grass and morning light.", "Environment"},
+    {"backrooms", "Backrooms", "Endless yellow rooms, damp carpet and buzzing fluorescent lights.", "Environment"},
 };
 
 } // namespace
@@ -546,6 +739,8 @@ bool build_template(std::string_view id, DataModel& dm) {
         build_beach(dm);
     else if (id == "valley")
         build_valley(dm);
+    else if (id == "backrooms")
+        build_backrooms(dm);
     else if (id == "meadow")
         build_meadow(dm);
     else

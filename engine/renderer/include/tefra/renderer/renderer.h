@@ -56,6 +56,9 @@ struct RenderSettings {
     vec3 sun_color{1.0f, 0.86f, 0.70f};                         // normalized to luminance 1 internally
     f32 sun_illuminance = 30000.0f;                             // lux
     f32 ibl_intensity = 1.0f;
+    f32 sun_scale = 1.0f;           // multiplies the sun / moon light (0 = interiors without daylight)
+    vec3 ambient{0.0f, 0.0f, 0.0f}; // flat indoor/bounce irradiance (lux): interiors lit by local lights
+    u32 max_lights = 64;            // nearest local lights shaded per frame
     // Height fog (spec 2 §2). density = 0 disables.
     f32 fog_density = 0.0f;  // 1/m at fog_height
     f32 fog_falloff = 0.02f; // 1/m
@@ -167,6 +170,8 @@ class Renderer {
         rhi::Buffer veg_visible, veg_shadow_visible, veg_cmds, veg_shadow_cmds;
         rhi::Buffer particles;
         u32 particle_capacity = 0;
+        rhi::Buffer lights;
+        u32 light_capacity = 0;
         rhi::Buffer exposure; // ExposureState (auto exposure); per slot so it is fenced like the other buffers
         u32 veg_capacity = 0;
         rhi::Buffer grass_cells;    // visible cell list (host-written each frame)

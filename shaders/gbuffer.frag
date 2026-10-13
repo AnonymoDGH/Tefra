@@ -117,7 +117,11 @@ void main() {
     float a2 = rough * rough * rough * rough;
     a2 = clamp(a2 + min(2.0 * variance, 0.18), 0.0, 1.0);
     rough = sqrt(sqrt(a2));
-    float emissive = 0.0;
+    // Emission (Neon parts, glTF emissive): strength 0..1 in the G-buffer, its colour replaces the albedo there.
+    vec3 emit = m.emissive_cutoff.rgb;
+    if (m.emissive_tex != 0xFFFFFFFFu && dot(emit, emit) > 0.0) emit *= texture(TEX2D(m.emissive_tex, SMP_ANISO_REPEAT), v_uv).rgb;
+    float emissive = clamp(max(emit.r, max(emit.g, emit.b)), 0.0, 1.0);
+    if (emissive > 0.0) base.rgb = mix(base.rgb, emit / max(emissive, 1e-4), emissive);
     o_albedo = vec4(base.rgb, ao);
     o_normal = vec4(oct_encode01(N), rough, (m.flags & 1u) != 0u ? 1.0 / 3.0 : 0.0);
     o_material = vec4(metal, m.translucency, emissive, 0.0);

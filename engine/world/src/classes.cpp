@@ -50,10 +50,11 @@ struct Builder {
 } // namespace
 
 void register_builtin_classes(ClassRegistry& r) {
-    const EnumInfo* material = r.add_enum(
-        "Material", {"Plastic", "SmoothPlastic", "Wood",    "WoodPlanks", "Metal", "DiamondPlate", "Concrete",
-                     "Brick",   "Cobblestone",   "Granite", "Marble",     "Slate", "Sand",         "Grass",
-                     "Ground",  "Rock",          "Ice",     "Glass",      "Neon",  "Fabric",       "Foil"});
+    const EnumInfo* material =
+        r.add_enum("Material", {"Plastic",  "SmoothPlastic", "Wood",        "WoodPlanks", "Metal",  "DiamondPlate",
+                                "Concrete", "Brick",         "Cobblestone", "Granite",    "Marble", "Slate",
+                                "Sand",     "Grass",         "Ground",      "Rock",       "Ice",    "Glass",
+                                "Neon",     "Fabric",        "Foil",        "Wallpaper",  "Carpet", "CeilingTile"});
     const EnumInfo* shape = r.add_enum("PartType", {"Block", "Ball", "Cylinder", "Wedge"});
     const EnumInfo* terrain_kind = r.add_enum("TerrainKind", {"None", "Valley", "Coast", "Plains"});
     const EnumInfo* script_ctx = r.add_enum("RunContext", {"Server", "Client"});
@@ -95,6 +96,11 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("ExposureCompensation", Value::number(0.0), "EV added to the automatic exposure.");
     b.prop("Saturation", Value::number(1.05), "Colour grading saturation.");
     b.prop("Contrast", Value::number(1.05), "Colour grading contrast.");
+    b.group("Interior")
+        .prop("SunBrightness", Value::number(1.0), "Multiplies the sun and moon light (0 for interiors).");
+    b.prop("EnvironmentDiffuseScale", Value::number(1.0), "Sky light on surfaces (0 for closed interiors).");
+    b.prop("IndoorAmbient", Value::color3({0, 0, 0}), "Flat bounce light colour for interiors.");
+    b.prop("IndoorAmbientBrightness", Value::number(0.0), "Strength of IndoorAmbient (lux / 100).");
 
     // Sky objects inside Lighting (Insert menu, category Environment). Defaults give the look of the Lighting alone.
     const EnumInfo* skybox_mode = r.add_enum("SkyboxMode", {"Procedural", "Cubemap", "HDRI"});
