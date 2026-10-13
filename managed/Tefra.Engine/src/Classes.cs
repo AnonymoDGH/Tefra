@@ -9,7 +9,7 @@ namespace Tefra
     public enum Material
     {
         Plastic, SmoothPlastic, Wood, WoodPlanks, Metal, DiamondPlate, Concrete, Brick, Cobblestone, Granite,
-        Marble, Slate, Sand, Grass, Ground, Rock, Ice, Glass, Neon, Fabric, Foil, Wallpaper, Carpet, CeilingTile
+        Marble, Slate, Sand, Grass, Ground, Rock, Ice, Glass, Neon, Fabric, Foil, Wallpaper, Carpet, CeilingTile, Facade, Asphalt
     }
 
     public enum PartType

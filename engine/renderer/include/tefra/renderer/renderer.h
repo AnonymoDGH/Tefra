@@ -58,7 +58,8 @@ struct RenderSettings {
     f32 ibl_intensity = 1.0f;
     f32 sun_scale = 1.0f;           // multiplies the sun / moon light (0 = interiors without daylight)
     vec3 ambient{0.0f, 0.0f, 0.0f}; // flat indoor/bounce irradiance (lux): interiors lit by local lights
-    u32 max_lights = 64;            // nearest local lights shaded per frame
+    bool ssr = true;                // screen-space reflections on glossy surfaces (needs TAA history)
+    u32 max_lights = 512;           // nearest visible local lights per frame (tiled: 64 per 16x16 tile)
     // Height fog (spec 2 §2). density = 0 disables.
     f32 fog_density = 0.0f;  // 1/m at fog_height
     f32 fog_falloff = 0.02f; // 1/m
@@ -69,6 +70,11 @@ struct RenderSettings {
     f32 cloud_altitude = 1600.0f; // m
     f32 cloud_size = 2200.0f;     // m: size of the cloud features
     // Volumetric clouds (raymarched at reduced resolution, composited behind the scene). Off: the 2D layer.
+    // Rain (Lighting.Rain): wet surfaces, puddles with drop rings, falling streaks around the camera.
+    f32 wetness = 0.0f, puddles = 0.0f, rain = 0.0f;
+    vec3 rain_wind{1.0f, 0.0f, 0.4f};
+    f32 rain_speed = 9.0f, rain_length = 0.45f;
+    u32 rain_drops = 16000; // streaks at intensity 1 (quality presets lower it)
     bool volumetric_clouds = false;
     f32 cloud_thickness = 1400.0f; // m
     u32 cloud_steps = 32;          // view ray samples (quality presets lower it)
@@ -177,6 +183,8 @@ class Renderer {
         u32 particle_capacity = 0;
         rhi::Buffer lights;
         u32 light_capacity = 0;
+        rhi::Buffer light_tiles;
+        u32 tile_capacity = 0;
         rhi::Buffer exposure; // ExposureState (auto exposure); per slot so it is fenced like the other buffers
         u32 veg_capacity = 0;
         rhi::Buffer grass_cells;    // visible cell list (host-written each frame)
@@ -202,7 +210,7 @@ class Renderer {
     VkPipeline p_skyview_ = VK_NULL_HANDLE, p_terrain_ = VK_NULL_HANDLE, p_terrain_shadow_ = VK_NULL_HANDLE;
     VkPipeline p_veg_ = VK_NULL_HANDLE, p_veg_2s_ = VK_NULL_HANDLE, p_veg_shadow_ = VK_NULL_HANDLE,
                p_veg_cull_ = VK_NULL_HANDLE, p_water_ = VK_NULL_HANDLE, p_particles_ = VK_NULL_HANDLE,
-               p_clouds_ = VK_NULL_HANDLE;
+               p_clouds_ = VK_NULL_HANDLE, p_light_cull_ = VK_NULL_HANDLE, p_rain_ = VK_NULL_HANDLE;
     bool cpu_veg_cull_ = false; // legacy AMD drivers: vegetation culled on the CPU (TEFRA_GPU_CULL=0/1 forces)
     rhi::Buffer veg_cmd_template_;
     std::unique_ptr<CanopyMap> canopy_;

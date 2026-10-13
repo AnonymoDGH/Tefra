@@ -120,6 +120,14 @@ void sky_settings(const DataModel& dm, render::RenderSettings& s) {
         s.sky_glare = clamp(a->get_float("Glare", 0.0f), 0.0f, 10.0f);
     }
 
+    s.wetness = s.puddles = s.rain = 0.0f;
+    if (const Instance* r = child(dm, "Rain"); r && r->get_bool("Enabled", true)) {
+        s.rain = clamp(r->get_float("Intensity", 0.7f), 0.0f, 1.0f);
+        s.wetness = clamp(r->get_float("Wetness", 0.85f), 0.0f, 1.0f);
+        s.puddles = clamp(r->get_float("Puddles", 0.5f), 0.0f, 1.0f);
+        s.rain_wind = r->get_vec3("Wind", vec3{1.5f, 0.0f, 0.5f});
+        s.rain_speed = clamp(r->get_float("DropSpeed", 9.0f), 1.0f, 40.0f);
+    }
     if (const Instance* c = child(dm, "Clouds")) {
         s.cloud_coverage = c->get_bool("Enabled", true) ? clamp(c->get_float("Cover", 0.3f), 0.0f, 1.0f) : 0.0f;
         s.cloud_density = clamp(c->get_float("Density", 1.0f), 0.0f, 10.0f);

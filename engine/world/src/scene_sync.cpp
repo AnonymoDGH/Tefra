@@ -45,6 +45,8 @@ MaterialLook material_look(u32 m) {
         {0.92f, 0.0f, 0.0f}, // Wallpaper
         {1.0f, 0.0f, 0.0f},  // Carpet
         {0.95f, 0.0f, 0.0f}, // CeilingTile
+        {0.85f, 0.0f, 0.0f}, // Facade
+        {0.9f, 0.0f, 0.0f},  // Asphalt
     };
     return m < std::size(table) ? table[m] : table[0];
 }

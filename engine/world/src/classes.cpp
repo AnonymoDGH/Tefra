@@ -54,7 +54,8 @@ void register_builtin_classes(ClassRegistry& r) {
         r.add_enum("Material", {"Plastic",  "SmoothPlastic", "Wood",        "WoodPlanks", "Metal",  "DiamondPlate",
                                 "Concrete", "Brick",         "Cobblestone", "Granite",    "Marble", "Slate",
                                 "Sand",     "Grass",         "Ground",      "Rock",       "Ice",    "Glass",
-                                "Neon",     "Fabric",        "Foil",        "Wallpaper",  "Carpet", "CeilingTile"});
+                                "Neon",     "Fabric",        "Foil",        "Wallpaper",  "Carpet", "CeilingTile",
+                                "Facade",   "Asphalt"});
     const EnumInfo* shape = r.add_enum("PartType", {"Block", "Ball", "Cylinder", "Wedge"});
     const EnumInfo* terrain_kind = r.add_enum("TerrainKind", {"None", "Valley", "Coast", "Plains"});
     const EnumInfo* script_ctx = r.add_enum("RunContext", {"Server", "Client"});
@@ -146,6 +147,15 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("Thickness", Value::number(1400.0), "Vertical extent of volumetric clouds (m).");
     b.group("Wind").prop("WindSpeed", Value::number(6.0), "Drift speed (m/s).");
     b.prop("WindDirection", Value::number(16.7), "Drift direction (degrees; 0 = +X, 90 = +Z).");
+
+    b.cls("Rain", "Instance", "Rain over the place: falling streaks, wet glossy surfaces and puddles with drop rings.",
+          "Environment");
+    b.group("Appearance").prop("Enabled", Value::boolean(true), "Rains.");
+    b.prop("Intensity", Value::number(0.7), "Amount of rain (0-1): streak count and drop rings.");
+    b.prop("Wetness", Value::number(0.85), "How wet surfaces look (0-1): darker, glossier.");
+    b.prop("Puddles", Value::number(0.5), "Standing water on flat ground (0-1).");
+    b.prop("Wind", Value::vector3({1.5f, 0.0f, 0.5f}), "Wind tilting the rain (m/s).");
+    b.prop("DropSpeed", Value::number(9.0), "Fall speed (m/s).");
 
     b.cls("ReplicatedStorage", "Instance", "Storage shared by server and clients (templates, modules).").service();
     b.cls("ServerScriptService", "Instance", "Server scripts that are not attached to world objects.").service();

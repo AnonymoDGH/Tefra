@@ -41,6 +41,8 @@ float fbm3(vec3 p) {
 
 #include "common/surface.glsl"
 
+float emissive_hint(Material m) { return max(m.emissive_cutoff.r, max(m.emissive_cutoff.g, m.emissive_cutoff.b)); }
+
 void main() {
     Material m = pc.materials.m[v_material];
     vec4 base = texture(TEX2D(m.base_color_tex, SMP_ANISO_REPEAT), v_uv) * m.base_color;
@@ -88,7 +90,9 @@ void main() {
     const vec3 P = v_pos + pc.frame.f.camera_pos.xyz;
     const float footprint = length(fwidth(P));
     float surf_h = 0.0;
+    vec3 surf_emit = vec3(0.0);
     const bool surf = (m.flags & kFlagSurface) != 0u;
+    g_surface_time = pc.frame.f.camera_pos.w;
     if (surf) {
         const vec3 ng = gl_FrontFacing ? normalize(v_normal) : -normalize(v_normal);
         const Surface sp = surface_pattern(m.pad1, P, ng, footprint);
@@ -96,6 +100,45 @@ void main() {
         rough = clamp(rough * sp.rough, 0.02, 1.0);
         ao *= sp.ao;
         surf_h = sp.height;
+        surf_emit = sp.emit;
+    }
+
+    // Rain (Lighting.Rain): wet surfaces darken and turn glossy; standing water collects in puddles on flat ground,
+    // mirror-smooth, with rings from the drops.
+    const vec4 weather = pc.frame.f.weather;
+    float puddle = 0.0;
+    vec3 ripple = vec3(0.0);
+    if (weather.x > 0.0 && (m.flags & 1u) == 0u && emissive_hint(m) == 0.0) {
+        const vec3 ngw = gl_FrontFacing ? normalize(v_normal) : -normalize(v_normal);
+        const float up = smoothstep(0.75, 0.97, ngw.y);
+        const float porous = 1.0 - metal;
+        float pn = fbm3(vec3(P.x * 0.21, 0.0, P.z * 0.21)) + 0.12 * value_noise(vec3(P.x * 1.7, 2.0, P.z * 1.7));
+        float th = 1.0 - weather.y * 0.55;
+        puddle = up * smoothstep(th - 0.06, th + 0.04, pn) * weather.x;
+        float wet = weather.x * mix(0.65, 1.0, up);
+        base.rgb *= mix(1.0, mix(0.55, 0.4, puddle), wet * porous);
+        rough = mix(rough, mix(0.2, 0.025, puddle), wet);
+        // Water fills the relief.
+        tn = mix(tn, vec3(0.0, 0.0, 1.0), puddle);
+        surf_h *= 1.0 - puddle;
+        if (weather.z > 0.0 && puddle > 0.05) {
+            // Drop rings: a 2x2 neighbourhood of 30 cm cells, each with its own phase.
+            vec2 q = P.xz / 0.3;
+            vec2 ci = floor(q);
+            for (int j = -1; j <= 1; ++j)
+                for (int i = -1; i <= 1; ++i) {
+                    vec2 c = ci + vec2(i, j);
+                    float h = hash13(vec3(c, 7.0));
+                    float t = fract(pc.frame.f.camera_pos.w * (0.9 + 0.6 * h) + h * 13.0);
+                    vec2 ctr = c + vec2(hash13(vec3(c, 1.0)), hash13(vec3(c, 2.0)));
+                    vec2 dv = q - ctr;
+                    float r = length(dv);
+                    float ring = t * 1.2;
+                    float a = (1.0 - t) * exp(-pow((r - ring) * 10.0, 2.0)) * step(h, weather.z);
+                    ripple.xz += dv / max(r, 1e-3) * a * cos((r - ring) * 30.0) * 0.35;
+                }
+            ripple *= puddle;
+        }
     }
 
     if ((m.flags & 8u) != 0u) ao *= nsamp.a; // needles: depth AO baked into the normal map's alpha
@@ -106,6 +149,7 @@ void main() {
     vec3 B = cross(N, T) * (v_tangent.w < 0.0 ? -1.0 : 1.0);
     N = normalize(T * tn.x + B * tn.y + N * max(tn.z, 1e-3));
     if (surf) N = bump_from_height(N, P, surf_h, 1.0);
+    if (puddle > 0.0) N = normalize(mix(N, Ng, puddle) + ripple);
     // Moss: rough and non-metallic, so it has almost no specular.
     rough = mix(rough, 0.95, moss);
     metal = mix(metal, 0.0, moss);
@@ -120,6 +164,7 @@ void main() {
     // Emission (Neon parts, glTF emissive): strength 0..1 in the G-buffer, its colour replaces the albedo there.
     vec3 emit = m.emissive_cutoff.rgb;
     if (m.emissive_tex != 0xFFFFFFFFu && dot(emit, emit) > 0.0) emit *= texture(TEX2D(m.emissive_tex, SMP_ANISO_REPEAT), v_uv).rgb;
+    emit += surf_emit;
     float emissive = clamp(max(emit.r, max(emit.g, emit.b)), 0.0, 1.0);
     if (emissive > 0.0) base.rgb = mix(base.rgb, emit / max(emissive, 1e-4), emissive);
     o_albedo = vec4(base.rgb, ao);

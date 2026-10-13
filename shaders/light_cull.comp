@@ -1,0 +1,86 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common/gpu_types.glsl"
+#include "common/bindless.glsl"
+// Tiled light culling (Harada 2012 "Forward+"; Olsson 2011): one workgroup per 16x16 pixel tile. The tile's depth
+// range comes from the depth buffer; a light is kept when its sphere touches the tile's frustum slice. Output per
+// tile: [count, index0 .. index63] (indices into the frame's light list, nearest first).
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer TileBuffer { uint v[]; };
+layout(push_constant) uniform Push {
+    FrameBuffer frame; LightBuffer lights; TileBuffer tiles; uint depth; uint count; uint tiles_x; uint tiles_y;
+} pc;
+
+const uint kMaxTileLights = 64u;
+shared uint s_min, s_max, s_count;
+shared uint s_list[kMaxTileLights];
+
+void main() {
+    Frame f = pc.frame.f;
+    uint tid = gl_LocalInvocationIndex;
+    if (tid == 0u) {
+        s_min = 0x7F7FFFFFu; // max float bits
+        s_max = 0u;
+        s_count = 0u;
+    }
+    barrier();
+    ivec2 size = textureSize(TEX2D(pc.depth, SMP_NEAREST_CLAMP), 0);
+    ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    if (px.x < size.x && px.y < size.y) {
+        float d = texelFetch(TEX2D(pc.depth, SMP_NEAREST_CLAMP), px, 0).r; // reverse-Z: 0 = sky
+        atomicMin(s_min, floatBitsToUint(d));
+        atomicMax(s_max, floatBitsToUint(d));
+    }
+    barrier();
+    // View distances of the tile's nearest and farthest pixel (sky = unbounded).
+    float dmax = uintBitsToFloat(s_max), dmin = uintBitsToFloat(s_min);
+    float near_d = dmax > 0.0 ? f.proj[3][2] / (dmax + f.proj[2][2]) : 1e9;
+    float far_d = dmin > 0.0 ? f.proj[3][2] / (dmin + f.proj[2][2]) : 1e9;
+    // Side planes through the camera and the tile corners (camera-relative world space).
+    vec2 inv = 1.0 / vec2(size);
+    vec2 t0 = vec2(gl_WorkGroupID.xy * 16u) * inv * 2.0 - 1.0;
+    vec2 t1 = vec2(gl_WorkGroupID.xy * 16u + 16u) * inv * 2.0 - 1.0;
+    vec4 c00 = f.inv_view_proj * vec4(t0.x, t0.y, 1.0, 1.0);
+    vec4 c10 = f.inv_view_proj * vec4(t1.x, t0.y, 1.0, 1.0);
+    vec4 c11 = f.inv_view_proj * vec4(t1.x, t1.y, 1.0, 1.0);
+    vec4 c01 = f.inv_view_proj * vec4(t0.x, t1.y, 1.0, 1.0);
+    vec3 p00 = c00.xyz / c00.w, p10 = c10.xyz / c10.w, p11 = c11.xyz / c11.w, p01 = c01.xyz / c01.w;
+    vec3 center = p00 + p10 + p11 + p01;
+    vec3 planes[4] = vec3[](normalize(cross(p00, p10)), normalize(cross(p10, p11)), normalize(cross(p11, p01)),
+                            normalize(cross(p01, p00)));
+    for (int k = 0; k < 4; ++k)
+        if (dot(planes[k], center) < 0.0) planes[k] = -planes[k];
+    vec3 fwd = -vec3(f.view[0][2], f.view[1][2], f.view[2][2]);
+    for (uint i = tid; i < pc.count; i += 256u) {
+        LightGPU l = pc.lights.l[i];
+        vec3 c = l.pos_range.xyz;
+        float r = l.pos_range.w;
+        float vd = dot(c, fwd);
+        if (vd + r < near_d * 0.98 || vd - r > far_d * 1.02) continue;
+        bool inside = true;
+        for (int k = 0; k < 4 && inside; ++k)
+            if (dot(planes[k], c) < -r) inside = false;
+        if (!inside) continue;
+        uint slot = atomicAdd(s_count, 1u);
+        if (slot < kMaxTileLights) s_list[slot] = i;
+    }
+    barrier();
+    uint tile = gl_WorkGroupID.y * pc.tiles_x + gl_WorkGroupID.x;
+    uint base = tile * (kMaxTileLights + 1u);
+    uint n = min(s_count, kMaxTileLights);
+    if (tid == 0u) pc.tiles.v[base] = n;
+    // Keep nearest-first order (atomics scrambled it): a small insertion sort by index (the list is nearest first).
+    if (tid == 0u) {
+        for (uint a = 1u; a < n; ++a) {
+            uint x = s_list[a];
+            int b = int(a) - 1;
+            while (b >= 0 && s_list[b] > x) {
+                s_list[b + 1] = s_list[b];
+                --b;
+            }
+            s_list[b + 1] = x;
+        }
+    }
+    barrier();
+    if (tid < n) pc.tiles.v[base + 1u + tid] = s_list[tid];
+}

@@ -9,8 +9,9 @@
 #include "common/shadow.glsl"
 #include "common/clouds.glsl"
 #include "common/sky.glsl"
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer TileBuffer { uint v[]; };
 layout(push_constant) uniform Push {
-    FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; uint ao; uint vol; LightBuffer lights; uint light_count; uint clouds;
+    FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; uint ao; uint vol; LightBuffer lights; uint light_count; uint clouds; TileBuffer tiles; uint tiles_x; uint history;
 } pc;
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
@@ -154,6 +155,72 @@ vec3 sky_color(Frame f, vec3 dir) {
     return mix(L, cl.rgb, cl.a);
 }
 
+// Screen-space reflections: march the reflected ray through the depth buffer, read the hit from last frame's
+// resolved image (reprojected). Returns radiance (not exposed); conf = how much to trust it.
+vec3 ssr_trace(Frame f, vec3 p, vec3 N, vec3 V, float rough, float jitter, out float conf) {
+    conf = 0.0;
+    vec3 R = reflect(-V, N);
+    const int kSteps = 20;
+    const float kMax = 40.0;
+    vec3 start = p + N * 0.03;
+    float prev_t = 0.0;
+    for (int i = 1; i <= kSteps; ++i) {
+        float s = (float(i) - 1.0 + jitter) / float(kSteps);
+        float t = kMax * s * s + 0.05; // finer steps near the surface
+        vec3 q = start + R * t;
+        vec4 cq = f.view_proj * vec4(q, 1.0);
+        if (cq.w <= 0.0) return vec3(0.0);
+        vec2 uv = cq.xy / cq.w * 0.5 + 0.5;
+        if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec3(0.0);
+        float sd = textureLod(TEX2D(pc.depth, SMP_NEAREST_CLAMP), uv, 0.0).r;
+        float scene_vd = linear_depth(f, sd);
+        float ray_vd = cq.w;
+        float thick = 0.25 + 0.04 * ray_vd;
+        if (ray_vd > scene_vd + 0.02 && ray_vd - scene_vd < thick) {
+            // Binary refinement between the last miss and this hit.
+            float a = prev_t, b = t;
+            for (int k = 0; k < 4; ++k) {
+                float m = 0.5 * (a + b);
+                vec4 cm = f.view_proj * vec4(start + R * m, 1.0);
+                vec2 um = cm.xy / cm.w * 0.5 + 0.5;
+                float dm = linear_depth(f, textureLod(TEX2D(pc.depth, SMP_NEAREST_CLAMP), um, 0.0).r);
+                if (cm.w > dm + 0.02) b = m; else a = m;
+            }
+            vec3 hit = start + R * b;
+            vec4 pp = f.prev_view_proj * vec4(hit, 1.0);
+            vec2 puv = pp.xy / pp.w * 0.5 + 0.5;
+            if (any(lessThan(puv, vec2(0.0))) || any(greaterThan(puv, vec2(1.0)))) return vec3(0.0);
+            vec2 edge = smoothstep(vec2(0.0), vec2(0.08), puv) * smoothstep(vec2(0.0), vec2(0.08), 1.0 - puv);
+            conf = edge.x * edge.y * (1.0 - smoothstep(0.6, 1.0, s)) * (1.0 - smoothstep(0.15, 0.4, rough));
+            return textureLod(TEX2D(pc.history, SMP_LINEAR_CLAMP), puv, 0.0).rgb / max(f.exposure.x, 1e-8);
+        }
+        prev_t = t;
+    }
+    return vec3(0.0);
+}
+
+// Glow of the nearest local lights in the haze (analytic single scattering along the view ray: the integral of
+// 1 / distance^2 has a closed form), for when the raymarched fog is off. tmax: ray length (m).
+vec3 light_halos(Frame f, vec3 dir, float tmax) {
+    float sigma = max(f.fog.x, 0.0) * 1.5 + f.weather.z * 0.004; // rain makes the air glow too
+    if (sigma <= 0.0 || pc.light_count == 0u) return vec3(0.0);
+    vec3 sum = vec3(0.0);
+    uint n = min(pc.light_count, 16u);
+    for (uint i = 0u; i < n; ++i) {
+        LightGPU l = pc.lights.l[i];
+        vec3 c = l.pos_range.xyz;
+        float s0 = dot(c, dir);
+        float h2 = max(dot(c, c) - s0 * s0, 0.0) + 0.04;
+        float r = l.pos_range.w;
+        if (h2 > r * r) continue;
+        float h = sqrt(h2);
+        float integral = (atan((tmax - s0) / h) - atan(-s0 / h)) / h;
+        float fade = 1.0 - smoothstep(0.4 * r * r, r * r, h2);
+        sum += l.color.rgb * integral * fade;
+    }
+    return sum * sigma * (1.0 / (4.0 * BRDF_PI)) * 2.5;
+}
+
 // Sky with the volumetric clouds over it (reduced resolution, bilinear: clouds are soft).
 vec3 sky_with_clouds(Frame f, vec3 dir) {
     vec3 sky = sky_color(f, dir);
@@ -177,7 +244,7 @@ void main() {
             const vec4 vol = volumetric_upsample(f, depth, v_uv);
             o_color = vec4(min(apply_fog_volumetric(f, sky_with_clouds(f, dir), dir, 1e5, vol), vec3(60000.0)), 1.0);
         } else {
-            vec3 sky = apply_fog(f, sky_with_clouds(f, dir), dir, 1e5);
+            vec3 sky = apply_fog(f, sky_with_clouds(f, dir), dir, 1e5) + light_halos(f, dir, 400.0);
             o_color = vec4(min(sky * f.exposure.x, vec3(60000.0)), 1.0); // pre-exposed
         }
         return;
@@ -249,8 +316,11 @@ void main() {
     }
 
     // Local lights (PointLight / SpotLight): GGX + Lambert, windowed inverse-square falloff (Karis 2013).
-    for (uint i = 0u; i < pc.light_count; ++i) {
-        LightGPU lt = pc.lights.l[i];
+    // Tiled: only the lights of this pixel's 16x16 tile (light_cull.comp).
+    uint tile_base = (uint(gl_FragCoord.y) / 16u * pc.tiles_x + uint(gl_FragCoord.x) / 16u) * 65u;
+    uint tile_n = pc.light_count > 0u ? pc.tiles.v[tile_base] : 0u;
+    for (uint ti = 0u; ti < tile_n; ++ti) {
+        LightGPU lt = pc.lights.l[pc.tiles.v[tile_base + 1u + ti]];
         vec3 dl = lt.pos_range.xyz - p;
         float d2 = dot(dl, dl);
         float range = lt.pos_range.w;
@@ -283,13 +353,19 @@ void main() {
     vec3 kd = diff_col * (1.0 - fss - fms * ems);
     float spec_occ = clamp(pow(ndv + ao, exp2(-16.0 * a - 1.0)) - 1.0 + ao, 0.0, 1.0);
     float canopy = canopy_visibility(f, p);
-    color += (prefiltered * fss * spec_occ * spec_keep + (fms * ems + kd) * irradiance / BRDF_PI * ao) * f.exposure.y *
+    vec3 env_spec = prefiltered * f.exposure.y * canopy * amb_tint;
+    if (pc.history != 0xFFFFFFFFu && rough < 0.4) {
+        float conf;
+        vec3 refl = ssr_trace(f, p, N, V, rough, noise, conf);
+        env_spec = mix(env_spec, refl, conf);
+    }
+    color += env_spec * fss * spec_occ * spec_keep + (fms * ems + kd) * irradiance / BRDF_PI * ao * f.exposure.y *
              canopy * amb_tint;
     if (use_vol) {
         const vec4 vol = volumetric_upsample(f, depth, v_uv);
         o_color = vec4(min(apply_fog_volumetric(f, color, -V, length(p), vol), vec3(60000.0)), 1.0);
         return;
     }
-    color = apply_fog(f, color, -V, length(p));
+    color = apply_fog(f, color, -V, length(p)) + light_halos(f, -V, length(p));
     o_color = vec4(min(color * f.exposure.x, vec3(60000.0)), 1.0); // pre-exposed
 }
