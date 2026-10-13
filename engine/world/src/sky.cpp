@@ -127,6 +127,8 @@ void sky_settings(const DataModel& dm, render::RenderSettings& s) {
         s.cloud_altitude = max(c->get_float("Altitude", kDefaultCloudAltitude), 100.0f);
         s.cloud_size = max(c->get_float("Size", kDefaultCloudSize), 100.0f);
         s.cloud_wind = max(c->get_float("WindSpeed", 6.0f), 0.0f);
+        s.volumetric_clouds = c->get_bool("Volumetric", false);
+        s.cloud_thickness = clamp(c->get_float("Thickness", 1400.0f), 100.0f, 6000.0f);
         const f32 wd = radians(c->get_float("WindDirection", 16.7f));
         s.cloud_wind_dir = vec2{std::cos(wd), std::sin(wd)};
     } else {
@@ -135,6 +137,7 @@ void sky_settings(const DataModel& dm, render::RenderSettings& s) {
         s.cloud_altitude = kDefaultCloudAltitude;
         s.cloud_size = kDefaultCloudSize;
         s.cloud_wind = 6.0f;
+        s.volumetric_clouds = false;
         s.cloud_wind_dir = vec2{kDefaultCloudWindX, kDefaultCloudWindZ};
     }
 

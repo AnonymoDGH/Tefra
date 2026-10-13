@@ -307,3 +307,19 @@ Para clientes que solo hablan stdio (Claude Desktop) hay un puente, `tefra_mcp`;
   - La rueda hace zoom; con todo el zoom metido pasa a primera persona.
   - La cámara no atraviesa paredes y suaviza los escalones.
 - **Física fluida:** el personaje se dibuja interpolado entre pasos de física de 60 Hz, sin tirones a ningún framerate. Acelera y frena con inercia y gira con suavidad.
+
+## Nubes volumétricas (opcionales)
+- En `Lighting.Clouds` activa `Volumetric = true`. Son cúmulos 3D por raymarching: bases redondeadas, cimas en cúpula, bordes erosionados con ruido 3D.
+- Se iluminan con el sol (Beer-Powder, dispersión doble de Henyey-Greenstein), la luz del cielo y el rebote del suelo. Al atardecer los bordes se tiñen de naranja.
+- `Thickness` (m) es la altura de la capa. `Cover`, `Density`, `Color`, `Altitude`, `Size` y el viento funcionan igual que en las nubes 2D.
+- Coste: se calculan a resolución reducida y solo donde se ve el cielo. Los presets ajustan la resolución y los pasos:
+
+| Preset | Resolución | Pasos |
+|---|---|---|
+| Low | 1/4 | 14 |
+| Medium | 1/4 | 20 |
+| High | 1/2 | 32 |
+| Ultra | 1/2 | 48 |
+
+- Con `Volumetric = false` (por defecto) se usa la capa 2D, más barata.
+- Captura: `docs/captures/volumetric-clouds.png`.

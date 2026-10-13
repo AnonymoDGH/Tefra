@@ -10,7 +10,7 @@
 #include "common/clouds.glsl"
 #include "common/sky.glsl"
 layout(push_constant) uniform Push {
-    FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; uint ao; uint vol; LightBuffer lights; uint light_count; uint pad;
+    FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; uint ao; uint vol; LightBuffer lights; uint light_count; uint clouds;
 } pc;
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
@@ -123,6 +123,7 @@ vec3 sky_color(Frame f, vec3 dir) {
     if (f.atmo.skyview_lut == 0xFFFFFFFFu) {
         // Image sky (Cubemap / HDRI): the background image, with the cumulus over it.
         vec3 bg = textureLod(TEX2D(f.env_background, SMP_LINEAR_REPEAT), equirect_uv(dir), 0.0).rgb * f.exposure.y;
+        if (f.vclouds.x > 0.5) return bg; // volumetric clouds are composited in main()
         vec4 cl = clouds_eval(f, dir, bg);
         return mix(bg, cl.rgb, cl.a);
     }
@@ -148,8 +149,17 @@ vec3 sky_color(Frame f, vec3 dir) {
     }
     // Night: stars and the moon (sk_stars and sk_moon return 0 by day).
     L += sk_stars(f, dir) + sk_moon(f, dir);
+    if (f.vclouds.x > 0.5) return L; // volumetric clouds are composited in main()
     vec4 cl = clouds_eval(f, dir, L);
     return mix(L, cl.rgb, cl.a);
+}
+
+// Sky with the volumetric clouds over it (reduced resolution, bilinear: clouds are soft).
+vec3 sky_with_clouds(Frame f, vec3 dir) {
+    vec3 sky = sky_color(f, dir);
+    if (pc.clouds == 0xFFFFFFFFu) return sky;
+    vec4 c = textureLod(TEX2D(pc.clouds, SMP_LINEAR_CLAMP), v_uv, 0.0);
+    return sky * c.a + c.rgb;
 }
 
 void main() {
@@ -165,9 +175,9 @@ void main() {
         vec3 dir = -V;
         if (use_vol) {
             const vec4 vol = volumetric_upsample(f, depth, v_uv);
-            o_color = vec4(min(apply_fog_volumetric(f, sky_color(f, dir), dir, 1e5, vol), vec3(60000.0)), 1.0);
+            o_color = vec4(min(apply_fog_volumetric(f, sky_with_clouds(f, dir), dir, 1e5, vol), vec3(60000.0)), 1.0);
         } else {
-            vec3 sky = apply_fog(f, sky_color(f, dir), dir, 1e5);
+            vec3 sky = apply_fog(f, sky_with_clouds(f, dir), dir, 1e5);
             o_color = vec4(min(sky * f.exposure.x, vec3(60000.0)), 1.0); // pre-exposed
         }
         return;

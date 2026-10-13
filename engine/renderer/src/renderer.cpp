@@ -50,7 +50,7 @@ struct LightingPush {
     VkDeviceAddress frame;
     u32 depth, rt0, rt1, rt2, ao, vol;
     VkDeviceAddress lights;
-    u32 light_count, pad;
+    u32 light_count, clouds; // clouds: volumetric cloud texture (0xFFFFFFFF = 2D layer)
 };
 struct VolumetricPush {
     VkDeviceAddress frame;
@@ -241,7 +241,7 @@ Renderer::~Renderer() {
          {p_gbuffer_,        p_gbuffer_2s_,  p_shadow_,   p_lighting_,   p_tonemap_,     p_skyview_,    p_terrain_,
           p_terrain_shadow_, p_veg_,         p_veg_2s_,   p_veg_shadow_, p_veg_cull_,    p_water_,      p_taa_,
           p_gtao_,           p_bloom_down_,  p_bloom_up_, p_expo_first_, p_expo_reduce_, p_expo_adapt_, p_volumetric_,
-          p_grass_,          p_grass_count_, p_ocean_,    p_ocean_copy_, p_skin_,        p_particles_})
+          p_grass_,          p_grass_count_, p_ocean_,    p_ocean_copy_, p_skin_,        p_particles_,  p_clouds_})
         if (p) vkDestroyPipeline(dev_.device(), p, nullptr);
     vkDestroyPipelineLayout(dev_.device(), layout_, nullptr);
 }
@@ -252,7 +252,7 @@ void Renderer::create_pipelines(VkFormat output_format) {
                           &p_veg_shadow_, &p_veg_cull_,   &p_water_,          &p_taa_,         &p_gtao_,
                           &p_bloom_down_, &p_bloom_up_,   &p_expo_first_,     &p_expo_reduce_, &p_expo_adapt_,
                           &p_volumetric_, &p_grass_,      &p_grass_count_,    &p_ocean_,       &p_ocean_copy_,
-                          &p_skin_,       &p_particles_}) {
+                          &p_skin_,       &p_particles_,  &p_clouds_}) {
         if (*p) vkDestroyPipeline(dev_.device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -282,6 +282,7 @@ void Renderer::create_pipelines(VkFormat output_format) {
     VkShaderModule taa_fs = rhi::load_shader(dev_, "taa.frag");
     VkShaderModule gtao_fs = rhi::load_shader(dev_, "gtao.frag");
     VkShaderModule volumetric_fs = rhi::load_shader(dev_, "volumetric.frag");
+    VkShaderModule clouds_fs = rhi::load_shader(dev_, "clouds_vol.frag");
     VkShaderModule bloom_down_fs = rhi::load_shader(dev_, "bloom_down.frag");
     VkShaderModule bloom_up_fs = rhi::load_shader(dev_, "bloom_up.frag");
     VkShaderModule expo_first_fs = rhi::load_shader(dev_, "exposure_first.frag");
@@ -395,6 +396,9 @@ void Renderer::create_pipelines(VkFormat output_format) {
     ta.render_pass = rp_v.pass;
     ta.name = "volumetric";
     p_volumetric_ = rhi::create_graphics_pipeline(dev_, ta);
+    ta.fs = clouds_fs;
+    ta.name = "clouds";
+    p_clouds_ = rhi::create_graphics_pipeline(dev_, ta);
 
     auto rp_b = compat_pass(dev_, {hdr_format_}, VK_FORMAT_UNDEFINED);
     rhi::GraphicsPipelineDesc bd;
@@ -460,7 +464,8 @@ void Renderer::create_pipelines(VkFormat output_format) {
                              veg_vs,        veg_shadow_vs, shadow_alpha_fs, veg_cull_cs,    water_vs,
                              water_fs,      particle_vs,   particle_fs,     taa_fs,         gtao_fs,
                              bloom_down_fs, bloom_up_fs,   expo_first_fs,   expo_reduce_fs, expo_adapt_cs,
-                             volumetric_fs, grass_vs,      grass_fs,        grass_count_cs, skin_cs})
+                             volumetric_fs, grass_vs,      grass_fs,        grass_count_cs, skin_cs,
+                             clouds_fs})
         vkDestroyShaderModule(dev_.device(), m, nullptr);
 }
 
@@ -631,6 +636,8 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         fc.sun_true = {sun_true.x, sun_true.y, sun_true.z, 0.0f};
     }
     fc.ambient = {s.ambient.x, s.ambient.y, s.ambient.z, 0.0f};
+    const bool vclouds = s.volumetric_clouds && s.cloud_coverage > 0.0f && atmo != nullptr;
+    fc.vclouds = {vclouds ? 1.0f : 0.0f, s.cloud_thickness, f32(clamp(s.cloud_steps, 8u, 96u)), 0.0f};
     if (world.ocean) {
         const OceanDesc& od = world.ocean->desc();
         fc.ocean = {od.level, 1.0f, 0.0f, 0.0f};
@@ -1220,6 +1227,26 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     }
 
     // Volumetric fog: half-resolution in-scatter and transmittance (volumetric.frag), composed in the lighting pass.
+    // Volumetric clouds: sky pixels only, reduced resolution, upsampled in the lighting pass.
+    rg::TextureHandle clouds_tex;
+    if (vclouds) {
+        const u32 div = clamp(s.cloud_res_div, 1u, 8u);
+        const VkExtent2D cext{max(1u, ext.width / div), max(1u, ext.height / div)};
+        graph_.add_pass(
+            "clouds", rg::PassType::Raster,
+            [&](rg::PassBuilder& b) {
+                clouds_tex = b.create({VK_FORMAT_R16G16B16A16_SFLOAT, cext.width, cext.height, "clouds"});
+                b.read(depth, rg::Access::Sampled);
+                b.color(clouds_tex, rg::Load::DontCare);
+            },
+            [=, this](const rg::PassContext& ctx) {
+                vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_clouds_);
+                VolumetricPush cp{frame_addr, ctx.sampled(depth), 0};
+                vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(cp), &cp);
+                vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
+            });
+    }
     rg::TextureHandle vol;
     const bool volumetric = s.volumetric_fog && s.fog_density > 0.0f;
     if (volumetric) {
@@ -1301,6 +1328,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             if (skyview.valid()) b.read(skyview, rg::Access::Sampled);
             if (ao.valid()) b.read(ao, rg::Access::Sampled);
             if (vol.valid()) b.read(vol, rg::Access::Sampled);
+            if (clouds_tex.valid()) b.read(clouds_tex, rg::Access::Sampled);
             b.color(hdr, rg::Load::DontCare);
         },
         [=, this, &fc](const rg::PassContext& ctx) {
@@ -1320,7 +1348,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                            vol.valid() ? ctx.sampled(vol) : 0xFFFFFFFFu,
                            lights_addr,
                            light_count,
-                           0u};
+                           clouds_tex.valid() ? ctx.sampled(clouds_tex) : 0xFFFFFFFFu};
             vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
             vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
         });
@@ -1713,6 +1741,11 @@ void limit_quality(RenderSettings& s, Quality q) {
     s.grass_density = min(s.grass_density, t.grass_density);
     s.grass_radius = min(s.grass_radius, t.grass_radius);
     s.vegetation_distance *= t.vegetation;
+    // Volumetric clouds stay optional (Clouds.Volumetric); presets set their cost.
+    static const u32 cloud_steps[4] = {14, 20, 32, 48};
+    static const u32 cloud_div[4] = {4, 4, 2, 2};
+    s.cloud_steps = min(s.cloud_steps, cloud_steps[static_cast<u32>(q)]);
+    s.cloud_res_div = max(s.cloud_res_div, cloud_div[static_cast<u32>(q)]);
     if (q == Quality::Low) {
         s.film_effects = false;
         s.auto_exposure = false;

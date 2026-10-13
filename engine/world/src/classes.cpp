@@ -141,6 +141,9 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("Color", Value::color3({1.0f, 1.0f, 1.0f}), "Tint of the clouds.");
     b.prop("Altitude", Value::number(1600.0), "Base altitude of the cloud layer (m).");
     b.prop("Size", Value::number(2200.0), "Size of the cloud features (m).");
+    b.prop("Volumetric", Value::boolean(false),
+           "Raymarched 3D clouds (heavier on the GPU; quality presets scale their resolution and steps).");
+    b.prop("Thickness", Value::number(1400.0), "Vertical extent of volumetric clouds (m).");
     b.group("Wind").prop("WindSpeed", Value::number(6.0), "Drift speed (m/s).");
     b.prop("WindDirection", Value::number(16.7), "Drift direction (degrees; 0 = +X, 90 = +Z).");
 

@@ -41,6 +41,7 @@ struct Frame {
     vec4 cloud_wind; // xy unit wind direction (world x, z)
     vec4 sun_true;   // xyz towards the sun itself (sun_dir is the moon at night)
     vec4 ambient;    // xyz flat indoor/bounce irradiance (lux)
+    vec4 vclouds;    // x volumetric clouds on (1), y thickness (m), z view steps
 };
 struct LightGPU { vec4 pos_range; vec4 color; vec4 spot; vec4 extra; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer LightBuffer { LightGPU l[]; };

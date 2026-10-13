@@ -68,7 +68,12 @@ struct RenderSettings {
     f32 cloud_coverage = 0.0f;
     f32 cloud_altitude = 1600.0f; // m
     f32 cloud_size = 2200.0f;     // m: size of the cloud features
-    f32 cloud_wind = 6.0f;        // m/s drift
+    // Volumetric clouds (raymarched at reduced resolution, composited behind the scene). Off: the 2D layer.
+    bool volumetric_clouds = false;
+    f32 cloud_thickness = 1400.0f; // m
+    u32 cloud_steps = 32;          // view ray samples (quality presets lower it)
+    u32 cloud_res_div = 2;         // 2 = half resolution, 4 = quarter
+    f32 cloud_wind = 6.0f;         // m/s drift
     // Volumetric fog and sun shafts (half resolution, 16 steps to 150 m). Needs fog_density > 0 to have an effect.
     bool volumetric_fog = false;
     bool taa = true;
@@ -196,7 +201,8 @@ class Renderer {
     VkPipeline p_lighting_ = VK_NULL_HANDLE, p_tonemap_ = VK_NULL_HANDLE;
     VkPipeline p_skyview_ = VK_NULL_HANDLE, p_terrain_ = VK_NULL_HANDLE, p_terrain_shadow_ = VK_NULL_HANDLE;
     VkPipeline p_veg_ = VK_NULL_HANDLE, p_veg_2s_ = VK_NULL_HANDLE, p_veg_shadow_ = VK_NULL_HANDLE,
-               p_veg_cull_ = VK_NULL_HANDLE, p_water_ = VK_NULL_HANDLE, p_particles_ = VK_NULL_HANDLE;
+               p_veg_cull_ = VK_NULL_HANDLE, p_water_ = VK_NULL_HANDLE, p_particles_ = VK_NULL_HANDLE,
+               p_clouds_ = VK_NULL_HANDLE;
     bool cpu_veg_cull_ = false; // legacy AMD drivers: vegetation culled on the CPU (TEFRA_GPU_CULL=0/1 forces)
     rhi::Buffer veg_cmd_template_;
     std::unique_ptr<CanopyMap> canopy_;

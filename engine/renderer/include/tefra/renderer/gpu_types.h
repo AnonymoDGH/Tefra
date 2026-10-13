@@ -102,6 +102,7 @@ struct FrameConstants {
     vec4 cloud_wind; // xy unit wind direction (world x, z)
     vec4 sun_true;   // xyz towards the sun itself (sun_dir is the moon at night)
     vec4 ambient;    // xyz flat indoor/bounce irradiance (lux), added to the image-based ambient
+    vec4 vclouds;    // x volumetric clouds on (1), y thickness (m), z view steps, w unused
 };
 
 // Local light as the lighting pass reads it (camera-relative position).
