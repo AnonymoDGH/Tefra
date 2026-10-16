@@ -46,7 +46,7 @@ struct Frame {
     vec4 rain_wind;  // xyz wind (m/s), w drop length (m)
     mat4 local_shadow_vp[8];    // shadowed local lights (cascade index 4.. in the shadow pass)
     vec4 local_shadow_atlas[8]; // xy offset, zw scale (uv)
-    uint local_shadow_tex; uint local_shadow_count; float local_shadow_texel; float local_shadow_pad;
+    uint local_shadow_tex; uint local_shadow_count; float local_shadow_texel; uint rain_occlusion;
 };
 struct LightGPU { vec4 pos_range; vec4 color; vec4 spot; vec4 extra; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer LightBuffer { LightGPU l[]; };

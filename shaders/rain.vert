@@ -1,9 +1,11 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
 #include "common/gpu_types.glsl"
+#include "common/bindless.glsl"
+#include "common/rain_occlusion.glsl"
 // Rain streaks (Lighting.Rain): procedural drops wrapped in a box around the camera, no buffers. Each streak is a thin
 // quad along the drop velocity (fall + wind), as long as the distance a drop travels during a ~1/30 s exposure, lit
-// by the nearest local lights with a strong forward lobe (drops shine against street lights).
+// by the most important local lights with a strong forward lobe (drops shine against street lights).
 layout(push_constant) uniform Push { FrameBuffer frame; LightBuffer lights; uint depth; uint light_count; uint drops; uint pad; } pc;
 layout(location = 0) out vec2 v_uv;      // x across (-1..1), y along (0 top .. 1 bottom)
 layout(location = 1) out vec3 v_color;   // pre-exposed radiance
@@ -58,7 +60,7 @@ void main() {
         col += l.color.rgb * win * win / max(d2, 0.2) * (0.06 + 1.4 * fwd) * prof;
     }
     v_color = col * f.exposure.x;
-    v_alpha = f.weather.z * dim * smoothstep(0.4, 1.5, dist) * (1.0 - smoothstep(10.0, 15.0, dist));
+    v_alpha = f.weather.z * dim * smoothstep(0.4, 1.5, dist) * (1.0 - smoothstep(10.0, 15.0, dist)) * rain_visibility(f, pos);
     v_uv = c;
     gl_Position = f.view_proj * vec4(pos, 1.0);
 }

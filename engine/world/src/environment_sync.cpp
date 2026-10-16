@@ -805,6 +805,43 @@ f32 EnvironmentSync::sea_level() const { return impl_->terrain ? impl_->terrain_
 
 f32 EnvironmentSync::height_at(f32 x, f32 z) const { return impl_->terrain ? impl_->terrain->height_at(x, z) : 0.0f; }
 
+bool EnvironmentSync::ocean_height(f32 x, f32 z, f32 t, f32& out) const {
+    if (!impl_->ocean) return false;
+    const f32 level = impl_->ocean->desc().level;
+    const f32 depth = impl_->terrain ? level - impl_->terrain->height_at(x, z) : 80.0f;
+    out = impl_->ocean->height_at(x, z, t, depth);
+    // Surf near the shore (ocean_eval in shaders/common/ocean.glsl without its noise terms): crests running up the
+    // shore-distance field, steepening into bores in the shallows. Boats moored there ride it too.
+    const f32 H = impl_->ocean->desc().surf_height;
+    const f32 dist = impl_->terrain ? impl_->terrain->field().shore_distance(x, z) : 1e4f;
+    if (H > 0.0f && dist < 400.0f) {
+        auto smooth = [](f32 a, f32 b, f32 v) {
+            const f32 u = clamp((v - a) / (b - a), 0.0f, 1.0f);
+            return u * u * (3.0f - 2.0f * u);
+        };
+        const f32 fade_in = 1.0f - smooth(4.0f, 13.0f, depth);
+        const f32 shoal = 1.0f + 0.45f * (1.0f - smooth(1.3f, 5.0f, depth));
+        const f32 broken = smooth(-0.45f, 1.5f, depth);
+        const f32 alive = smooth(-0.9f, -0.25f, depth);
+        const f32 A = 0.5f * H * fade_in * shoal * (0.3f + 0.7f * broken) * alive * 0.72f;
+        const f32 k = kTwoPi / 24.0f, omega = kTwoPi / 8.0f;
+        const f32 th = k * dist + omega * t;
+        const f32 bore = 1.0f - smooth(0.7f, 3.0f, depth);
+        f32 u = (th - 1.5707963f) / kTwoPi;
+        u -= std::floor(u);
+        const f32 front = 0.14f;
+        f32 b;
+        if (u < front) {
+            const f32 sv = u / front;
+            b = -1.0f + 2.0f * sv * sv * (3.0f - 2.0f * sv);
+        } else {
+            b = 1.0f - 2.0f * (u - front) / (1.0f - front);
+        }
+        out += A * (std::sin(th) * (1.0f - bore) + b * bore);
+    }
+    return true;
+}
+
 const render::TerrainField* EnvironmentSync::field() const {
     return impl_->terrain ? &impl_->terrain->field() : nullptr;
 }

@@ -40,6 +40,7 @@ float fbm3(vec3 p) {
 }
 
 #include "common/surface.glsl"
+#include "common/rain_occlusion.glsl"
 
 // Material flag bit 5: parallax occlusion mapping. Height (1 = top) in the normal map's alpha, depth in UV units in
 // pad0 (float bits). Bit 6: interior mapping. The quad's UVs fall in one cell of a 4 x 3 room atlas; a ray is traced
@@ -201,11 +202,13 @@ void main() {
     if (weather.x > 0.0 && (m.flags & 1u) == 0u && emissive_hint(m) == 0.0 && !interior) {
         const vec3 ngw = gl_FrontFacing ? normalize(v_normal) : -normalize(v_normal);
         const float up = smoothstep(0.75, 0.97, ngw.y);
+        // Sheltered (indoors, under a roof or an awning): dry. Walls test a point just in front of them.
+        const float open_sky = rain_visibility(pc.frame.f, v_pos + ngw * mix(0.4, 0.05, up));
         const float porous = 1.0 - metal;
         float pn = fbm3(vec3(P.x * 0.21, 0.0, P.z * 0.21)) + 0.12 * value_noise(vec3(P.x * 1.7, 2.0, P.z * 1.7));
         float th = 1.0 - weather.y * 0.55;
-        puddle = up * smoothstep(th - 0.06, th + 0.04, pn) * weather.x;
-        float wet = weather.x * mix(0.65, 1.0, up);
+        puddle = up * smoothstep(th - 0.06, th + 0.04, pn) * weather.x * open_sky;
+        float wet = weather.x * mix(0.65, 1.0, up) * open_sky;
         base.rgb *= mix(1.0, mix(0.6, 0.4, puddle), wet * porous);
         // A porous surface (concrete, asphalt, plaster) only gets a thin, broken water film: it turns satin, not
         // polished. Damp patches stay rough (~0.5), saturated ones reach ~0.3; only standing water is a mirror

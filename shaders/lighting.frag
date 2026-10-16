@@ -199,7 +199,7 @@ vec3 ssr_trace(Frame f, vec3 p, vec3 N, vec3 V, float rough, float jitter, out f
     return vec3(0.0);
 }
 
-// Glow of the nearest local lights in the haze (analytic single scattering along the view ray: the integral of
+// Glow of the most important local lights in the haze (analytic single scattering along the view ray: the integral of
 // 1 / distance^2 has a closed form), for when the raymarched fog is off. tmax: ray length (m).
 vec3 light_halos(Frame f, vec3 dir, float tmax) {
     float sigma = max(f.fog.x, 0.0) * 1.5 + f.weather.z * 0.004; // rain makes the air glow too
@@ -210,6 +210,31 @@ vec3 light_halos(Frame f, vec3 dir, float tmax) {
         LightGPU l = pc.lights.l[i];
         vec3 c = l.pos_range.xyz;
         float s0 = dot(c, dir);
+        if (l.spot.w > 0.85) {
+            // Narrow beam (lighthouse, searchlight): the glow is a shaft, not a sphere. March the view ray through
+            // the light's sphere and add the in-scattering inside the cone (phase with a forward lobe).
+            float r = l.pos_range.w;
+            float t0 = max(s0 - r, 0.0), t1 = min(s0 + r, tmax);
+            if (t1 <= t0) continue;
+            const int kBeamSteps = 24;
+            float dt = (t1 - t0) / float(kBeamSteps);
+            float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+            vec3 beam = vec3(0.0);
+            for (int k = 0; k < kBeamSteps; ++k) {
+                vec3 x = dir * (t0 + (float(k) + jit) * dt);
+                vec3 d = c - x;
+                float d2 = dot(d, d);
+                if (d2 > r * r) continue;
+                vec3 Ld = d * inversesqrt(max(d2, 1e-6));
+                float cone = smoothstep(l.spot.w, max(l.extra.x, l.spot.w + 1e-3), dot(-Ld, l.spot.xyz));
+                if (cone <= 0.0) continue;
+                float win = clamp(1.0 - d2 * d2 / (r * r * r * r), 0.0, 1.0);
+                float phase = 0.25 + 2.5 * pow(max(dot(Ld, dir), 0.0), 6.0); // forward lobe towards the lamp
+                beam += vec3(cone * win * win / max(d2, 1.0) * phase);
+            }
+            sum += l.color.rgb * beam * dt * 4.0 * BRDF_PI;
+            continue;
+        }
         float h2 = max(dot(c, c) - s0 * s0, 0.0) + 0.04;
         float r = l.pos_range.w;
         if (h2 > r * r) continue;

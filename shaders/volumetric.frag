@@ -49,7 +49,7 @@ void main() {
             vis = sun_shadow_tap(f, x, view_depth);
         }
         // Integral of sigma(s) * T(s) over the step equals T(start) - T(end) (exact for exponential density).
-        // Local lights (nearest first): halos and light cones in the haze around street lamps. Isotropic-ish phase
+        // Local lights (most important first): halos and light cones in the haze around street lamps. Isotropic-ish phase
         // with a forward lobe; shadow-mapped lights get one shadow tap.
         vec3 local = vec3(0.0);
         for (uint li = 0u; li < pc.light_count; ++li) {

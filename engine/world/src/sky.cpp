@@ -104,6 +104,8 @@ void sky_settings(const DataModel& dm, render::RenderSettings& s) {
         const vec3 c = light->get_vec3("IndoorAmbient", vec3{0, 0, 0});
         s.ambient = c * (max(light->get_float("IndoorAmbientBrightness", 0.0f), 0.0f) * 100.0f);
     }
+    s.flash = max(light->get_float("Flash", 0.0f), 0.0f);
+    s.flash_direction = light->get_vec3("FlashDirection", vec3{0.3f, 0.8f, -0.5f});
     s.grade_saturation = light->get_float("Saturation", 1.05f);
     s.grade_contrast = light->get_float("Contrast", 1.05f);
     s.fog_density = light->get_float("FogDensity", 0.0f);

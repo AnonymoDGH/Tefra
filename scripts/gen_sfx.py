@@ -3,7 +3,7 @@
 
 Everything here is our own work: no samples, no recordings, no third-party code. Output is deterministic (same bytes
 on every run), so `--check` can verify that the committed WAVs match the generator. Pure Python + the `wave` module,
-no numpy. Effects are 16-bit mono PCM: 22050 Hz for the short ones and 8000 Hz for the wind loop (size budget).
+no numpy. Effects are 16-bit mono PCM: 22050 Hz for the one-shots and 8000 Hz for the loops (size budget).
 
 Usage:
   python3 scripts/gen_sfx.py                 # writes resources/sfx/*.wav
@@ -259,6 +259,227 @@ def rain_loop():
     return normalize(out, 0.42)
 
 
+def brown(n, seed, sr):
+    """Brown noise (1/f^2): leaky integration of white noise, DC wander removed."""
+    rng = Rng(seed)
+    y = 0.0
+    out = []
+    for _ in range(n):
+        y = 0.9985 * y + 0.05 * rng.next()
+        out.append(y)
+    return highpass(out, 22.0, sr)
+
+
+def swell_curve(n, sr, seed, spacing, lo, hi):
+    """Slow random curve in [lo, hi]: one random control point every `spacing` s, cosine-interpolated."""
+    rng = Rng(seed)
+    step = max(1, secs(spacing, sr))
+    pts = [lo + (hi - lo) * (rng.next() * 0.5 + 0.5) for _ in range(n // step + 2)]
+    out = []
+    for i in range(n):
+        k, f = divmod(i, step)
+        w = 0.5 - 0.5 * math.cos(math.pi * f / step)
+        out.append(pts[k] * (1.0 - w) + pts[k + 1] * w)
+    return out
+
+
+def smoothstep(u):
+    u = max(0.0, min(1.0, u))
+    return u * u * (3.0 - 2.0 * u)
+
+
+def thunder():
+    # Close strike: a bright broadband crack (1 ms attack, ~0.15 s), then a long low rumble (brown noise 22-200 Hz
+    # with slow random swells) that starts 40 ms after the crack and decays over ~5 s.
+    n = secs(6.0, SR)
+    crack = normalize(highpass(noise(secs(0.15, SR), 201), 800.0, SR), 1.0)
+    crack = [v * min(1.0, i / (0.001 * SR)) * math.exp(-i / (0.035 * SR)) for i, v in enumerate(crack)]
+    rumble = brown(n, 203, SR)
+    rumble = normalize(lowpass(lowpass(highpass(highpass(rumble, 30.0, SR), 30.0, SR), 200.0, SR), 200.0, SR), 1.0)
+    swells = swell_curve(n, SR, 204, 0.9, 0.35, 1.0)
+    buf = [0.0] * n
+    for i in range(n):
+        t = i / SR
+        onset = 1.0 - math.exp(-max(0.0, t - 0.04) / 0.03)
+        buf[i] = 0.6 * rumble[i] * onset * math.exp(-t / 1.5) * swells[i]
+    for i, v in enumerate(crack):
+        buf[i] += 1.0 * v
+    return normalize(fade_edges(buf, SR), 0.85)
+
+
+def thunder_far():
+    # Distant thunder: no crack, a soft 0.9 s onset and a low rolling rumble (brown noise below ~120 Hz).
+    n = secs(7.0, SR)
+    rumble = brown(n, 301, SR)
+    rumble = normalize(lowpass(lowpass(highpass(highpass(rumble, 30.0, SR), 30.0, SR), 120.0, SR), 120.0, SR), 1.0)
+    swells = swell_curve(n, SR, 302, 1.2, 0.2, 1.0)
+    out = []
+    for i in range(n):
+        t = i / SR
+        env = smoothstep(t / 0.9) * math.exp(-max(0.0, t - 0.9) / 1.6) * swells[i]
+        out.append(rumble[i] * env)
+    return normalize(fade_edges(out, SR), 0.6)
+
+
+def surf_loop():
+    # Waves crashing on rocks, 12 s. Periodic by construction (the noise bands are filtered over two laps, and the
+    # swells wrap around the loop), so the end joins the start without a seam. Three crashes, 4 s apart: each one is
+    # preceded by a swell (low and mid bands rising) and followed by a foam hiss tail. A low sea roar runs underneath.
+    dur = 12.0
+    n = secs(dur, SR_WIND)
+
+    def band(seed, stages):
+        x = noise(n, seed)
+        x = x + x
+        for kind, fc in stages:
+            x = lowpass(x, fc, SR_WIND) if kind == "lp" else highpass(x, fc, SR_WIND)
+        return normalize(x[n:], 1.0)
+
+    sea = band(401, (("lp", 220.0), ("lp", 220.0)))
+    mid = band(402, (("hp", 300.0), ("lp", 1200.0)))
+    hi = band(403, (("hp", 1800.0), ("lp", 3600.0)))
+    events = ((1.0, 1.0), (5.0, 0.8), (9.0, 0.9))  # (crash time in s, strength)
+
+    def wave_levels(d):
+        # d: seconds from the crash, signed and wrapped to the loop. Returns (low, mid, hi) weights.
+        if d < -2.0 or d > 3.0:
+            return 0.0, 0.0, 0.0
+        if d < 0.0:
+            s = ((d + 2.0) / 2.0) ** 2
+            return 0.30 * s, 0.20 * s, 0.05 * s
+        taper = 1.0 - smoothstep((d - 1.5) / 1.5)
+        crash = math.exp(-d / 0.04)
+        low = 0.25 * math.exp(-d / 1.5)
+        mid_w = 0.45 * crash + 0.25 * math.exp(-d / 0.35)
+        hi_w = 0.8 * crash + 0.45 * math.exp(-d / 1.1)
+        return low * taper, mid_w * taper, hi_w * taper
+
+    out = []
+    for i in range(n):
+        t = i / SR_WIND
+        p = i / n
+        roar = 0.35 * (0.85 + 0.15 * math.sin(TAU * 2 * p + 0.5)) * sea[i]
+        low_w = mid_w = hi_w = 0.0
+        for te, strength in events:
+            d = ((t - te + dur / 2) % dur) - dur / 2
+            a, b, c = wave_levels(d)
+            low_w += a * strength
+            mid_w += b * strength
+            hi_w += c * strength
+        out.append(roar + low_w * sea[i] + mid_w * mid[i] + hi_w * hi[i])
+    return normalize(out, 0.8)
+
+
+def wind_storm_loop():
+    # Storm wind, 10 s, periodic by construction. Noise through a state-variable bandpass whose centre frequency
+    # wanders (380-860 Hz) and whose level follows slow gusts. In strong gusts a whistling tone (380 Hz +/- 40 Hz,
+    # whole cycles per loop) howls through.
+    dur = 10.0
+    n = secs(dur, SR_WIND)
+    x = noise(n, 501)
+    x = x + x  # two laps: the filter forgets its start within a few ms, so the second lap is steady state
+    lp = bp = 0.0
+    filt = []
+    q = 0.35
+    for i in range(2 * n):
+        p = (i % n) / n
+        fc = 480.0 + 260.0 * math.sin(TAU * p + 0.4) + 120.0 * math.sin(TAU * 2 * p + 2.0)
+        g = 2.0 * math.sin(math.pi * fc / SR_WIND)
+        lp += g * bp
+        hp = x[i] - lp - q * bp
+        bp += g * hp
+        filt.append(bp)
+    filt = filt[n:]
+    out = []
+    for i in range(n):
+        t = i / SR_WIND
+        p = i / n
+        gust = max(0.08, 0.5 + 0.3 * math.sin(TAU * 2 * p + 0.7) + 0.2 * math.sin(TAU * 3 * p + 2.1)
+                   + 0.1 * math.sin(TAU * 5 * p + 0.3))
+        ph = TAU * (380.0 * t + 40.0 * dur / TAU * (1.0 - math.cos(TAU * p)))
+        gate = max(0.0, gust - 0.55) * 2.0
+        howl = gate * (math.sin(ph) + 0.4 * math.sin(2 * ph) + 0.15 * math.sin(3 * ph))
+        out.append(filt[i] * gust * 1.8 + 0.22 * howl)
+    return normalize(out, 0.5)
+
+
+def _partial(freq, length, tau, amp):
+    n = secs(length, SR)
+    return [amp * math.exp(-i / (tau * SR)) * math.sin(TAU * freq * i / SR) for i in range(n)]
+
+
+def _ratchet_tick(seed, amp):
+    m = secs(0.012, SR)
+    crack = highpass(noise(m, seed), 1500.0, SR)
+    return [amp * (crack[i] * math.exp(-i / (0.0025 * SR))
+                   + 0.6 * math.exp(-i / (0.004 * SR)) * math.sin(TAU * 2600.0 * i / SR)) for i in range(m)]
+
+
+def lever():
+    # Heavy metal lever pulled down: a ratchet (six short clicks while it moves), then the clank of it hitting its
+    # stop: inharmonic metal partials ringing for ~0.1 s over a low thud.
+    total = secs(0.6, SR)
+    buf = [0.0] * total
+    items = []
+    for k in range(6):
+        items.append((0.03 + 0.032 * k, _ratchet_tick(801 + k, 0.45 + 0.05 * (k % 2))))
+    for f, tau, a in ((240.0, 0.09, 1.0), (367.0, 0.07, 0.7), (611.0, 0.05, 0.55), (898.0, 0.035, 0.35),
+                      (1313.0, 0.025, 0.25), (1777.0, 0.02, 0.15)):
+        items.append((0.30, _partial(f, 0.28, tau, a)))
+    thud = sweep(110.0, 55.0, 0.2, SR, lambda i, n_: math.exp(-i / (0.04 * SR)))
+    items.append((0.30, [0.6 * v for v in thud]))
+    add_notes(buf, SR, items)
+    return normalize(fade_edges(buf, SR), 0.6)
+
+
+def lamp_on():
+    # An old electric/arc lamp switching on: a switch click, then a rising electrical buzz (60 -> 100 Hz, rich in
+    # harmonics, with arc hiss). After ~0.9 s it settles into a steady 100 Hz hum at a lower level.
+    n = secs(1.5, SR)
+    out = [0.0] * n
+    click = highpass(noise(secs(0.012, SR), 601), 2000.0, SR)
+    for i, v in enumerate(click):
+        out[i] += 0.9 * v * math.exp(-i / (0.002 * SR))
+    hiss = highpass(noise(n, 602), 900.0, SR)
+    harmonics = ((1, 1.0), (2, 0.55), (3, 0.4), (4, 0.22), (5, 0.14))
+    phase = 0.0
+    for i in range(n):
+        t = i / SR
+        rise = smoothstep((t - 0.03) / 0.6)
+        phase += TAU * (60.0 + 40.0 * rise) / SR
+        buzz = 0.0
+        for k, a in harmonics:
+            buzz += a * math.sin(k * phase)
+        buzz = math.tanh(1.3 * buzz)
+        settle = 1.0 - 0.45 * smoothstep((t - 0.9) / 0.5)
+        amp = smoothstep((t - 0.03) / 0.15) * settle
+        hiss_env = rise * (1.0 - 0.8 * smoothstep((t - 0.9) / 0.5))
+        out[i] += 0.5 * amp * buzz + 0.12 * hiss_env * hiss[i]
+    return normalize(fade_edges(out, SR), 0.6)
+
+
+def foghorn():
+    # Diaphragm foghorn: 100 Hz fundamental with strong odd harmonics and a slight rasp from soft clipping. Slow
+    # 0.6 s attack, sustained to 3 s, a 1 s release during which the pitch drops about 6 %, and some breath noise.
+    n = secs(4.0, SR)
+    breath = lowpass(noise(n, 701), 700.0, SR)
+    harmonics = ((1, 1.0), (3, 0.62), (5, 0.4), (7, 0.24), (9, 0.14), (2, 0.08))
+    out = []
+    phase = 0.0
+    for i in range(n):
+        t = i / SR
+        drop = smoothstep((t - 3.0) / 1.0)
+        f = 100.0 * (1.0 - 0.06 * drop) * (1.0 + 0.004 * math.sin(TAU * 4.5 * t))
+        phase += TAU * f / SR
+        v = 0.0
+        for k, a in harmonics:
+            v += a * math.sin(k * phase)
+        v = math.tanh(1.1 * v)
+        env = smoothstep(t / 0.6) * (1.0 - drop)
+        out.append(env * v + 0.06 * env * breath[i])
+    return normalize(fade_edges(out, SR), 0.6)
+
+
 EFFECTS = [
     ("jump", jump, SR),
     ("land", land, SR),
@@ -272,6 +493,13 @@ EFFECTS = [
     ("wind_loop", wind_loop, SR_WIND),
     ("hum_loop", hum_loop, SR_WIND),
     ("rain_loop", rain_loop, SR_WIND),
+    ("thunder", thunder, SR),
+    ("thunder_far", thunder_far, SR),
+    ("lever", lever, SR),
+    ("lamp_on", lamp_on, SR),
+    ("foghorn", foghorn, SR),
+    ("surf_loop", surf_loop, SR_WIND),
+    ("wind_storm_loop", wind_storm_loop, SR_WIND),
 ]
 
 

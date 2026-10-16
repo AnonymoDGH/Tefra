@@ -30,6 +30,14 @@ Las sesiones no recuerdan nada: este archivo es la memoria. Actualízalo al fina
   - Coste sin medir en la HD 520 (edificios de 55–186 k triángulos).
 - **Luces con forma y sombra (2026-10-16):** `SpotLight.Spill` (perfil fuera del cono, también en halos, volumétrica y lluvia); `Shadows=true` → atlas de sombras locales 4×2 (`local_shadows` pass, cascade 4.. en `shadow.vert`, `local_shadow()` en `shadow.glsl`; 0/4/8/8 por preset). Niebla de ciudad neutra (Atmosphere azul gris, ambiente desaturado en `fog_ambient`).
 - **Luz rebotada SSGI** (`ssgi()` en `lighting.frag`, historial TAA, rayos 0/1/2/3 por preset, `RenderSettings::gi_rays`, push `fx` bits 8..11; `TEFRA_NO_GI=1` para A/B). En la nube el preset auto es Low: probar con `tefra_studio --quality high`. Neones de la ciudad planos sobre la fachada (z 3,0 m).
+- **Faro en la tormenta (2026-10-16):** plantilla jugable `lighthouse_storm` (templates.cpp `build_lighthouse_storm`, scripts Storm/LampLever/Lamp/BuoyLight). Motor:
+  - `Lighting.Flash`/`FlashDirection`: relámpago como luz direccional con sombras;
+  - `BuoyancySystem` en `play.cpp` (atributo `Floating`, `EnvironmentSync::ocean_height` = Gerstner CPU + rompientes);
+  - haces estrechos en `light_halos`; luces ordenadas por importancia;
+  - oclusión de lluvia top-down (tile 7 del atlas local, `rain_occlusion.glsl`);
+  - C# `Light`/`PointLight`/`SpotLight`.
+  - Modelos en `apps/studio/resources/models/coast/` (`make_lighthouse.py`, `make_coast_ph_props.py`).
+  - Sonidos thunder/surf/wind_storm/lever/lamp_on/foghorn en `gen_sfx.py`.
 - **POM + interior mapping** (`gbuffer.frag`, flags 32/64, extras glTF `tefra_parallax`/`tefra_height`/`tefra_interior`; `docs/research/parallax/REPORT.md`).
 - **Cámara y personaje en juego:** interpolación de física (`character_post_step` con alpha), inercia/giro suave/coyote time/buffer de salto/salto variable/sprint (`physics/character.cpp`); cámara con cursor bloqueado, shift-lock (Ctrl), primera persona, zoom exponencial, colisión con 3 rayos (`GameRuntime::update_camera`).
 - **Nubes volumétricas opcionales** (`Clouds.Volumetric`; `shaders/clouds_vol.frag`, pase `clouds` a 1/2-1/4 de resolución solo en píxeles de cielo, compuesto en `lighting.frag` `sky_with_clouds`; presets en `limit_quality`). Pendiente: sombras de nubes sobre el suelo, reproyección temporal propia.

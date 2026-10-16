@@ -47,6 +47,12 @@ class Ocean {
     const rhi::Buffer& vertices() const { return vb_; } // vec4: x, z offset from the camera (m), y = ring radius
     const rhi::Buffer& indices() const { return ib_; }
     const rhi::Buffer& waves() const { return waves_; } // kGeometryWaves + kDetailWaves OceanWaveGPU
+    // Open-sea surface at still-surface point xz and time t (the shader's geometry waves, unfiltered): displacement
+    // from the still point. depth (m below the sea level) fades the swell over the shelf like ocean.glsl. Floating
+    // objects use it; the shore surf is not included.
+    vec3 displacement(vec2 xz, f32 t, f32 depth) const;
+    // World height of the surface over world xz (inverts the horizontal Gerstner motion).
+    f32 height_at(f32 x, f32 z, f32 t, f32 depth) const;
     // Index range of sector s (draw it when its angular span faces the camera).
     u32 sector_first(u32 s) const { return s * sector_indices_; }
     u32 sector_count() const { return sector_indices_; }
@@ -59,6 +65,7 @@ class Ocean {
     const rhi::Device& dev_;
     OceanDesc desc_;
     rhi::Buffer vb_, ib_, waves_;
+    std::vector<OceanWaveGPU> host_waves_; // CPU copy of the geometry waves
     u32 sector_indices_ = 0;
 };
 

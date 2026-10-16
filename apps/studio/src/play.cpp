@@ -27,6 +27,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <functional>
 
 namespace tefra::studio {
 
@@ -34,6 +35,88 @@ using world::Instance;
 using world::Value;
 
 namespace {
+
+// Floating objects (BasePart with the attribute Floating = true): each step the part rides the animated sea. Four
+// samples of the ocean surface (bow, stern, port, starboard; FloatLength / FloatWidth metres apart) give heave,
+// pitch and roll; a first-order lag stands in for the hull's inertia. Descendant parts (lights, masts) move with it.
+class BuoyancySystem final : public runtime::RuntimeSystem {
+  public:
+    using Sampler = std::function<bool(f32, f32, f32, f32&)>;
+    BuoyancySystem(Sampler sample, std::function<f32()> clock) : sample_(std::move(sample)), clock_(std::move(clock)) {}
+    const char* name() const override { return "buoyancy"; }
+
+    bool start(runtime::GameRuntime& rt) override {
+        for (world::Instance* i : rt.model().workspace()->descendants()) {
+            const world::Value* f = i->get_attribute("Floating");
+            if (!f || !i->is_a("BasePart") || f->n[0] == 0.0) continue;
+            Body b;
+            b.part = i;
+            b.pos = i->get_vec3("Position");
+            b.rot = world::orientation_to_quat(i->get_vec3("Orientation"));
+            auto num = [&](const char* n, f32 def) {
+                const world::Value* v = i->get_attribute(n);
+                return v ? f32(v->n[0]) : def;
+            };
+            b.length = max(num("FloatLength", 4.0f), 0.5f);
+            b.width = max(num("FloatWidth", 1.6f), 0.3f);
+            b.draft = num("FloatDraft", 0.3f);
+            b.heave = b.pos.y;
+            const quat inv{-b.rot.x, -b.rot.y, -b.rot.z, b.rot.w};
+            for (world::Instance* c : i->descendants())
+                if (c->is_a("BasePart"))
+                    b.attached.push_back({c, rotate(inv, c->get_vec3("Position") - b.pos),
+                                          inv * world::orientation_to_quat(c->get_vec3("Orientation"))});
+            bodies_.push_back(std::move(b));
+        }
+        return true;
+    }
+
+    void pre_physics(runtime::GameRuntime& rt, f32 dt) override {
+        (void)rt;
+        const f32 t = clock_();
+        const f32 k = 1.0f - std::exp(-dt / 0.35f);
+        for (Body& b : bodies_) {
+            const vec3 fwd = rotate(b.rot, vec3{0, 0, -1}), right = rotate(b.rot, vec3{1, 0, 0});
+            auto h = [&](vec3 o) {
+                f32 y = b.pos.y;
+                sample_(b.pos.x + o.x, b.pos.z + o.z, t, y);
+                return y;
+            };
+            const f32 hb = h(fwd * (b.length * 0.5f)), hs = h(fwd * (-b.length * 0.5f));
+            const f32 hr = h(right * (b.width * 0.5f)), hl = h(right * (-b.width * 0.5f));
+            b.heave += ((hb + hs + hr + hl) * 0.25f - b.draft - b.heave) * k;
+            b.pitch += (std::atan2(hb - hs, b.length) - b.pitch) * k;
+            b.roll += (std::atan2(hr - hl, b.width) - b.roll) * k;
+            const quat r = b.rot * quat_axis_angle({1, 0, 0}, b.pitch) * quat_axis_angle({0, 0, 1}, b.roll);
+            const vec3 p{b.pos.x, b.heave, b.pos.z};
+            b.part->set("Position", world::Value::vector3(p));
+            b.part->set("Orientation", world::Value::vector3(world::quat_to_orientation(r)));
+            for (const Attached& a : b.attached) {
+                a.part->set("Position", world::Value::vector3(p + rotate(r, a.offset)));
+                a.part->set("Orientation", world::Value::vector3(world::quat_to_orientation(r * a.rot)));
+            }
+        }
+    }
+
+  private:
+    struct Attached {
+        world::Instance* part;
+        vec3 offset;
+        quat rot;
+    };
+    struct Body {
+        world::Instance* part = nullptr;
+        vec3 pos{};
+        quat rot{};
+        f32 length = 4.0f, width = 1.6f, draft = 0.3f;
+        f32 heave = 0.0f, pitch = 0.0f, roll = 0.0f;
+        std::vector<Attached> attached;
+    };
+    Sampler sample_;
+    std::function<f32()> clock_;
+    std::vector<Body> bodies_;
+};
+
 std::string base64(const std::vector<u8>& data) {
     static const char* tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string out;
@@ -85,6 +168,12 @@ bool App::play_start(world::DataModel& dm) {
     rc.project_dir = session_.path().empty() ? std::string() : path_parent(session_.path());
     runtime_ = std::make_unique<runtime::GameRuntime>(dm, rc);
     runtime_->add_system(audio::make_audio_system());
+    runtime_->add_system(std::make_unique<BuoyancySystem>(
+        [this](f32 x, f32 z, f32 t, f32& y) {
+            auto* env = static_cast<const world::EnvironmentSync*>(environment_.get());
+            return env && env->ocean_height(x, z, t, y);
+        },
+        [this] { return f32(time_); }));
     if (!game_gui_) game_gui_ = std::make_unique<ui::GameGui>();
     game_gui_->set_asset_root(rc.project_dir);
     return runtime_->start();

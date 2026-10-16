@@ -362,3 +362,25 @@ Para clientes que solo hablan stdio (Claude Desktop) hay un puente, `tefra_mcp`;
 - **Interior mapping:** cada ventana muestra una habitación en 3D (paredes, suelo y techo) con una sola cara.
 - En modelos propios se activa con propiedades del material en Blender: `tefra_parallax` + `tefra_height`, o
   `tefra_interior`. Explicación y detalles en `docs/research/parallax/REPORT.md`.
+
+## Faro en la tormenta (plantilla jugable)
+- Plantilla **Lighthouse in the Storm** (`lighthouse_storm`): noche de tormenta en una costa rocosa.
+  - **Objetivo:** subir los ~100 escalones del faro y tocar la palanca de la sala de guardia. La lente se enciende,
+    dos haces barren el mar (una vuelta cada 10 s, con sombras y visibles en la niebla) y suena la sirena de niebla.
+  - Puerto con muelle de madera, botes de remos amarrados, un barco fondeado y una boya con luz roja.
+  - Pasarela de tablones con barandilla y faroles que sube el acantilado; casa del farero con humo en la chimenea y
+    ventanas con habitaciones (interior mapping).
+  - Mar de tormenta (oleaje de 2,6 m, rompientes), lluvia con viento, relámpagos con trueno retardado según la
+    distancia, viento y olas 3D.
+- **Relámpagos:** `Lighting.Flash` (0–1+) y `Lighting.FlashDirection`. Durante el destello, el rayo es la luz
+  direccional (con sombras) y la niebla y las nubes se iluminan. Un script lo anima (ver el script `Storm`).
+- **Flotación:** una BasePart con el atributo `Floating = true` cabecea, se balancea y sube y baja con el oleaje real
+  (las olas Gerstner y las rompientes del océano) mientras se juega. `FloatLength`, `FloatWidth` y `FloatDraft` dan el
+  tamaño y el calado. Las Parts hijas (luces, mástiles) se mueven con ella.
+- **Haces estrechos:** una SpotLight de menos de ~30° se ve como un rayo en la niebla, también sin niebla volumétrica.
+  Las pasadas que solo usan unas pocas luces (niebla, halos, lluvia) eligen las más importantes (intensidad entre
+  distancia al cuadrado), no las más cercanas.
+- **Sin lluvia bajo techo:** un mapa de profundidad visto desde arriba (80 × 80 m alrededor de la cámara) quita las
+  gotas y el aspecto mojado bajo tejados, balcones y dentro de los edificios.
+- Scripting: `Light`, `PointLight` y `SpotLight` (Brightness, Range, Color, Shadows, Enabled, Angle, Spill) y
+  `Lighting.Flash` / `FlashDirection` en C#.

@@ -415,6 +415,51 @@ namespace Tefra
         public float ClockTime { get => GetFloat(ClockP); set => SetFloat(ClockP, value); }
         public float FogDensity { get => GetFloat(FogP); set => SetFloat(FogP, value); }
         public float ExposureCompensation { get => GetFloat(ExposureP); set => SetFloat(ExposureP, value); }
+
+        private static readonly PropRef FlashP = new PropRef("Lighting", "Flash");
+        private static readonly PropRef FlashDirP = new PropRef("Lighting", "FlashDirection");
+        /// <summary>Lightning flash strength (0 = none, 1 = a close strike): lights the scene from FlashDirection.</summary>
+        public float Flash { get => GetFloat(FlashP); set => SetFloat(FlashP, value); }
+        /// <summary>Direction towards the lightning strike.</summary>
+        public Vector3 FlashDirection { get => GetVector3(FlashDirP); set => SetVector3(FlashDirP, value); }
+    }
+
+    /// <summary>Base class of local lights (PointLight, SpotLight); parent them to a part.</summary>
+    public class Light : Instance
+    {
+        private static readonly PropRef ColorP = new PropRef("Light", "Color");
+        private static readonly PropRef BrightnessP = new PropRef("Light", "Brightness");
+        private static readonly PropRef RangeP = new PropRef("Light", "Range");
+        private static readonly PropRef ShadowsP = new PropRef("Light", "Shadows");
+        private static readonly PropRef EnabledP = new PropRef("Light", "Enabled");
+
+        internal Light(ulong id) : base(id) { }
+
+        public Color3 Color { get => GetColor3(ColorP); set => SetColor3(ColorP, value); }
+        public float Brightness { get => GetFloat(BrightnessP); set => SetFloat(BrightnessP, value); }
+        /// <summary>Reach (m).</summary>
+        public float Range { get => GetFloat(RangeP); set => SetFloat(RangeP, value); }
+        public bool Shadows { get => GetBool(ShadowsP); set => SetBool(ShadowsP, value); }
+        public bool Enabled { get => GetBool(EnabledP); set => SetBool(EnabledP, value); }
+    }
+
+    public class PointLight : Light
+    {
+        internal PointLight(ulong id) : base(id) { }
+    }
+
+    /// <summary>Cone light along the part's -Z face.</summary>
+    public class SpotLight : Light
+    {
+        private static readonly PropRef AngleP = new PropRef("SpotLight", "Angle");
+        private static readonly PropRef SpillP = new PropRef("SpotLight", "Spill");
+
+        internal SpotLight(ulong id) : base(id) { }
+
+        /// <summary>Cone angle (degrees).</summary>
+        public float Angle { get => GetFloat(AngleP); set => SetFloat(AngleP, value); }
+        /// <summary>Fraction of the light outside the cone (0 = hard cone).</summary>
+        public float Spill { get => GetFloat(SpillP); set => SetFloat(SpillP, value); }
     }
 
     public class BaseScript : Instance
@@ -1395,6 +1440,9 @@ namespace Tefra
                 ["ImageButton"] = id => new ImageButton(id),
                 ["SoundService"] = id => new SoundService(id),
                 ["Sound"] = id => new Sound(id),
+                ["Light"] = id => new Light(id),
+                ["PointLight"] = id => new PointLight(id),
+                ["SpotLight"] = id => new SpotLight(id),
                 ["ParticleEmitter"] = id => new ParticleEmitter(id),
                 ["BindableEvent"] = id => new BindableEvent(id),
                 ["BindableFunction"] = id => new BindableFunction(id),

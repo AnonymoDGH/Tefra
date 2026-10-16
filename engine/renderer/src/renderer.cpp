@@ -577,6 +577,17 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         s.sun_color = vec3{0.80f, 0.88f, 1.0f};
     }
     s.sun_illuminance *= max(s.sun_scale, 0.0f);
+    if (s.flash > 0.0f) {
+        // Lightning: for the length of the flash the strike is the directional light (cascaded shadows included),
+        // cold white, and the clouds and haze light up through the ambient term.
+        const f32 strike = 420.0f * s.flash;
+        if (strike > s.sun_illuminance) {
+            s.sun_direction = normalize(s.flash_direction);
+            s.sun_color = vec3{0.82f, 0.88f, 1.0f};
+            s.sun_illuminance = strike;
+        }
+        s.ambient = s.ambient + vec3{0.75f, 0.82f, 1.0f} * (60.0f * s.flash);
+    }
     FrameBuffers& fb = frames_[slot];
     // The slot's fence has been waited on, so last frame's grass counter copy in this slot is complete.
     if (s.grass_stats && fb.grass_readback.mapped) {
@@ -723,7 +734,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         f32 r = mr.bounds.radius * max(max(in.scale.x, in.scale.y), in.scale.z);
         if (dynamic) r = r * 1.5f + 0.5f; // posed vertices can leave the bind-pose sphere
         if (sphere_in_frustum(planes, c, r)) visible.push_back(i);
-        if (in.cast_shadows && s.local_shadows > 0) caster_spheres.push_back({c, r, i});
+        if (in.cast_shadows && (s.local_shadows > 0 || s.rain > 0.0f)) caster_spheres.push_back({c, r, i});
         if (in.cast_shadows)
             for (u32 k = 0; k < cascades; ++k) {
                 // Cylinder test along the light direction approximated by sphere distance in the light plane.
@@ -1287,8 +1298,11 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                              [](const Pick& x, const Pick& y) { return x.d2 < y.d2; });
             picks.resize(cap);
         }
-        // Nearest first: passes that only afford a few lights (rain, volumetric fog) take the head of the list.
-        std::sort(picks.begin(), picks.end(), [](const Pick& x, const Pick& y) { return x.d2 < y.d2; });
+        // Most important first (intensity over squared distance): passes that only afford a few lights (rain,
+        // volumetric fog, halos) take the head of the list, so a distant lighthouse beam beats a nearby lantern.
+        std::sort(picks.begin(), picks.end(), [&src](const Pick& x, const Pick& y) {
+            return src[x.index].intensity / (x.d2 + 4.0f) > src[y.index].intensity / (y.d2 + 4.0f);
+        });
         light_count = static_cast<u32>(picks.size());
         if (fb.light_capacity < max(light_count, 1u) || !fb.lights.buffer) {
             rhi::destroy_buffer(dev_, fb.lights);
@@ -1297,7 +1311,9 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, rhi::MemoryUsage::Upload, "lights");
         }
         auto* dst = static_cast<LightGPU*>(fb.lights.mapped);
-        const u32 max_shadows = min(s.local_shadows, kMaxLocalShadows);
+        // When it rains the last atlas tile holds the top-down rain occlusion map instead.
+        const bool rain_occ = s.rain > 0.0f;
+        const u32 max_shadows = min(s.local_shadows, rain_occ ? kMaxLocalShadows - 1 : kMaxLocalShadows);
         for (u32 i = 0; i < light_count; ++i) {
             const LocalLight& l = src[picks[i].index];
             dst[i].pos_range = vec4(picks[i].rel, l.range);
@@ -1332,6 +1348,27 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             dst[i].extra = vec4(l.cos_inner, l.spill, shadow_index, 0.0f);
         }
         fc.local_shadow_count = local_shadow_count;
+        if (rain_occ) {
+            // Orthographic view straight down over 80 x 80 m around the camera, 120 m deep, snapped to its texels
+            // so the edges of roofs do not crawl as the camera moves.
+            constexpr f32 kHalf = 40.0f, kDepth = 120.0f;
+            const f32 texel = 2.0f * kHalf / f32(max(s.local_shadow_resolution, 64u));
+            const f64 sx = std::floor(camera.position.x / f64(texel)) * f64(texel);
+            const f64 sz = std::floor(camera.position.z / f64(texel)) * f64(texel);
+            const vec3 eye{f32(sx - camera.position.x), 60.0f, f32(sz - camera.position.z)};
+            const mat4 view = look_at(eye, eye + vec3{0.0f, -1.0f, 0.0f}, vec3{0.0f, 0.0f, -1.0f});
+            mat4 proj{};
+            proj.c[0].x = 1.0f / kHalf;
+            proj.c[1].y = 1.0f / kHalf;
+            proj.c[2].z = -1.0f / kDepth;
+            proj.c[3].z = 0.0f;
+            proj.c[3].w = 1.0f;
+            fc.local_shadow_vp[kMaxLocalShadows - 1] = proj * view;
+            fc.local_shadow_atlas[kMaxLocalShadows - 1] = {0.75f, 0.5f, 0.25f, 0.5f};
+            local_shadow_eye[kMaxLocalShadows - 1] = vec3{eye.x, 0.0f, eye.z};
+            local_shadow_range[kMaxLocalShadows - 1] = kHalf * 1.5f;
+            fc.rain_occlusion = 1;
+        }
         fc.local_shadow_texel = 1.0f / f32(max(s.local_shadow_resolution, 1u) * 4u);
         if (light_count) vmaFlushAllocation(dev_.allocator(), fb.lights.allocation, 0, VK_WHOLE_SIZE);
     }
@@ -1339,8 +1376,15 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
 
     // Local light shadow maps: one tile of a 4 x 2 atlas per shadowed light, casters within its range.
     rg::TextureHandle local_shadow{};
-    if (local_shadow_count > 0) {
+    if (local_shadow_count > 0 || fc.rain_occlusion != 0u) {
         std::vector<u32> local_casters[kMaxLocalShadows];
+        if (fc.rain_occlusion != 0u) {
+            // Everything over the 80 x 80 m square, at any height: the occlusion box is a column.
+            const vec3 e = local_shadow_eye[kMaxLocalShadows - 1];
+            for (const CasterSphere& cs : caster_spheres)
+                if (std::fabs(cs.c.x - e.x) < 40.0f + cs.r && std::fabs(cs.c.z - e.z) < 40.0f + cs.r)
+                    local_casters[kMaxLocalShadows - 1].push_back(cs.index);
+        }
         for (u32 k = 0; k < local_shadow_count; ++k) {
             vec4 lp[6];
             frustum_planes(fc.local_shadow_vp[k], lp);
@@ -1361,7 +1405,8 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                 std::memcpy(frames_[slot].constants.mapped, &fc, sizeof(fc));
                 vmaFlushAllocation(dev_.allocator(), frames_[slot].constants.allocation, 0, VK_WHOLE_SIZE);
                 vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
-                for (u32 k = 0; k < local_shadow_count; ++k) {
+                for (u32 k = 0; k < kMaxLocalShadows; ++k) {
+                    if (k >= local_shadow_count && !(k == kMaxLocalShadows - 1 && fc.rain_occlusion != 0u)) continue;
                     VkViewport vp{f32((k % 4) * lres), f32((k / 4) * lres), f32(lres), f32(lres), 0.0f, 1.0f};
                     VkRect2D sc_rect{{i32((k % 4) * lres), i32((k / 4) * lres)}, {lres, lres}};
                     vkCmdSetViewport(ctx.cmd, 0, 1, &vp);

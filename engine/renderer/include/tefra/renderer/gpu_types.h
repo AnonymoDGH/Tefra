@@ -113,7 +113,7 @@ struct FrameConstants {
     u32 local_shadow_tex = kNoTexture;         // bindless 2D index of the local shadow atlas
     u32 local_shadow_count = 0;
     f32 local_shadow_texel = 0.0f; // atlas texel size (uv)
-    f32 local_shadow_pad = 0.0f;
+    u32 rain_occlusion = 0;        // 1: local shadow tile 7 is the top-down rain occlusion map (rain_occlusion.glsl)
 };
 
 // Local light as the lighting pass reads it (camera-relative position).

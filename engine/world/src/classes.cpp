@@ -101,6 +101,11 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("EnvironmentDiffuseScale", Value::number(1.0), "Sky light on surfaces (0 for closed interiors).");
     b.prop("IndoorAmbient", Value::color3({0, 0, 0}), "Flat bounce light colour for interiors.");
     b.prop("IndoorAmbientBrightness", Value::number(0.0), "Strength of IndoorAmbient (lux / 100).");
+    b.group("Lightning")
+        .prop("Flash", Value::number(0.0),
+              "Lightning flash strength (0 = none, 1 = a close strike). Scripts animate it: the flash lights the "
+              "scene from FlashDirection with shadows, and brightens the clouds and the haze.");
+    b.prop("FlashDirection", Value::vector3({0.3f, 0.8f, -0.5f}), "Direction towards the lightning strike.");
 
     // Sky objects inside Lighting (Insert menu, category Environment). Defaults give the look of the Lighting alone.
     const EnumInfo* skybox_mode = r.add_enum("SkyboxMode", {"Procedural", "Cubemap", "HDRI"});
