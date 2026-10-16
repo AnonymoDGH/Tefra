@@ -383,9 +383,9 @@ void GameRuntime::update_camera(f32 dt) {
                    -std::cos(orbit_yaw_) * std::cos(orbit_pitch_)};
     const vec3 right{std::cos(orbit_yaw_), 0.0f, -std::sin(orbit_yaw_)};
     const bool fp = first_person();
-    vec3 target{head_pos.x, cam_target_y_ + (fp ? 0.15f : 0.4f), head_pos.z};
+    vec3 target{head_pos.x, cam_target_y_ + (fp ? 0.03f : 0.4f), head_pos.z}; // eyes just above the head centre
     // Shift lock: over the right shoulder.
-    if (shift_lock_ && !fp) target = target + right * 1.6f;
+    if (shift_lock_ && !fp) target = target + right * 0.9f;
     vec3 want = target - dir * cam_dist_;
     if (!fp) {
         // Keep the camera out of walls: a sphere-ish probe (three rays) from the head back to the wanted spot. The

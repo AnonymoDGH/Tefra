@@ -8,8 +8,10 @@ namespace tefra::anim {
 
 namespace {
 
-// Rest geometry, unscaled metres. The feet touch y = 0 and the root centre sits at y = 0.89 (the pelvis).
-constexpr f32 kRootY = 0.89f;
+// Rest geometry, unscaled metres, for an adult of 1.75 m with human proportions (head about 1/7 of the height,
+// shoulders 0.55 m across the arms). The feet touch y = 0; the root part spans the hips to the chest.
+constexpr f32 kRootY = 1.00f;    // root part centre
+constexpr f32 kRootHalf = 0.60f; // half its height: HipHeight = kRootY - kRootHalf (ground to the root's bottom)
 
 enum class Look : u8 { Root, Skin, Shirt, Pants, Shoe };
 
@@ -34,30 +36,30 @@ struct Rig {
 
 Rig make_rig() {
     Rig r;
-    r.parts.push_back({"HumanoidRootPart", {0.0f, kRootY, 0.0f}, {0.50f, 0.90f, 0.35f}, Look::Root});
-    r.parts.push_back({"LowerTorso", {0.0f, kRootY, 0.0f}, {0.42f, 0.22f, 0.24f}, Look::Pants});
-    r.parts.push_back({"UpperTorso", {0.0f, 1.22f, 0.0f}, {0.52f, 0.44f, 0.26f}, Look::Shirt});
-    r.parts.push_back({"Head", {0.0f, 1.62f, 0.0f}, {0.34f, 0.36f, 0.34f}, Look::Skin});
+    r.parts.push_back({"HumanoidRootPart", {0.0f, kRootY, 0.0f}, {0.46f, 2.0f * kRootHalf, 0.30f}, Look::Root});
+    r.parts.push_back({"LowerTorso", {0.0f, 1.00f, 0.0f}, {0.32f, 0.22f, 0.20f}, Look::Pants});
+    r.parts.push_back({"UpperTorso", {0.0f, 1.29f, 0.0f}, {0.36f, 0.38f, 0.21f}, Look::Shirt});
+    r.parts.push_back({"Head", {0.0f, 1.625f, 0.0f}, {0.18f, 0.25f, 0.22f}, Look::Skin});
     r.joints.push_back({"RootJoint", "HumanoidRootPart", "LowerTorso", {0.0f, kRootY, 0.0f}});
-    r.joints.push_back({"Waist", "LowerTorso", "UpperTorso", {0.0f, 1.00f, 0.0f}});
-    r.joints.push_back({"Neck", "UpperTorso", "Head", {0.0f, 1.44f, 0.0f}});
+    r.joints.push_back({"Waist", "LowerTorso", "UpperTorso", {0.0f, 1.10f, 0.0f}});
+    r.joints.push_back({"Neck", "UpperTorso", "Head", {0.0f, 1.50f, 0.0f}});
 
     for (int k = 0; k < 2; ++k) {
         const f32 sx = k == 0 ? 1.0f : -1.0f;
         const std::string s = k == 0 ? "Right" : "Left";
-        r.parts.push_back({s + "UpperArm", {sx * 0.30f, 1.23f, 0.0f}, {0.16f, 0.30f, 0.16f}, Look::Shirt});
-        r.parts.push_back({s + "LowerArm", {sx * 0.30f, 0.94f, 0.0f}, {0.14f, 0.28f, 0.14f}, Look::Shirt});
-        r.parts.push_back({s + "Hand", {sx * 0.30f, 0.72f, 0.0f}, {0.14f, 0.16f, 0.14f}, Look::Skin});
-        r.parts.push_back({s + "UpperLeg", {sx * 0.11f, 0.61f, 0.0f}, {0.22f, 0.34f, 0.24f}, Look::Pants});
-        r.parts.push_back({s + "LowerLeg", {sx * 0.11f, 0.28f, 0.0f}, {0.20f, 0.32f, 0.20f}, Look::Pants});
-        r.parts.push_back({s + "Foot", {sx * 0.11f, 0.06f, -0.06f}, {0.22f, 0.12f, 0.40f}, Look::Shoe});
+        r.parts.push_back({s + "UpperArm", {sx * 0.225f, 1.30f, 0.0f}, {0.10f, 0.30f, 0.10f}, Look::Shirt});
+        r.parts.push_back({s + "LowerArm", {sx * 0.225f, 1.015f, 0.0f}, {0.085f, 0.27f, 0.085f}, Look::Shirt});
+        r.parts.push_back({s + "Hand", {sx * 0.225f, 0.80f, 0.0f}, {0.045f, 0.17f, 0.09f}, Look::Skin});
+        r.parts.push_back({s + "UpperLeg", {sx * 0.095f, 0.685f, 0.0f}, {0.15f, 0.42f, 0.16f}, Look::Pants});
+        r.parts.push_back({s + "LowerLeg", {sx * 0.095f, 0.285f, 0.0f}, {0.12f, 0.39f, 0.12f}, Look::Pants});
+        r.parts.push_back({s + "Foot", {sx * 0.095f, 0.045f, -0.045f}, {0.10f, 0.09f, 0.26f}, Look::Shoe});
 
-        r.joints.push_back({s + "Shoulder", "UpperTorso", s + "UpperArm", {sx * 0.30f, 1.38f, 0.0f}});
-        r.joints.push_back({s + "Elbow", s + "UpperArm", s + "LowerArm", {sx * 0.30f, 1.08f, 0.0f}});
-        r.joints.push_back({s + "Wrist", s + "LowerArm", s + "Hand", {sx * 0.30f, 0.80f, 0.0f}});
-        r.joints.push_back({s + "Hip", "LowerTorso", s + "UpperLeg", {sx * 0.11f, 0.78f, 0.0f}});
-        r.joints.push_back({s + "Knee", s + "UpperLeg", s + "LowerLeg", {sx * 0.11f, 0.44f, 0.0f}});
-        r.joints.push_back({s + "Ankle", s + "LowerLeg", s + "Foot", {sx * 0.11f, 0.12f, 0.0f}});
+        r.joints.push_back({s + "Shoulder", "UpperTorso", s + "UpperArm", {sx * 0.225f, 1.44f, 0.0f}});
+        r.joints.push_back({s + "Elbow", s + "UpperArm", s + "LowerArm", {sx * 0.225f, 1.15f, 0.0f}});
+        r.joints.push_back({s + "Wrist", s + "LowerArm", s + "Hand", {sx * 0.225f, 0.885f, 0.0f}});
+        r.joints.push_back({s + "Hip", "LowerTorso", s + "UpperLeg", {sx * 0.095f, 0.89f, 0.0f}});
+        r.joints.push_back({s + "Knee", s + "UpperLeg", s + "LowerLeg", {sx * 0.095f, 0.48f, 0.0f}});
+        r.joints.push_back({s + "Ankle", s + "LowerLeg", s + "Foot", {sx * 0.095f, 0.09f, 0.0f}});
     }
     return r;
 }
@@ -98,7 +100,9 @@ AvatarDesc AvatarDesc::preset(AvatarPreset p) {
     return d;
 }
 
-f32 r15_hip_height(f32 height_scale) { return kRootY * clamp_scale(height_scale); }
+// Roblox and controller convention: HipHeight is the gap between the ground and the bottom of the root part (the root
+// centre sits HipHeight + Size.y / 2 above the feet).
+f32 r15_hip_height(f32 height_scale) { return (kRootY - kRootHalf) * clamp_scale(height_scale); }
 
 world::Instance* build_r15_avatar(world::DataModel& dm, world::Instance* parent, const AvatarDesc& desc) {
     using world::Value;
@@ -172,7 +176,7 @@ world::Instance* build_r15_avatar(world::DataModel& dm, world::Instance* parent,
     world::Instance* humanoid = dm.create("Humanoid", model, "Humanoid");
     if (!humanoid) return nullptr;
     humanoid->set("DisplayName", Value::string(desc.name));
-    humanoid->set("HipHeight", Value::number(root_centre.y));
+    humanoid->set("HipHeight", Value::number(r15_hip_height(desc.height_scale)));
     humanoid->set("RigType", Value::enumeration(0)); // R15
     dm.create("Animator", humanoid, "Animator");
     model->set("PrimaryPart", Value::reference(hrp->id()));

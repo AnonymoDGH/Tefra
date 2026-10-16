@@ -39,6 +39,7 @@ Las sesiones no recuerdan nada: este archivo es la memoria. Actualízalo al fina
   - Modelos en `apps/studio/resources/models/coast/` (`make_lighthouse.py`, `make_coast_ph_props.py`).
   - Sonidos thunder/surf/wind_storm/lever/lamp_on/foghorn en `gen_sfx.py`.
 - **POM + interior mapping** (`gbuffer.frag`, flags 32/64, extras glTF `tefra_parallax`/`tefra_height`/`tefra_interior`; `docs/research/parallax/REPORT.md`).
+- **Avatar R15 a escala humana (2026-10-16):** 1,75 m con proporciones reales; HipHeight = suelo → base del root (convención del controlador y de Roblox). Antes flotaba 0,45 m y parecía de 2,25 m. Captura `docs/captures/avatar-scale-before-after.png`.
 - **Cámara y personaje en juego:** interpolación de física (`character_post_step` con alpha), inercia/giro suave/coyote time/buffer de salto/salto variable/sprint (`physics/character.cpp`); cámara con cursor bloqueado, shift-lock (Ctrl), primera persona, zoom exponencial, colisión con 3 rayos (`GameRuntime::update_camera`).
 - **Nubes volumétricas opcionales** (`Clouds.Volumetric`; `shaders/clouds_vol.frag`, pase `clouds` a 1/2-1/4 de resolución solo en píxeles de cielo, compuesto en `lighting.frag` `sky_with_clouds`; presets en `limit_quality`). Pendiente: sombras de nubes sobre el suelo, reproyección temporal propia.
 - **MCP para agentes:** `engine_guide`, `create_instances` (lote), `terrain_height`, `raycast`, `new_place_from_template`, `import_model`, `import_roblox`, `save_project`. MeshId relativo al proyecto (`SceneSync::set_asset_root`).

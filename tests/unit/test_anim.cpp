@@ -57,8 +57,8 @@ TEST_CASE("avatar: 15 body parts plus the root, 15 Motor6D joints, Humanoid and 
     Instance* hum = model->find_first_child("Humanoid");
     REQUIRE(hum != nullptr);
     REQUIRE(hum->find_first_child_of_class("Animator") != nullptr);
-    CHECK(hum->get_float("HipHeight") > 0.8f);
-    CHECK(hum->get_float("HipHeight") < 1.0f);
+    CHECK(hum->get_float("HipHeight") > 0.3f);
+    CHECK(hum->get_float("HipHeight") < 0.5f);
 
     // Every joint name of the rig exists and connects two parts of the model.
     for (const char* joint : kJointNames) {
@@ -73,10 +73,10 @@ TEST_CASE("avatar: 15 body parts plus the root, 15 Motor6D joints, Humanoid and 
     CHECK(rig_part(model, "HumanoidRootPart")->get_bool("CanCollide"));
     CHECK_FALSE(rig_part(model, "UpperTorso")->get_bool("CanCollide"));
     CHECK(rig_part(model, "HumanoidRootPart")->get_float("Transparency") == doctest::Approx(1.0f));
-    // About 1.8 m tall for the default proportions.
+    // 1.75 m tall for the default proportions.
     const Instance* head = rig_part(model, "Head");
     const f32 top = head->get_vec3("Position").y + head->get_vec3("Size").y * 0.5f;
-    CHECK(top == doctest::Approx(1.8f).epsilon(0.01));
+    CHECK(top == doctest::Approx(1.75f).epsilon(0.01));
 }
 
 TEST_CASE("avatar: rest pose closes every joint (Part1 = Part0 * C0 * inverse(C1))") {
@@ -100,7 +100,7 @@ TEST_CASE("avatar: rest pose closes every joint (Part1 = Part0 * C0 * inverse(C1
     }
 }
 
-TEST_CASE("avatar: soles on the ground when the root is at HipHeight") {
+TEST_CASE("avatar: soles on the ground when the root is HipHeight + Size.y / 2 up") {
     for (AvatarPreset p : {AvatarPreset::Explorer, AvatarPreset::Stocky, AvatarPreset::Lanky}) {
         DataModel dm;
         const AvatarDesc d = AvatarDesc::preset(p);
@@ -108,8 +108,9 @@ TEST_CASE("avatar: soles on the ground when the root is at HipHeight") {
         REQUIRE(model != nullptr);
         Instance* hum = model->find_first_child("Humanoid");
         Instance* root = rig_part(model, "HumanoidRootPart");
-        // The root centre sits at HipHeight above the ground (y = 0).
-        root->set("Position", Value::vector3({0.0f, hum->get_float("HipHeight"), 0.0f}));
+        // Controller convention: the root centre sits HipHeight + Size.y / 2 above the ground (y = 0).
+        const f32 centre = hum->get_float("HipHeight") + root->get_vec3("Size").y * 0.5f;
+        root->set("Position", Value::vector3({0.0f, centre, 0.0f}));
         CHECK(hum->get_float("HipHeight") == doctest::Approx(r15_hip_height(d.height_scale)));
 
         // One idle frame: the breathing touches the torso and arms only, so the feet must stay on the ground.
