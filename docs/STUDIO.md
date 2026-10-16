@@ -349,6 +349,13 @@ Para clientes que solo hablan stdio (Claude Desktop) hay un puente, `tefra_mcp`;
 - Modelos: `builtin:models/city/*.glb` y `builtin:models/city/buildings/*.gltf`; ver
   `apps/studio/resources/models/city/README.md`.
 
+## Luz rebotada (iluminación global en pantalla)
+- Cada píxel lanza 1 rayo (Medium), 2 (High) o 3 (Ultra) hacia su hemisferio, hasta 5 m. Donde chocan con una
+  superficie toman la luz que esta emitía en el fotograma anterior. Con los fotogramas se acumulan varios rebotes.
+- Efecto: el charco iluminado por la farola aclara la fachada y los bajos de los coches, los neones tiñen la pared y
+  las esquinas quedan más oscuras que las zonas abiertas.
+- Solo ve lo que está en pantalla. Está apagado en Low. `TEFRA_NO_GI=1` lo desactiva para comparar.
+
 ## Texturas con profundidad (parallax e interior mapping)
 - **Parallax occlusion mapping:** las paredes de ladrillo y enlucido tienen relieve real al mirarlas de lado; el
   mortero queda hundido y los ladrillos lo tapan. Funciona hasta unos 22 m.

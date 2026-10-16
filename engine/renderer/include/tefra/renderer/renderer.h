@@ -59,6 +59,7 @@ struct RenderSettings {
     f32 sun_scale = 1.0f;              // multiplies the sun / moon light (0 = interiors without daylight)
     vec3 ambient{0.0f, 0.0f, 0.0f};    // flat indoor/bounce irradiance (lux): interiors lit by local lights
     bool ssr = true;                   // screen-space reflections on glossy surfaces (needs TAA history)
+    u32 gi_rays = 2;                   // screen-space bounce light: rays per pixel (0 = off)
     u32 local_shadows = 8;             // nearest local lights with Shadows = true that get a shadow map
     u32 local_shadow_resolution = 512; // per light (atlas of 4 x 2 tiles)
     u32 max_lights = 512;              // nearest visible local lights per frame (tiled: 64 per 16x16 tile)

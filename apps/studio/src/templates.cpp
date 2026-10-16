@@ -840,19 +840,18 @@ void build_city_rain(DataModel& dm) {
                             const vec3 at = fc + t * ((f32(k) - 2.5f) * 3.0f);
                             const f32 q = rnd();
                             if (q < 0.2f) {
-                                // Blade sign: two boards back to back, perpendicular to the facade.
+                                // Sign flat on the facade, over the shop window (standoffs keep it off the
+                                // cornice); its glow washes the wall around it.
                                 static const char* const kNeon[] = {
                                     "neon_sign_open", "neon_sign_bar",   "neon_sign_hotel", "neon_sign_ramen",
                                     "neon_sign_24h",  "neon_sign_pizza", "neon_sign_cafe",  "neon_sign_liquor"};
                                 const u32 pick = u32(rnd() * 8.0f) % 8;
-                                const vec3 c = at + n * 0.95f + vec3{0, 3.9f, 0};
-                                prop(furniture, "NeonSign", kNeon[pick], c, yaw_to(t));
-                                prop(furniture, "NeonSign", kNeon[pick], c, yaw_to(-t));
-                                light_at(furniture, c + n * 0.2f, neon_cols[pick % 4], 0.8f, 5.0f);
+                                const vec3 c = at + vec3{0, 3.0f, 0};
+                                prop(furniture, "NeonSign", kNeon[pick], c, yaw_to(n));
+                                light_at(furniture, c + n * 0.45f, neon_cols[pick % 4], 0.6f, 4.5f);
                             } else if (q < 0.38f) {
                                 prop(furniture, "Awning", "awning", at + n * 0.02f + vec3{0, 2.95f, 0}, yaw_to(n));
                             }
-                            // Shop light spilling onto the wet sidewalk.
                             // Shop window light: out of the glass and down onto the wet sidewalk, none back into the
                             // wall.
                             if (q < 0.55f)

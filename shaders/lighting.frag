@@ -11,7 +11,7 @@
 #include "common/sky.glsl"
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer TileBuffer { uint v[]; };
 layout(push_constant) uniform Push {
-    FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; uint ao; uint vol; LightBuffer lights; uint light_count; uint clouds; TileBuffer tiles; uint tiles_x; uint history;
+    FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; uint ao; uint vol; LightBuffer lights; uint light_count; uint clouds; TileBuffer tiles; uint tiles_x; uint history; uint fx;
 } pc;
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
@@ -228,6 +228,54 @@ vec3 light_halos(Frame f, vec3 dir, float tmax) {
     return sum * sigma * (1.0 / (4.0 * BRDF_PI)) * 1.2;
 }
 
+// Screen-space indirect diffuse (one bounce per frame, accumulating over frames through the history): a few
+// cosine-distributed rays per pixel march the depth buffer up to 5 m; where they hit a surface, last frame's lit image
+// gives the light that surface sends back. Lamps, neon and lit windows tint the walls and ground around them; TAA
+// resolves the noise. Returns the mean incoming radiance over the hemisphere from hits (misses count as 0) and the
+// fraction of rays that hit (the ambient term covers the rest of the hemisphere).
+vec3 ssgi(Frame f, vec3 p, vec3 N, float noise, uint rays, out float hit_frac) {
+    hit_frac = 0.0;
+    vec3 sum = vec3(0.0);
+    vec3 T = normalize(abs(N.y) < 0.99 ? cross(N, vec3(0, 1, 0)) : cross(N, vec3(1, 0, 0)));
+    vec3 B = cross(N, T);
+    const int kSteps = 10;
+    const float kMax = 5.0;
+    for (uint r = 0u; r < rays; ++r) {
+        // Cosine-weighted direction: golden-angle spiral rotated per pixel and per frame.
+        float u1 = fract(noise + float(r) * 0.618034);
+        float u2 = fract(noise * 7.31 + float(r) * 0.381966 + 0.5);
+        float phi = 6.2831853 * u2, sr = sqrt(u1);
+        vec3 d = normalize(T * (cos(phi) * sr) + B * (sin(phi) * sr) + N * sqrt(max(1.0 - u1, 0.0)));
+        vec3 start = p + N * 0.04;
+        for (int i = 1; i <= kSteps; ++i) {
+            float s = (float(i) - 0.5 + 0.5 * noise) / float(kSteps);
+            float t = kMax * s * s + 0.05;
+            vec3 q = start + d * t;
+            vec4 cq = f.view_proj * vec4(q, 1.0);
+            if (cq.w <= 0.0) break;
+            vec2 uv = cq.xy / cq.w * 0.5 + 0.5;
+            if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) break;
+            float scene_vd = linear_depth(f, textureLod(TEX2D(pc.depth, SMP_NEAREST_CLAMP), uv, 0.0).r);
+            float ray_vd = cq.w;
+            if (ray_vd > scene_vd + 0.03 && ray_vd - scene_vd < 0.3 + 0.03 * ray_vd) {
+                vec4 pp = f.prev_view_proj * vec4(q, 1.0);
+                vec2 puv = pp.xy / pp.w * 0.5 + 0.5;
+                if (pp.w > 0.0 && all(greaterThan(puv, vec2(0.0))) && all(lessThan(puv, vec2(1.0)))) {
+                    vec3 L = textureLod(TEX2D(pc.history, SMP_LINEAR_CLAMP), puv, 0.0).rgb / max(f.exposure.x, 1e-8);
+                    // Fireflies: a ray that lands on a lamp lens would dominate; clamp its luminance.
+                    float lum = dot(L, vec3(0.2126, 0.7152, 0.0722));
+                    float cap = 4.0 / max(f.exposure.x, 1e-8);
+                    sum += L * min(1.0, cap / max(lum, 1e-6));
+                    hit_frac += 1.0;
+                }
+                break;
+            }
+        }
+    }
+    hit_frac /= float(max(rays, 1u));
+    return sum / float(max(rays, 1u));
+}
+
 // Sky with the volumetric clouds over it (reduced resolution, bilinear: clouds are soft).
 vec3 sky_with_clouds(Frame f, vec3 dir) {
     vec3 sky = sky_color(f, dir);
@@ -353,8 +401,16 @@ void main() {
     }
     // Emission: display-referred (glows the same at any exposure; 1 = a few times a sunlit white wall, so it blooms).
     color += albedo * g2.b * (1.6 / f.exposure.x);
-    // Flat bounce light for interiors (Lighting.IndoorAmbient): diffuse only, occluded by AO.
-    color += diff_col * f.ambient.xyz / BRDF_PI * ao;
+    // Bounce light (screen-space): diffuse irradiance from nearby lit surfaces.
+    float gi_hits = 0.0;
+    const uint gi_rays = (pc.fx >> 8u) & 15u;
+    if (pc.history != 0xFFFFFFFFu && gi_rays > 0u) {
+        vec3 gi = ssgi(f, p, N, noise, gi_rays, gi_hits);
+        color += diff_col * gi * ao;
+    }
+    // Flat bounce light for interiors (Lighting.IndoorAmbient): diffuse only, occluded by AO. Where the bounce rays
+    // found nearby surfaces, those already supply part of that light.
+    color += diff_col * f.ambient.xyz / BRDF_PI * ao * (1.0 - 0.7 * gi_hits);
 
     // Image-based lighting (split-sum, multi-scatter compensation).
     vec2 ab = texture(TEX2D(f.brdf_lut, SMP_LINEAR_CLAMP), vec2(ndv, rough)).rg;
@@ -365,11 +421,11 @@ void main() {
     vec3 R = reflect(-V, N);
     vec3 prefiltered = textureLod(TEXCUBE(f.env_cube, SMP_LINEAR_CLAMP_MIP), R, rough * float(f.env_mips - 1u)).rgb;
     vec3 irradiance = sh9_eval(f, N);
-    vec3 kd = diff_col * (1.0 - fss - fms * ems);
+    vec3 kd = diff_col * (1.0 - fss - fms * ems) * (1.0 - 0.5 * gi_hits);
     float spec_occ = clamp(pow(ndv + ao, exp2(-16.0 * a - 1.0)) - 1.0 + ao, 0.0, 1.0);
     float canopy = canopy_visibility(f, p);
     vec3 env_spec = prefiltered * f.exposure.y * canopy * amb_tint;
-    if (pc.history != 0xFFFFFFFFu && rough < 0.22) {
+    if (pc.history != 0xFFFFFFFFu && (pc.fx & 1u) != 0u && rough < 0.22) {
         float conf;
         vec3 refl = ssr_trace(f, p, N, V, rough, noise, conf);
         env_spec = mix(env_spec, refl, conf);

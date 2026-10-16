@@ -52,7 +52,8 @@ struct LightingPush {
     VkDeviceAddress lights;
     u32 light_count, clouds; // clouds: volumetric cloud texture (0xFFFFFFFF = 2D layer)
     VkDeviceAddress tiles;   // per-tile light lists (light_cull.comp)
-    u32 tiles_x, history;    // history: last frame's TAA output for screen-space reflections (0xFFFFFFFF = off)
+    u32 tiles_x, history;    // history: last frame's TAA output for SSR and bounce light (0xFFFFFFFF = off)
+    u32 fx;                  // bit0: screen-space reflections, bits 8..11: bounce light rays per pixel
 };
 struct VolumetricPush {
     VkDeviceAddress frame;
@@ -1493,6 +1494,9 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         taa_valid = history_valid_ ? 1u : 0u;
     }
     const bool ssr = s.ssr && taa_valid != 0u;
+    static const bool no_gi = std::getenv("TEFRA_NO_GI") != nullptr; // A/B comparisons of the bounce light
+    const u32 gi_rays = taa_valid != 0u && !no_gi ? min(s.gi_rays, 15u) : 0u;
+    const bool use_history = ssr || gi_rays > 0u;
 
     graph_.add_pass(
         "lighting", rg::PassType::Raster,
@@ -1504,7 +1508,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             if (ao.valid()) b.read(ao, rg::Access::Sampled);
             if (vol.valid()) b.read(vol, rg::Access::Sampled);
             if (clouds_tex.valid()) b.read(clouds_tex, rg::Access::Sampled);
-            if (ssr) b.read(taa_prev, rg::Access::Sampled);
+            if (use_history) b.read(taa_prev, rg::Access::Sampled);
             b.color(hdr, rg::Load::DontCare);
         },
         [=, this, &fc](const rg::PassContext& ctx) {
@@ -1528,7 +1532,8 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                            clouds_tex.valid() ? ctx.sampled(clouds_tex) : 0xFFFFFFFFu,
                            tiles_addr,
                            tiles_x,
-                           ssr ? ctx.sampled(taa_prev) : 0xFFFFFFFFu};
+                           use_history ? ctx.sampled(taa_prev) : 0xFFFFFFFFu,
+                           (ssr ? 1u : 0u) | (gi_rays << 8u)};
             vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
             vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
         });
@@ -1913,6 +1918,8 @@ void limit_quality(RenderSettings& s, Quality q) {
     static const u32 max_lights[4] = {128, 256, 512, 1024};
     s.rain_drops = min(s.rain_drops, rain_drops[static_cast<u32>(q)]);
     s.max_lights = min(s.max_lights, max_lights[static_cast<u32>(q)]);
+    static const u32 gi_rays[4] = {0, 1, 2, 3};
+    s.gi_rays = min(s.gi_rays, gi_rays[static_cast<u32>(q)]);
     static const u32 local_shadows[4] = {0, 4, 8, 8};
     static const u32 local_res[4] = {256, 512, 512, 1024};
     s.local_shadows = min(s.local_shadows, local_shadows[static_cast<u32>(q)]);
