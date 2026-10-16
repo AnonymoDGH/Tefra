@@ -1351,7 +1351,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         if (rain_occ) {
             // Orthographic view straight down over 80 x 80 m around the camera, 120 m deep, snapped to its texels
             // so the edges of roofs do not crawl as the camera moves.
-            constexpr f32 kHalf = 40.0f, kDepth = 120.0f;
+            constexpr f32 kHalf = 40.0f, kRainDepth = 120.0f;
             const f32 texel = 2.0f * kHalf / f32(max(s.local_shadow_resolution, 64u));
             const f64 sx = std::floor(camera.position.x / f64(texel)) * f64(texel);
             const f64 sz = std::floor(camera.position.z / f64(texel)) * f64(texel);
@@ -1360,7 +1360,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
             mat4 proj{};
             proj.c[0].x = 1.0f / kHalf;
             proj.c[1].y = 1.0f / kHalf;
-            proj.c[2].z = -1.0f / kDepth;
+            proj.c[2].z = -1.0f / kRainDepth;
             proj.c[3].z = 0.0f;
             proj.c[3].w = 1.0f;
             fc.local_shadow_vp[kMaxLocalShadows - 1] = proj * view;
