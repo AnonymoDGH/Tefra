@@ -327,18 +327,24 @@ Para clientes que solo hablan stdio (Claude Desktop) hay un puente, `tefra_mcp`;
 ## Lluvia y ciudad nocturna
 - Clase `Rain` bajo Lighting:
   - `Intensity`: densidad de las gotas;
-  - `Wetness`: oscurece y abrillanta todas las superficies;
-  - `Puddles`: charcos en superficies horizontales, con ondas de impacto;
+  - `Wetness`: oscurece las superficies y las deja satinadas (el hormigón y el asfalto mojados no son espejos);
+  - `Puddles`: charcos en superficies horizontales, que sí reflejan como un espejo y tienen ondas;
   - `Wind` y `DropSpeed`.
 - Las gotas son trazos procedurales en la GPU, iluminados por las 24 luces más cercanas.
-- Reflejos en pantalla (SSR) sobre suelos mojados y charcos. Se desactivan en Low.
-- Halos de luz en la niebla: con la volumétrica activada usan las 16 luces más cercanas; sin ella, un halo analítico barato.
-- Materiales nuevos:
-  - `Facade`: rejilla de ventanas, algunas encendidas y otras con el parpadeo de una tele;
-  - `Asphalt`.
-- Plantilla **Rainy City** (`city_rain`): manzanas de 5×5 con:
-  - rascacielos, escaparates, neones, toldos y escaleras de incendios;
-  - farolas de sodio y LED, semáforos, pasos de cebra y alcantarillas con vapor;
-  - coches aparcados y mobiliario urbano;
+- Reflejos en pantalla (SSR) solo en superficies casi pulidas (charcos, cristal). Se desactivan en Low.
+- Halos de luz en la niebla: con la volumétrica activada usan las 16 luces más cercanas; sin ella, un halo analítico.
+- Plantilla **Rainy City** (`city_rain`):
+  - manzanas de 5×5 con edificios montados a partir de kits de fachada CC0 de Poly Haven: ladrillo y enlucido,
+    escaleras de incendios, AC, bajantes, escaparates y ventanas con habitaciones;
+  - farolas clásicas, semáforos, neones con texto real, toldos, coches (berlina, compacto, SUV, taxi), mobiliario
+    urbano y trastos en los callejones;
   - sonido de lluvia.
-- Props generados con Blender: `tools/blender/make_city_props.py` → `builtin:models/city/*.glb`.
+- Modelos: `builtin:models/city/*.glb` y `builtin:models/city/buildings/*.gltf`; ver
+  `apps/studio/resources/models/city/README.md`.
+
+## Texturas con profundidad (parallax e interior mapping)
+- **Parallax occlusion mapping:** las paredes de ladrillo y enlucido tienen relieve real al mirarlas de lado; el
+  mortero queda hundido y los ladrillos lo tapan. Funciona hasta unos 22 m.
+- **Interior mapping:** cada ventana muestra una habitación en 3D (paredes, suelo y techo) con una sola cara.
+- En modelos propios se activa con propiedades del material en Blender: `tefra_parallax` + `tefra_height`, o
+  `tefra_interior`. Explicación y detalles en `docs/research/parallax/REPORT.md`.

@@ -725,6 +725,17 @@ public class Steam : TefraScript
 }
 )cs";
 
+struct CityBuilding {
+    const char* model;
+    f32 height; // metres, roof parapet included
+};
+// Must match CATALOGUE in tools/blender/make_city_buildings.py (3 m floors + 0.75 m crown).
+constexpr CityBuilding kCityBuildings[] = {{"apt_a", 18.75f},     {"apt_b", 24.75f},  {"apt_c", 15.75f},
+                                           {"apt_tower", 42.75f}, {"loft_a", 15.3f},  {"loft_b", 21.3f},
+                                           {"loft_tower", 30.3f}, {"warehouse", 9.3f}};
+constexpr u32 kCityBuildingCount = sizeof(kCityBuildings) / sizeof(kCityBuildings[0]);
+constexpr f32 kBuilding = 18.0f;
+
 void build_city_rain(DataModel& dm) {
     Instance* ws = dm.workspace();
     constexpr int kBlocks = 5;
@@ -768,8 +779,6 @@ void build_city_rain(DataModel& dm) {
     Instance* furniture = dm.create("Folder", city, "StreetFurniture");
     Instance* lamps = dm.create("Folder", city, "StreetLamps");
     Instance* cars = dm.create("Folder", city, "Cars");
-    const vec3 palette[] = {{0.55f, 0.53f, 0.50f}, {0.45f, 0.30f, 0.25f}, {0.62f, 0.58f, 0.50f},
-                            {0.35f, 0.36f, 0.38f}, {0.50f, 0.42f, 0.34f}, {0.28f, 0.30f, 0.33f}};
     const vec3 neon_cols[] = {{1.0f, 0.2f, 0.6f}, {0.2f, 0.85f, 1.0f}, {0.7f, 0.3f, 1.0f}, {1.0f, 0.55f, 0.15f}};
 
     for (int bx = 0; bx < kBlocks; ++bx)
@@ -778,57 +787,54 @@ void build_city_rain(DataModel& dm) {
             // Sidewalk slab with its curb, over the asphalt.
             part(dm, streets, "Sidewalk", {cx, kCurb * 0.5f, cz}, {kLot, kCurb, kLot}, {0.42f, 0.41f, 0.40f},
                  "Concrete");
-            // Buildings: 2 x 2 lots, set back behind the sidewalk.
+            // Buildings: 2 x 2 lots of 20 m; each holds an 18 x 18 m building assembled from a CC0 modular facade
+            // kit (tools/blender/make_city_buildings.py), outer faces flush with the sidewalk.
             const f32 inner = kLot - 2.0f * kSidewalk, lot = inner * 0.5f;
             for (int lx = 0; lx < 2; ++lx)
                 for (int lz = 0; lz < 2; ++lz) {
-                    const f32 w = lot - 0.4f - rnd() * 1.5f, d = lot - 0.4f - rnd() * 1.5f;
-                    // Outer faces flush with the sidewalk edge (shops open onto the street).
-                    const f32 ox = cx + (lx == 0 ? -1.0f : 1.0f) * (inner * 0.5f - w * 0.5f);
-                    const f32 oz = cz + (lz == 0 ? -1.0f : 1.0f) * (inner * 0.5f - d * 0.5f);
-                    const bool tall = rnd() < 0.3f;
-                    const f32 h = tall ? 45.0f + rnd() * 40.0f : 13.0f + rnd() * 22.0f;
-                    const vec3 col = palette[u32(rnd() * 6.0f) % 6];
-                    part(dm, buildings, "Building", {ox, kCurb + h * 0.5f, oz}, {w, h, d}, col, "Facade");
-                    // Street-facing faces: x side and z side of this lot.
+                    const f32 ox = cx + (lx == 0 ? -1.0f : 1.0f) * (lot - kBuilding * 0.5f);
+                    const f32 oz = cz + (lz == 0 ? -1.0f : 1.0f) * (lot - kBuilding * 0.5f);
+                    const f32 r = rnd();
+                    const CityBuilding& kind = kCityBuildings[u32(r * f32(kCityBuildingCount)) % kCityBuildingCount];
+                    Instance* bld = dm.create("MeshPart", buildings, "Building");
+                    bld->set("MeshId",
+                             Value::string(std::string("builtin:models/city/buildings/") + kind.model + ".gltf"));
+                    bld->set("Size", Value::vector3({1, 1, 1}));
+                    bld->set("Position", Value::vector3({ox, kCurb, oz}));
+                    bld->set("Orientation", Value::vector3({0, 90.0f * f32(u32(rnd() * 4.0f) % 4), 0}));
+                    bld->set("Anchored", Value::boolean(true));
+                    bld->set("CanCollide", Value::boolean(false));
+                    // Collision: an invisible box over the footprint.
+                    Instance* col = part(dm, bld, "Collision", {ox, kCurb + kind.height * 0.5f, oz},
+                                         {kBuilding, kind.height, kBuilding}, {0.5f, 0.5f, 0.5f}, "Concrete");
+                    col->set("Transparency", Value::number(1.0));
+                    col->set("CastShadow", Value::boolean(false));
+                    // Street-facing faces: neon signs and awnings over some shopfronts.
                     const vec3 nx{lx == 0 ? -1.0f : 1.0f, 0, 0}, nz{0, 0, lz == 0 ? -1.0f : 1.0f};
                     for (int face = 0; face < 2; ++face) {
                         const vec3 n = face == 0 ? nx : nz;
-                        const f32 along = face == 0 ? d : w;
-                        const vec3 fc =
-                            face == 0 ? vec3{ox + n.x * w * 0.5f, kCurb, oz} : vec3{ox, kCurb, oz + n.z * d * 0.5f};
+                        const vec3 fc = vec3{ox, kCurb, oz} + n * (kBuilding * 0.5f);
                         const vec3 t = face == 0 ? vec3{0, 0, 1} : vec3{1, 0, 0};
-                        const int shops = int(along / 6.6f);
-                        for (int k = 0; k < shops; ++k) {
-                            const f32 off = (f32(k) - f32(shops - 1) * 0.5f) * 6.6f;
-                            const vec3 at = fc + t * off + n * 0.3f;
-                            if (rnd() < 0.8f) {
-                                prop(furniture, "Storefront", "storefront", at, yaw_to(n));
-                                light_at(furniture, at + n * 1.2f + vec3{0, 2.6f, 0},
-                                         rnd() < 0.5f ? vec3{1.0f, 0.82f, 0.6f} : vec3{0.85f, 0.92f, 1.0f}, 1.6f, 8.0f);
-                                if (rnd() < 0.45f) {
-                                    const vec3 nc = neon_cols[u32(rnd() * 4.0f) % 4];
-                                    prop(furniture, "NeonSign", rnd() < 0.5f ? "neon_sign_open" : "neon_sign_bar",
-                                         at + vec3{0, 4.1f, 0} + n * 0.05f, yaw_to(n));
-                                    light_at(furniture, at + n * 0.9f + vec3{0, 4.1f, 0}, nc, 1.4f, 6.0f);
-                                } else if (rnd() < 0.5f) {
-                                    prop(furniture, "Awning", "awning", at + vec3{0, 3.55f, 0}, yaw_to(n));
-                                }
+                        for (int k = 0; k < 6; ++k) {
+                            const vec3 at = fc + t * ((f32(k) - 2.5f) * 3.0f);
+                            const f32 q = rnd();
+                            if (q < 0.2f) {
+                                // Blade sign: two boards back to back, perpendicular to the facade.
+                                static const char* const kNeon[] = {
+                                    "neon_sign_open", "neon_sign_bar",   "neon_sign_hotel", "neon_sign_ramen",
+                                    "neon_sign_24h",  "neon_sign_pizza", "neon_sign_cafe",  "neon_sign_liquor"};
+                                const u32 pick = u32(rnd() * 8.0f) % 8;
+                                const vec3 c = at + n * 0.95f + vec3{0, 3.9f, 0};
+                                prop(furniture, "NeonSign", kNeon[pick], c, yaw_to(t));
+                                prop(furniture, "NeonSign", kNeon[pick], c, yaw_to(-t));
+                                light_at(furniture, c + n * 0.2f, neon_cols[pick % 4], 1.6f, 7.0f);
+                            } else if (q < 0.38f) {
+                                prop(furniture, "Awning", "awning", at + n * 0.02f + vec3{0, 2.95f, 0}, yaw_to(n));
                             }
-                        }
-                        // AC units and a fire escape on some faces.
-                        const int floors = int((h - 4.0f) / 3.2f);
-                        for (int fl = 1; fl < min(floors, 14); ++fl)
-                            if (rnd() < 0.18f)
-                                prop(furniture, "AC", "ac_unit",
-                                     fc + t * ((rnd() - 0.5f) * (along - 3.0f)) +
-                                         vec3{0, 4.2f + f32(fl) * 3.2f - 0.6f, 0},
-                                     yaw_to(n));
-                        if (rnd() < 0.25f && floors > 2) {
-                            const vec3 base = fc + t * ((rnd() - 0.5f) * (along - 6.0f));
-                            for (int fl = 1; fl < min(floors, 7); ++fl)
-                                prop(furniture, "FireEscape", "fire_escape",
-                                     base + vec3{0, 4.2f + f32(fl - 1) * 3.2f, 0}, yaw_to(n));
+                            // Shop light spilling onto the wet sidewalk.
+                            if (q < 0.55f)
+                                light_at(furniture, at + n * 1.2f + vec3{0, 2.4f, 0},
+                                         rnd() < 0.5f ? vec3{1.0f, 0.82f, 0.6f} : vec3{0.85f, 0.92f, 1.0f}, 1.2f, 7.0f);
                         }
                     }
                 }
@@ -844,28 +850,47 @@ void build_city_rain(DataModel& dm) {
                 for (f32 a = -kLot * 0.5f + 6.0f; a <= kLot * 0.5f - 6.0f; a += 11.0f, ++slot) {
                     const vec3 p = curb + t * a;
                     if (slot % 2 == 0) {
-                        // Street lamp: arm over the road, head light 7.2 m up and 1.8 m out.
-                        prop(lamps, "StreetLamp", "street_lamp", p, yaw_to(n));
-                        const bool sodium = rnd() < 0.35f;
-                        light_at(lamps, p + n * 1.8f + vec3{0, 7.0f, 0},
-                                 sodium ? vec3{1.0f, 0.68f, 0.32f} : vec3{0.88f, 0.94f, 1.0f}, 16.0f, 28.0f);
+                        // Cast-iron lamp post (CC0, Poly Haven): warm lantern 4 m up.
+                        prop(lamps, "StreetLamp", "lamp_classic", p, yaw_to(n));
+                        light_at(lamps, p + vec3{0, 3.95f, 0}, {1.0f, 0.74f, 0.45f}, 12.0f, 22.0f);
                     } else {
                         const f32 r = rnd();
-                        const char* what = r < 0.2f    ? "trash_bin"
-                                           : r < 0.32f ? "fire_hydrant"
-                                           : r < 0.42f ? "bench"
-                                           : r < 0.55f ? "parking_meter"
-                                           : r < 0.65f ? "bollard"
+                        const char* what = r < 0.12f   ? "trash_bin"
+                                           : r < 0.2f  ? "trash_bin_rusty"
+                                           : r < 0.3f  ? "fire_hydrant"
+                                           : r < 0.4f  ? "bench"
+                                           : r < 0.5f  ? "parking_meter"
+                                           : r < 0.58f ? "bollard"
+                                           : r < 0.66f ? "utility_box"
+                                           : r < 0.72f ? "planter"
                                                        : nullptr;
                         if (what) prop(furniture, what, what, p - n * 0.2f, yaw_to(-n));
                     }
                 }
                 // Parked cars along this curb, nose along the street.
+                static const char* const kCars[] = {"car_sedan",     "car_sedan_black", "car_sedan_silver",
+                                                    "car_hatch",     "car_hatch_white", "car_suv",
+                                                    "car_suv_green", "car_taxi",        "covered_car"};
                 for (f32 a = -kLot * 0.5f + 5.0f; a <= kLot * 0.5f - 5.0f; a += 5.8f) {
                     if (rnd() < 0.45f) continue;
                     const vec3 p = vec3{cx, 0.0f, cz} + n * (kLot * 0.5f + 1.3f) + t * a;
-                    prop(cars, "Car", rnd() < 0.5f ? "car_sedan" : "car_hatch", p, yaw_to(rnd() < 0.5f ? t : -t));
+                    const char* model = kCars[u32(rnd() * 9.0f) % 9];
+                    prop(cars, "Car", model, p, yaw_to(rnd() < 0.5f ? t : -t));
                 }
+            }
+            // Alleys between the four buildings: crates, boxes, an old tyre, a barrel stove, a security light.
+            static const char* const kClutter[] = {"cardboard_box", "wooden_crate", "plastic_crate",
+                                                   "tyre",          "barrel_stove", "trash_bin_rusty"};
+            for (int k = 0; k < 7; ++k) {
+                const bool along_x = k % 2 == 0;
+                const f32 off = (rnd() - 0.5f) * (kLot - 2.0f * kSidewalk - 4.0f);
+                const f32 side = (rnd() < 0.5f ? -1.0f : 1.0f) * 1.3f;
+                const vec3 p = along_x ? vec3{cx + off, kCurb, cz + side} : vec3{cx + side, kCurb, cz + off};
+                prop(furniture, "Clutter", kClutter[u32(rnd() * 6.0f) % 6], p, rnd() * 360.0f);
+            }
+            {
+                prop(furniture, "SecurityLight", "security_light", {cx + 1.85f, kCurb + 3.2f, cz}, 90.0f);
+                light_at(furniture, {cx + 1.0f, kCurb + 3.0f, cz}, {0.85f, 0.92f, 1.0f}, 2.5f, 10.0f);
             }
         }
     // Intersections: lane markings, crosswalks, traffic lights, steam from manholes.
@@ -935,7 +960,7 @@ void build_city_rain(DataModel& dm) {
     l->set("SunBrightness", Value::number(0.0));
     l->set("EnvironmentDiffuseScale", Value::number(0.05));
     l->set("IndoorAmbient", Value::color3({0.85f, 0.62f, 0.45f})); // sodium-orange city glow
-    l->set("IndoorAmbientBrightness", Value::number(0.012));
+    l->set("IndoorAmbientBrightness", Value::number(0.018));
     l->set("ExposureCompensation", Value::number(2.4));
     l->set("FogDensity", Value::number(0.0045));
     l->set("FogHeightFalloff", Value::number(0.015));

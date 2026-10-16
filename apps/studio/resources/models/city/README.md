@@ -1,61 +1,64 @@
-# Props de ciudad (noche lluviosa)
+# Modelos de ciudad (noche lluviosa)
 
-Modelos `.glb` para la plantilla de ciudad de Tefra. Son obra propia, generada por
-`tools/blender/make_city_props.py` con la API de Python de Blender (bpy), y se publican con
-licencia **CC0**: sin marcas, logotipos ni nombres reales (el único texto es la palabra genérica "OPEN",
-hecha con segmentos de tubo).
+Modelos de la plantilla **Rainy City** (`city_rain`). Todos se generan con la API de Python de Blender (`bpy`)
+a partir de scripts de `tools/blender/`:
+
+| Script | Qué genera | Origen |
+|---|---|---|
+| `make_city_buildings.py` | `buildings/*.gltf` (8 edificios de 18 × 18 m) y `buildings/textures/` compartidas | Kits de fachada modular CC0 de Poly Haven y atlas de habitaciones propio |
+| `make_city_ph_props.py` | hidrante, papeleras, banco, AC, alcantarilla, farola clásica, farol de pared, foco, caja eléctrica, barrera, coche tapado, cajas, palé, jardinera, neumático, cartel de suelo mojado, persianas | Poly Haven, CC0 (reducidos y con texturas embebidas) |
+| `make_city_cars.py` | `car_sedan*`, `car_hatch*`, `car_suv*`, `car_taxi` | Propio, CC0 |
+| `make_city_props.py` | `traffic_light*`, `neon_sign_*`, `awning`, `bollard`, `parking_meter` | Propio, CC0 (letras de neón: contornos de la fuente integrada de Blender, Inter, OFL) |
+
+No hay marcas, logotipos ni nombres reales: los neones dicen palabras genéricas (OPEN, BAR, HOTEL, RAMEN, 24H,
+PIZZA, CAFE, LIQUOR).
 
 ## Convenciones
 
-- Unidades en metros. Blender usa Z arriba; el exportador glTF pasa a Y arriba.
-- El frente de cada prop es el **+Y de Blender**, que se convierte en **-Z** en glTF.
-- El origen es el punto de contacto con el suelo, o el punto del muro indicado en la tabla.
-- Materiales PBR (rugosidad y metalicidad). Las fuentes de luz usan material emisivo
-  (Emission Color + Emission Strength 1.0): `LampRed`, `LampAmber`, `LampGreen`, `LensLED`,
-  `Headlight`, `TailLight`, `ShopLight`, `NeonPink`, `NeonCyan`.
-- Cada prop tiene menos de 8 000 triángulos (los coches, menos de 15 000).
+- Metros. Blender usa Z arriba; el exportador glTF pasa a Y arriba.
+- El frente de cada prop es el **+Y de Blender**, que en glTF es **-Z** (la plantilla orienta con `yaw_to`).
+- Origen: punto de contacto con el suelo en el centro de la huella. Los neones tienen el origen en el muro.
+- Los edificios tienen el origen en el centro de la huella, a nivel de calle. Plantas de 3 m y cornisa de 0,75 m.
 
-## Props
+## Edificios
 
-Tamaño en metros (x ancho, y profundidad, z alto). Tris = triángulos.
+Se montan con los módulos de 3 × 3 m de `modular_urban_apartments_facade` (enlucido) y `modular_factory_facade`
+(ladrillo). Cada edificio es un solo `.gltf` con todas sus piezas fundidas por material, y todos comparten la carpeta
+`textures/`: el motor carga cada textura una vez (`Scene::find_texture`).
 
-| Archivo | Tamaño (x × y × z) | Origen | Tris |
+- Planta baja: escaparates de lado a lado y una entrada por fachada.
+- Plantas altas: dos tipos de ventana por edificio. Las plantas 5 y siguientes usan versiones simplificadas.
+- Escalera de incendios en una fachada lateral, bajante en las esquinas, AC en algunas ventanas, losa de cubierta y
+  máquinas en el tejado.
+- Ventanas: el cristal se quita y en su lugar va una tarjeta con **interior mapping** (`"tefra_interior"` en los
+  extras del material). El shader traza una habitación falsa detrás del cristal a partir de una celda del atlas
+  `city_rooms.png` de 4 × 3: fila de habitaciones a oscuras, fila de pisos iluminados y fila de tiendas.
+- Paredes: **parallax occlusion mapping** (`"tefra_parallax"` = profundidad en unidades UV, `"tefra_height"` = mapa
+  de alturas). El ladrillo usa el `brick_disp` de Poly Haven (1,8 cm) y el enlucido una altura derivada de su AO
+  (6 mm).
+
+| Archivo | Tamaño | Plantas | Triángulos |
 |---|---|---|---|
-| `street_lamp.glb` | 0.42 × 2.23 × 7.47 | pie del poste, en el suelo | 1136 |
-| `traffic_light.glb` | 0.30 × 0.40 × 4.00 | pie del poste, en el suelo | 1632 |
-| `car_sedan.glb` | 1.93 × 4.76 × 1.42 | centro de la huella, en el suelo (carrocería 4,6 m) | 2916 |
-| `car_hatch.glb` | 1.89 × 4.16 × 1.40 | centro de la huella, en el suelo (carrocería 4,0 m) | 2916 |
-| `fire_hydrant.glb` | 0.45 × 0.40 × 0.69 | centro de la brida, en el suelo | 1764 |
-| `trash_bin.glb` | 0.60 × 0.62 × 0.95 | centro, en el suelo | 724 |
-| `bench.glb` | 1.80 × 0.47 × 0.90 | centro, en el suelo | 1320 |
-| `manhole.glb` | 0.64 × 0.64 × 0.03 | centro, en el suelo | 1948 |
-| `bollard.glb` | 0.24 × 0.24 × 0.98 | centro, en el suelo | 1220 |
-| `parking_meter.glb` | 0.24 × 0.24 × 1.36 | pie del poste, en el suelo | 856 |
-| `neon_sign_bar.glb` | 1.60 × 0.19 × 0.60 | muro, centro trasero del letrero | 1512 |
-| `neon_sign_open.glb` | 1.60 × 0.19 × 0.60 | muro, centro trasero del letrero | 3400 |
-| `ac_unit.glb` | 0.80 × 0.31 × 0.55 | muro, centro inferior de la cara trasera | 1056 |
-| `fire_escape.glb` | 3.00 × 1.27 × 3.00 | muro, centro de la base | 1028 |
-| `awning.glb` | 3.00 × 1.21 × 0.78 | muro, centro de la línea de montaje superior | 704 |
-| `storefront.glb` | 6.00 × 0.42 × 3.50 | centro inferior del plano de fachada (y = 0) | 372 |
-
-### Puntos de referencia
-
-- **Cabeza de la farola** (`street_lamp.glb`): centro de la lente LED en
-  `(0.00, 1.80, 7.16)` m, con la lente hacia abajo. El brazo de 1,8 m sale hacia +Y (hacia la calzada).
-- **Lámparas del semáforo** (`traffic_light.glb`): rojo z = 3,7 m, ámbar z = 3,4 m, verde z = 3,1 m (todas miran a +Y).
-- **Plano de la fachada** (`storefront.glb`): los escaparates y la puerta van en y < 0.12 m; el panel
-  `ShopLight` queda detrás del cristal (y = -0,22 m) para que la tienda brille de noche.
-- **Letreros de neón**: el origen está en el muro, en el centro del letrero. El tubo queda a y = 0,178 m.
-  Las letras de `neon_sign_open.glb` se leen de izquierda a derecha desde +Y.
+| `apt_a.gltf` | 18 × 18 × 18 m | 6 | 66 k |
+| `apt_b.gltf` | 18 × 18 × 24 m | 8 | 85 k |
+| `apt_c.gltf` | 18 × 18 × 15 m | 5 | 54 k |
+| `apt_tower.gltf` | 18 × 18 × 42 m | 14 | 125 k |
+| `loft_a.gltf` | 18 × 18 × 15 m | 5 | 92 k |
+| `loft_b.gltf` | 18 × 18 × 21 m | 7 | 122 k |
+| `loft_tower.gltf` | 18 × 18 × 30 m | 10 | 186 k |
+| `warehouse.gltf` | 18 × 18 × 9 m | 3 | 54 k |
 
 ## Regenerar
 
 Hace falta el paquete `bpy` (Python 3.13):
 
 ```sh
-python3 -m venv /tmp/bpyenv && /tmp/bpyenv/bin/pip install bpy
-/tmp/bpyenv/bin/python tools/blender/make_city_props.py [carpeta_de_salida]
+python3.13 -m venv /tmp/bpyenv && /tmp/bpyenv/bin/pip install bpy
+/tmp/bpyenv/bin/python tools/blender/make_city_buildings.py [kits] [salida]
+/tmp/bpyenv/bin/python tools/blender/make_city_ph_props.py [kits] [salida]
+/tmp/bpyenv/bin/python tools/blender/make_city_cars.py [salida]
+/tmp/bpyenv/bin/python tools/blender/make_city_props.py [salida]
 ```
 
-La carpeta por defecto es `apps/studio/resources/models/city`. Los avisos de Draco y meshopt al
-arrancar son normales: el exportador no comprime con esas bibliotecas.
+`kits` es la carpeta de descargas de Poly Haven (`build/polyhaven` por defecto). Los scripts bajan lo que falte por
+la API pública de Poly Haven. Los avisos de Draco y meshopt son normales.

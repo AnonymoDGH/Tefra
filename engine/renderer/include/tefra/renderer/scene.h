@@ -6,6 +6,7 @@
 #include "tefra/renderer/mesh.h"
 #include "tefra/rhi/resources.h"
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -69,6 +70,13 @@ class Scene {
     u32 add_material(const MaterialGPU& material);
     // Takes ownership of an uploaded texture; returns its bindless index.
     u32 add_texture(rhi::Image&& image);
+    // Textures shared between files (external glTF images referenced by several models): key -> bindless index.
+    // find_texture returns ~0u when the key is unknown.
+    u32 find_texture(const std::string& key) const {
+        auto it = shared_textures_.find(key);
+        return it == shared_textures_.end() ? ~0u : it->second;
+    }
+    void share_texture(const std::string& key, u32 index) { shared_textures_[key] = index; }
     u32 add_instance(const Instance& instance);
     // Adds a skin with joint_count joints; its palette starts as identity. Instances refer to it with Instance::skin.
     u32 add_skin(u32 joint_count);
@@ -111,6 +119,7 @@ class Scene {
     std::vector<SkinState> skins_;
     std::vector<rhi::Image> textures_;
     std::vector<u32> texture_indices_;
+    std::map<std::string, u32> shared_textures_;
     rhi::Buffer vbuf_, ibuf_, mbuf_, sbuf_;
     u32 error_tex_ = 0, flat_normal_tex_ = 0, white_tex_ = 0;
 };

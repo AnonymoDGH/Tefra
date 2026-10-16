@@ -2,7 +2,7 @@
 
 Las sesiones no recuerdan nada: este archivo es la memoria. Actualízalo al final de cada sesión.
 
-## Estado actual (2026-10-11)
+## Estado actual (2026-10-16)
 
 - **M3b integrado:**
   - Página de inicio estilo Roblox Studio: `apps/studio/src/home.cpp`, `projects.cpp`.
@@ -16,12 +16,19 @@ Las sesiones no recuerdan nada: este archivo es la memoria. Actualízalo al fina
 - **AMD legacy (R5 M330, VK 1.2.170):** validación limpia pero sin vegetación y océano negro. Arreglos: culling de vegetación en CPU automático (`TEFRA_GPU_CULL=0/1` fuerza), protección NaN en océano y TAA, framebuffers clásicos. Intel HD 520 ya se ve bien.
 - **2026-10-12 (4 subagentes haiku):** cámara de Studio con menos latencia (wait_next antes de leer input, mailbox); importador Roblox completo (placeholders con atributos `RobloxClass`/`rbx.*`, Value/Decal/Attachment/Weld/GUI, stubs C#; `docs/research/rbx-import/REPORT.md`); cielo configurable (`Sky`/`Atmosphere`/`Clouds`, estrellas, luna, HDRI/cubemap; `engine/world/sky.cpp`); importar FBX/OBJ/STL/PLY → GLB (`model_import.cpp`, ufbx); carga 2-3× más rápida con caché en disco de terreno y glTF (`docs/research/perf-2026-10-12/REPORT.md`; subir `kFieldCacheVersion`/`kGltfCacheVersion` al cambiar generadores).
 - **Luces locales reales** (PointLight/SpotLight → `Scene::lights()`, 64 más cercanas en `lighting.frag`), Neon emisivo display-referred, Lighting interior (SunBrightness, EnvironmentDiffuseScale, IndoorAmbient), materiales Wallpaper/Carpet/CeilingTile, plantilla **Backrooms** con props hechos en Blender por script (`tools/blender/make_backrooms_props.py`; bpy instalable con `pip install bpy` en Python 3.13; `MeshId = builtin:models/...`).
-- **Ciudad lluviosa (2026-10-13):** plantilla `city_rain` (props Blender `tools/blender/make_city_props.py` → `builtin:models/city/`). Motor:
-  - clase `Rain` (mojado, charcos con ondas, gotas en `rain.vert/frag`);
+- **Ciudad lluviosa (2026-10-13/16):** plantilla `city_rain`. Motor:
+  - clase `Rain`: mojado satinado (no espejo), charcos espejo con ondas, gotas en `rain.vert/frag`;
   - luces por tiles (`light_cull.comp`, 128–1024 según el preset);
-  - SSR desde el historial TAA (off en Low);
-  - halos volumétricos/analíticos y materiales Facade/Asphalt.
-  - Coste sin medir en la HD 520.
+  - SSR solo para rugosidad < 0,22 (off en Low);
+  - halos volumétricos/analíticos.
+  - Modelos (todos por bpy, ver `apps/studio/resources/models/city/README.md`):
+    - edificios con kits CC0 de Poly Haven (`make_city_buildings.py`, texturas compartidas entre .gltf vía `Scene::find_texture`);
+    - props de Poly Haven (`make_city_ph_props.py`);
+    - coches propios (`make_city_cars.py`);
+    - semáforos, neones con texto (`make_city_props.py`).
+  - Kits en `build/polyhaven` (no versionado).
+  - Coste sin medir en la HD 520 (edificios de 55–186 k triángulos).
+- **POM + interior mapping** (`gbuffer.frag`, flags 32/64, extras glTF `tefra_parallax`/`tefra_height`/`tefra_interior`; `docs/research/parallax/REPORT.md`).
 - **Cámara y personaje en juego:** interpolación de física (`character_post_step` con alpha), inercia/giro suave/coyote time/buffer de salto/salto variable/sprint (`physics/character.cpp`); cámara con cursor bloqueado, shift-lock (Ctrl), primera persona, zoom exponencial, colisión con 3 rayos (`GameRuntime::update_camera`).
 - **Nubes volumétricas opcionales** (`Clouds.Volumetric`; `shaders/clouds_vol.frag`, pase `clouds` a 1/2-1/4 de resolución solo en píxeles de cielo, compuesto en `lighting.frag` `sky_with_clouds`; presets en `limit_quality`). Pendiente: sombras de nubes sobre el suelo, reproyección temporal propia.
 - **MCP para agentes:** `engine_guide`, `create_instances` (lote), `terrain_height`, `raycast`, `new_place_from_template`, `import_model`, `import_roblox`, `save_project`. MeshId relativo al proyecto (`SceneSync::set_asset_root`).

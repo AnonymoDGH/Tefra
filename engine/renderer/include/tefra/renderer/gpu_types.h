@@ -30,7 +30,9 @@ struct MaterialGPU {
     u32 emissive_tex = 0;
     u32 flags = 0; // bit0: foliage (translucency, normal blended with the crown normal), bit1: double-sided,
                    // bit2: bark (tint + moss), bit3: normal map alpha holds baked AO (needles),
-                   // bit4: procedural Part surface (pad[1] = Material enum index)
+                   // bit4: procedural Part surface (pad[1] = Material enum index),
+                   // bit5: parallax occlusion (height in the normal map alpha, pad[0] = depth in UV units),
+                   // bit6: interior mapping of a 4 x 3 room atlas (pad[0] = room depth in cell widths)
     f32 translucency = 0.0f;
     u32 pad[2] = {}; // bark: pad[0] = moss coverage (float bits)
 };

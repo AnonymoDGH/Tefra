@@ -313,6 +313,43 @@ void write_cache(const std::string& file, const std::string& key, const std::vec
     }
 }
 
+// Tefra material extras (glTF "extras" object of a material):
+//   "tefra_parallax": depth in UV units, "tefra_height": height map file (relative to the glTF) -> parallax occlusion;
+//   "tefra_interior": room depth in cell widths -> interior mapping of a 4 x 3 room atlas.
+bool extras_value(const cgltf_extras& e, const char* key, std::string& out) {
+    if (!e.data) return false;
+    const std::string json = e.data, k = std::string("\"") + key + "\"";
+    usize at = json.find(k);
+    if (at == std::string::npos) return false;
+    at = json.find(':', at + k.size());
+    if (at == std::string::npos) return false;
+    ++at;
+    while (at < json.size() && (json[at] == ' ' || json[at] == '\t' || json[at] == '\n')) ++at;
+    if (at < json.size() && json[at] == '"') {
+        const usize end = json.find('"', at + 1);
+        if (end == std::string::npos) return false;
+        out = json.substr(at + 1, end - at - 1);
+        return true;
+    }
+    usize end = at;
+    while (end < json.size() && json[end] != ',' && json[end] != '}') ++end;
+    out = json.substr(at, end - at);
+    return !out.empty();
+}
+
+bool extras_number(const cgltf_extras& e, const char* key, f32& out) {
+    std::string v;
+    if (!extras_value(e, key, v)) return false;
+    out = std::strtof(v.c_str(), nullptr);
+    return true;
+}
+
+u32 float_to_bits(f32 f) {
+    u32 b;
+    std::memcpy(&b, &f, 4);
+    return b;
+}
+
 struct Loader {
     Scene& scene;
     const rhi::Device& dev;
@@ -345,11 +382,25 @@ struct Loader {
         return false;
     }
 
+    // Key of an external image file (empty for embedded images, which belong to their file alone).
+    std::string shared_key(const cgltf_image* img, const char* tag) const {
+        if (!img || img->buffer_view || !img->uri) return {};
+        std::string uri = img->uri;
+        cgltf_decode_uri(uri.data());
+        uri.resize(std::char_traits<char>::length(uri.c_str()));
+        return std::string(tag) + ":" + path_join(base_dir, uri);
+    }
+
     u32 texture(const cgltf_texture_view& view, bool srgb, u32 fallback) {
         if (!view.texture || !view.texture->image) return fallback;
         const cgltf_image* img = view.texture->image;
         const auto key = std::make_pair(img, srgb);
         if (auto it = texture_cache.find(key); it != texture_cache.end()) return it->second;
+        // External images are shared by every model that names the same file (modular building kits).
+        const std::string shared = shared_key(img, srgb ? "s" : "u");
+        if (!shared.empty()) {
+            if (const u32 found = scene.find_texture(shared); found != ~0u) return texture_cache[key] = found;
+        }
         ImageRGBA8 pixels;
         if (!decode_image(img, pixels)) {
             TEFRA_LOG_WARN("glTF: cannot decode image '%s'", img->uri ? img->uri : "(embedded)");
@@ -364,6 +415,7 @@ struct Loader {
         up.name = img->name ? img->name : "gltf_texture";
         const u32 index = scene.add_texture(rhi::upload_texture(dev, up));
         texture_cache[key] = index;
+        if (!shared.empty()) scene.share_texture(shared, index);
         ++result.textures;
         return index;
     }
@@ -376,6 +428,14 @@ struct Loader {
         const bool has_occ = occ.texture && occ.texture->image;
         if (!has_occ || (has_mr && occ.texture->image == mr.texture->image))
             return texture(mr, false, scene.white_texture());
+        std::string shared = shared_key(occ.texture->image, "orm");
+        if (!shared.empty() && has_mr) {
+            const std::string mr_key = shared_key(mr.texture->image, "");
+            shared = mr_key.empty() ? std::string() : shared + "|" + mr_key;
+        }
+        if (!shared.empty()) {
+            if (const u32 found = scene.find_texture(shared); found != ~0u) return found;
+        }
         ImageRGBA8 orm, occ_px;
         if (!decode_image(occ.texture->image, occ_px)) return texture(mr, false, scene.white_texture());
         if (has_mr && decode_image(mr.texture->image, orm) && orm.width == occ_px.width &&
@@ -395,7 +455,37 @@ struct Loader {
         up.format = VK_FORMAT_R8G8B8A8_UNORM;
         up.name = "gltf_orm";
         ++result.textures;
-        return scene.add_texture(rhi::upload_texture(dev, up));
+        const u32 index = scene.add_texture(rhi::upload_texture(dev, up));
+        if (!shared.empty()) scene.share_texture(shared, index);
+        return index;
+    }
+
+    // Normal map with a height map packed into its alpha (parallax occlusion); shared by every file using the pair.
+    u32 normal_height_texture(const cgltf_texture_view& normal, const std::string& height_uri) {
+        if (!normal.texture || !normal.texture->image) return kNoTexture;
+        const std::string hpath = path_join(base_dir, height_uri);
+        std::string key = shared_key(normal.texture->image, "nh");
+        if (!key.empty()) {
+            key += "|" + hpath;
+            if (const u32 found = scene.find_texture(key); found != ~0u) return found;
+        }
+        ImageRGBA8 n, h;
+        if (!decode_image(normal.texture->image, n) || !image_read(hpath.c_str(), h) || n.width != h.width ||
+            n.height != h.height) {
+            TEFRA_LOG_WARN("glTF: height map '%s' missing or not the normal map's size", hpath.c_str());
+            return kNoTexture;
+        }
+        for (usize i = 0; i < n.pixels.size(); i += 4) n.pixels[i + 3] = h.pixels[i];
+        rhi::TextureUpload up;
+        up.pixels = n.pixels.data();
+        up.width = n.width;
+        up.height = n.height;
+        up.format = VK_FORMAT_R8G8B8A8_UNORM;
+        up.name = "gltf_normal_height";
+        ++result.textures;
+        const u32 index = scene.add_texture(rhi::upload_texture(dev, up));
+        if (!key.empty()) scene.share_texture(key, index);
+        return index;
     }
 
     u32 material(const cgltf_material* m) {
@@ -430,6 +520,20 @@ struct Loader {
         if (m->alpha_mode == cgltf_alpha_mode_mask) g.emissive_cutoff.w = m->alpha_cutoff;
         if (m->alpha_mode == cgltf_alpha_mode_blend) g.emissive_cutoff.w = 0.5f; // M1: blend approximated by mask
         if (m->double_sided) g.flags |= 2u;
+        f32 depth = 0.0f;
+        std::string height;
+        if (extras_number(m->extras, "tefra_interior", depth) && depth > 0.0f) {
+            g.flags |= 64u;
+            g.pad[0] = float_to_bits(depth);
+        } else if (extras_number(m->extras, "tefra_parallax", depth) && depth > 0.0f &&
+                   extras_value(m->extras, "tefra_height", height) && m->normal_texture.texture) {
+            const u32 nh = normal_height_texture(m->normal_texture, height);
+            if (nh != kNoTexture) {
+                g.normal_tex = nh;
+                g.flags |= 32u;
+                g.pad[0] = float_to_bits(depth);
+            }
+        }
         ++result.materials;
         return material_cache[m] = scene.add_material(g);
     }

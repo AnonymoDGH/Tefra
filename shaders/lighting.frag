@@ -191,7 +191,7 @@ vec3 ssr_trace(Frame f, vec3 p, vec3 N, vec3 V, float rough, float jitter, out f
             vec2 puv = pp.xy / pp.w * 0.5 + 0.5;
             if (any(lessThan(puv, vec2(0.0))) || any(greaterThan(puv, vec2(1.0)))) return vec3(0.0);
             vec2 edge = smoothstep(vec2(0.0), vec2(0.08), puv) * smoothstep(vec2(0.0), vec2(0.08), 1.0 - puv);
-            conf = edge.x * edge.y * (1.0 - smoothstep(0.6, 1.0, s)) * (1.0 - smoothstep(0.15, 0.4, rough));
+            conf = edge.x * edge.y * (1.0 - smoothstep(0.6, 1.0, s)) * (1.0 - smoothstep(0.06, 0.22, rough)); // sharp trace: only near-mirror surfaces
             return textureLod(TEX2D(pc.history, SMP_LINEAR_CLAMP), puv, 0.0).rgb / max(f.exposure.x, 1e-8);
         }
         prev_t = t;
@@ -354,7 +354,7 @@ void main() {
     float spec_occ = clamp(pow(ndv + ao, exp2(-16.0 * a - 1.0)) - 1.0 + ao, 0.0, 1.0);
     float canopy = canopy_visibility(f, p);
     vec3 env_spec = prefiltered * f.exposure.y * canopy * amb_tint;
-    if (pc.history != 0xFFFFFFFFu && rough < 0.4) {
+    if (pc.history != 0xFFFFFFFFu && rough < 0.22) {
         float conf;
         vec3 refl = ssr_trace(f, p, N, V, rough, noise, conf);
         env_spec = mix(env_spec, refl, conf);
