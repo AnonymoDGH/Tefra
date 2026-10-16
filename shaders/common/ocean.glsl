@@ -112,6 +112,8 @@ OceanSample ocean_eval(vec2 xz, float t, Shore sh, bool want_foam, float footpri
         float A = w.amp.x * deep;
         o.lost_var += 0.5 * (k * A) * (k * A) * (1.0 - keep);
         A *= keep; // filtered by the grid cell (vertex) or the pixel (fragment)
+        // Filtered out completely (keep == 0, typical for distant pixels): every term below is exactly zero.
+        if (keep <= 0.0) continue;
         float th = k * dot(D, xz) - w.dir_k.w * t + w.amp.z;
         float c = cos(th), s = sin(th);
         o.disp += vec3(Q * A * D.x * c, A * s, Q * A * D.y * c);

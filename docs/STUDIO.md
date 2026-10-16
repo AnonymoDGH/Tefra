@@ -31,8 +31,23 @@ Al abrir Studio sin argumentos aparece la página de inicio, al estilo de Roblox
 - **My Experiences**: todas, con búsqueda y orden por fecha o nombre.
 - **Archive**: experiencias archivadas (`Documentos/Tefra/Archive`), con Restore.
 - **Open File...** abre cualquier `.tefra`; **Import Roblox Place...** importa un `.rbxl`/`.rbxlx` propio (ADR-017).
+- **Import 3D Model...** (menú File) inserta un modelo como MeshPart, seleccionado, donde mira la cámara. Ver «Importar modelos 3D».
 
 Cada proyecto es una carpeta: `<Nombre>.tefra`, `thumbnail.png` y `assets/` (los archivos que el lugar usa por ruta relativa). `File > Home` vuelve a la página de inicio. Si hay cambios sin guardar, Studio pregunta antes de cerrar o cambiar de lugar. La variable `TEFRA_HOME` cambia la carpeta raíz (instalaciones portátiles).
+
+## Importar modelos 3D
+**File > Import 3D Model...** y la herramienta MCP `import_model` aceptan:
+- `.glb` y `.gltf`: se usan tal cual (un `.gltf` copia toda su carpeta, con buffers y texturas).
+- `.fbx` (binario o ASCII) y `.obj` (con su `.mtl` y texturas): leídos con ufbx (MIT o dominio público, `third_party/ufbx`).
+- `.stl` (ASCII y binario) y `.ply` (ASCII y binario little endian): leídos por el propio importador.
+- `.dae` (Collada) y `.3mf`: no soportados todavía.
+
+Se convierten a glTF 2.0 binario (`.glb`), con geometría, normales, UV, materiales PBR (color, metalness/roughness, normal map, emisión) y la jerarquía de nodos con sus transformaciones. Las unidades quedan en metros y el eje vertical en +Y. FBX usa sus propias unidades y ejes; OBJ, STL y PLY no las llevan, así que usan `unit_scale` (1 = metros, 0.01 = cm) y, en STL y PLY, se asume Z hacia arriba.
+
+- En un proyecto guardado, el `.glb` va a `assets/<nombre>/<nombre>.glb`. En un lugar sin guardar, a una carpeta de caché de Studio.
+- Las texturas van dentro del `.glb` (solo PNG y JPEG). Sin embeber, se escriben junto al `.glb`.
+- Límite opcional de triángulos por primitiva (`max_triangles`, simplificación con meshoptimizer).
+- Los modelos con esqueleto se importan en su pose de reposo: no se exporta el esqueleto ni las formas (blend shapes).
 
 ## Exportar un juego
 `File > Export Game...` crea una carpeta autocontenida que se puede copiar a otro PC:
@@ -244,6 +259,15 @@ Un `ParticleEmitter` bajo una Part emite partículas de verdad (billboards en GP
 
 Eventos de `Humanoid` por personaje: `Jumping`, `FreeFalling`, `Landed`, `StateChanged(old, new)`, `Died`, `HealthChanged`.
 
+## Cielo (Lighting, Sky, Atmosphere, Clouds)
+Dentro de `Lighting` (Insertar → Environment): `Sky`, `Atmosphere` y `Clouds`. Sin ellos, el cielo es el de siempre; `ClockTime` y `GeographicLatitude` mueven el sol.
+- `Sky`: `SkyboxMode` = `Procedural` (atmósfera física), `Cubemap` (`SkyboxFt/Bk/Lf/Rt/Up/Dn`, seis imágenes; `Ft` es -Z, `Rt` es +X) o `HDRI` (`HdriPath`, un `.hdr` equirectangular que también ilumina la escena). `StarCount`, `StarBrightness`, `SunAngularSize`, `MoonVisible`, `MoonPhase` (0 nueva, 0.5 llena), `MoonAngularSize`, `MoonBrightness`, `CelestialBodiesShown`.
+- `Atmosphere`: `Haze` (densidad del aerosol, 6 = valle brumoso), `Decay` (tinte de la dispersión), `Density` (niebla extra), `Offset` (altura de referencia de la niebla), `Color` (tinte de la niebla), `Glare` (halo del sol).
+- `Clouds`: `Cover`, `Density`, `Color`, `Altitude`, `Size`, `WindSpeed`, `WindDirection` (grados), `Enabled`. Sustituye a `Lighting.CloudCover`.
+- De noche el sol baja del horizonte: la Luna es la luz direccional (sombras incluidas), salen las estrellas y la exposición baja sola.
+- Coste: la atmósfera solo se recalcula al cambiar sus propiedades; la luz de imagen (IBL) se rehace al cambiar el fondo o cuando el sol se mueve más de medio grado en modo Procedural. Los cielos Cubemap/HDRI no dibujan nubes ni estrellas (las nubes sobre el HDRI sí).
+- Limitación: el cubemap se convierte a un equirectangular de 2048 px al cargarlo (fondo e IBL); no hay cubemap nativo. `SunTextureSize` no existe.
+
 ## IA (MCP)
 Studio sirve MCP en `http://127.0.0.1:44755/mcp`. Con Claude Code:
 ```sh
@@ -258,6 +282,105 @@ Herramientas disponibles:
 - play, stop, get_output, capture_viewport, set_camera;
 - terrain_height, raycast (medir el terreno y apoyar objetos en el suelo);
 - new_place_from_template (meadow, beach, valley, obby...), save_project;
-- import_model (glTF/GLB → MeshPart, copiado a `assets/` del proyecto), import_roblox.
+- import_model (glTF/GLB, FBX, OBJ, STL o PLY → MeshPart; los modelos se convierten a GLB en `assets/`; opciones `unit_scale` y `max_triangles`), import_roblox.
 
 Para clientes que solo hablan stdio (Claude Desktop) hay un puente, `tefra_mcp`; ver `docs/research/m3-mcp/REPORT.md`.
+
+## Interiores y luces locales
+- `PointLight` y `SpotLight` bajo una Part son luces reales: `Brightness` 1 ≈ 400 cd y `Range` en metros. Se reparten por tiles de 16×16 px en la GPU (hasta 64 por tile; 128–1024 visibles según el preset).
+- **Forma de la luz:** `SpotLight` emite a lo largo del -Z de su Part con `Angle` (cono) y `Spill` (fracción que sale
+  fuera del cono). Una farola con tapa opaca: Part girada hacia abajo (Orientation -90, 0, 0), `Angle` 170 y `Spill`
+  0,07. Así ilumina el suelo y los lados, casi nada hacia arriba, y el halo en la niebla también tiene esa forma.
+- **Sombras de luces locales:** `Shadows = true` da un mapa de sombras a las luces más cercanas que lo piden:
+  - 4 en Medium y 8 en High/Ultra; en Low, ninguna;
+  - cubren 120° alrededor del eje de la luz (hacia abajo en las PointLight);
+  - coches, postes, toldos y escaleras de incendios proyectan sombra, y con niebla volumétrica también rayos de luz.
+- Para un interior sin luz del día, en Lighting:
+  - `SunBrightness` 0;
+  - `EnvironmentDiffuseScale` 0;
+  - `IndoorAmbient` + `IndoorAmbientBrightness` (rebote de luz cálido);
+  - `ExposureCompensation` ≈ 7.
+- Materiales nuevos: `Wallpaper`, `Carpet` y `CeilingTile`. `Neon` ahora brilla de verdad (emisivo, con bloom).
+- Plantilla **Backrooms**:
+  - Laberinto de oficinas amarillas con moqueta húmeda, techo de placas y fluorescentes que zumban (algunos parpadean o están fundidos).
+  - Props modelados con Blender: `tools/blender/make_backrooms_props.py` (bpy) genera `resources/models/backrooms/*.glb`, que se usan con `MeshId = builtin:models/backrooms/<nombre>.glb`.
+
+## Controles de juego (Play y juegos exportados)
+- **Moverse:** WASD. Shift para correr (×1,6, la cámara abre un poco el campo de visión).
+- **Saltar:** Space. Mantenerlo salta otra vez al aterrizar y soltarlo pronto hace un salto corto. Un salto pulsado justo antes de aterrizar o justo después de salir de un borde también vale.
+- **Cámara:**
+  - Botón derecho para orbitar; el cursor se bloquea y no choca con el borde de la pantalla.
+  - Left Ctrl activa o desactiva el shift-lock: cámara sobre el hombro y el personaje mira hacia donde mira la cámara.
+  - La rueda hace zoom; con todo el zoom metido pasa a primera persona.
+  - La cámara no atraviesa paredes y suaviza los escalones.
+- **Física fluida:** el personaje se dibuja interpolado entre pasos de física de 60 Hz, sin tirones a ningún framerate. Acelera y frena con inercia y gira con suavidad.
+
+## Nubes volumétricas (opcionales)
+- En `Lighting.Clouds` activa `Volumetric = true`. Son cúmulos 3D por raymarching: bases redondeadas, cimas en cúpula, bordes erosionados con ruido 3D.
+- Se iluminan con el sol (Beer-Powder, dispersión doble de Henyey-Greenstein), la luz del cielo y el rebote del suelo. Al atardecer los bordes se tiñen de naranja.
+- `Thickness` (m) es la altura de la capa. `Cover`, `Density`, `Color`, `Altitude`, `Size` y el viento funcionan igual que en las nubes 2D.
+- Coste: se calculan a resolución reducida y solo donde se ve el cielo. Los presets ajustan la resolución y los pasos:
+
+| Preset | Resolución | Pasos |
+|---|---|---|
+| Low | 1/4 | 14 |
+| Medium | 1/4 | 20 |
+| High | 1/2 | 32 |
+| Ultra | 1/2 | 48 |
+
+- Con `Volumetric = false` (por defecto) se usa la capa 2D, más barata.
+- Captura: `docs/captures/volumetric-clouds.png`.
+
+## Lluvia y ciudad nocturna
+- Clase `Rain` bajo Lighting:
+  - `Intensity`: densidad de las gotas;
+  - `Wetness`: oscurece las superficies y las deja satinadas (el hormigón y el asfalto mojados no son espejos);
+  - `Puddles`: charcos en superficies horizontales, que sí reflejan como un espejo y tienen ondas;
+  - `Wind` y `DropSpeed`.
+- Las gotas son trazos procedurales en la GPU, iluminados por las 24 luces más cercanas.
+- Reflejos en pantalla (SSR) solo en superficies casi pulidas (charcos, cristal). Se desactivan en Low.
+- Halos de luz en la niebla: con la volumétrica activada usan las 16 luces más cercanas; sin ella, un halo analítico.
+- Plantilla **Rainy City** (`city_rain`):
+  - manzanas de 5×5 con edificios montados a partir de kits de fachada CC0 de Poly Haven: ladrillo y enlucido,
+    escaleras de incendios, AC, bajantes, escaparates y ventanas con habitaciones;
+  - farolas clásicas, semáforos, neones con texto real, toldos, coches (berlina, compacto, SUV, taxi), mobiliario
+    urbano y trastos en los callejones;
+  - sonido de lluvia.
+- Modelos: `builtin:models/city/*.glb` y `builtin:models/city/buildings/*.gltf`; ver
+  `apps/studio/resources/models/city/README.md`.
+
+## Luz rebotada (iluminación global en pantalla)
+- Cada píxel lanza 1 rayo (Medium), 2 (High) o 3 (Ultra) hacia su hemisferio, hasta 5 m. Donde chocan con una
+  superficie toman la luz que esta emitía en el fotograma anterior. Con los fotogramas se acumulan varios rebotes.
+- Efecto: el charco iluminado por la farola aclara la fachada y los bajos de los coches, los neones tiñen la pared y
+  las esquinas quedan más oscuras que las zonas abiertas.
+- Solo ve lo que está en pantalla. Está apagado en Low. `TEFRA_NO_GI=1` lo desactiva para comparar.
+
+## Texturas con profundidad (parallax e interior mapping)
+- **Parallax occlusion mapping:** las paredes de ladrillo y enlucido tienen relieve real al mirarlas de lado; el
+  mortero queda hundido y los ladrillos lo tapan. Funciona hasta unos 22 m.
+- **Interior mapping:** cada ventana muestra una habitación en 3D (paredes, suelo y techo) con una sola cara.
+- En modelos propios se activa con propiedades del material en Blender: `tefra_parallax` + `tefra_height`, o
+  `tefra_interior`. Explicación y detalles en `docs/research/parallax/REPORT.md`.
+
+## Faro en la tormenta (plantilla jugable)
+- Plantilla **Lighthouse in the Storm** (`lighthouse_storm`): noche de tormenta en una costa rocosa.
+  - **Objetivo:** subir los ~100 escalones del faro y tocar la palanca de la sala de guardia. La lente se enciende,
+    dos haces barren el mar (una vuelta cada 10 s, con sombras y visibles en la niebla) y suena la sirena de niebla.
+  - Puerto con muelle de madera, botes de remos amarrados, un barco fondeado y una boya con luz roja.
+  - Pasarela de tablones con barandilla y faroles que sube el acantilado; casa del farero con humo en la chimenea y
+    ventanas con habitaciones (interior mapping).
+  - Mar de tormenta (oleaje de 2,6 m, rompientes), lluvia con viento, relámpagos con trueno retardado según la
+    distancia, viento y olas 3D.
+- **Relámpagos:** `Lighting.Flash` (0–1+) y `Lighting.FlashDirection`. Durante el destello, el rayo es la luz
+  direccional (con sombras) y la niebla y las nubes se iluminan. Un script lo anima (ver el script `Storm`).
+- **Flotación:** una BasePart con el atributo `Floating = true` cabecea, se balancea y sube y baja con el oleaje real
+  (las olas Gerstner y las rompientes del océano) mientras se juega. `FloatLength`, `FloatWidth` y `FloatDraft` dan el
+  tamaño y el calado. Las Parts hijas (luces, mástiles) se mueven con ella.
+- **Haces estrechos:** una SpotLight de menos de ~30° se ve como un rayo en la niebla, también sin niebla volumétrica.
+  Las pasadas que solo usan unas pocas luces (niebla, halos, lluvia) eligen las más importantes (intensidad entre
+  distancia al cuadrado), no las más cercanas.
+- **Sin lluvia bajo techo:** un mapa de profundidad visto desde arriba (80 × 80 m alrededor de la cámara) quita las
+  gotas y el aspecto mojado bajo tejados, balcones y dentro de los edificios.
+- Scripting: `Light`, `PointLight` y `SpotLight` (Brightness, Range, Color, Shadows, Enabled, Angle, Spill) y
+  `Lighting.Flash` / `FlashDirection` en C#.

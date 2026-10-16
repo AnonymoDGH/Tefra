@@ -8,7 +8,7 @@
 // Marches the view ray up to min(scene depth, kMaxDist). Output: rgb = in-scatter (pre-exposed), a = transmittance.
 // Per-step transmittance comes from the exact exponential-density integral, so the result is energy-consistent
 // with the analytic height fog when the sun term is unshadowed.
-layout(push_constant) uniform Push { FrameBuffer frame; uint depth; } pc;
+layout(push_constant) uniform Push { FrameBuffer frame; uint depth; uint pad; LightBuffer lights; uint light_count; uint pad2; } pc;
 layout(location = 0) out vec4 o_vol;
 
 const float kMaxDist = 150.0; // m
@@ -49,7 +49,25 @@ void main() {
             vis = sun_shadow_tap(f, x, view_depth);
         }
         // Integral of sigma(s) * T(s) over the step equals T(start) - T(end) (exact for exponential density).
-        inscatter += (amb + sun * (hg * vis)) * (t_prev - t_next);
+        // Local lights (most important first): halos and light cones in the haze around street lamps. Isotropic-ish phase
+        // with a forward lobe; shadow-mapped lights get one shadow tap.
+        vec3 local = vec3(0.0);
+        for (uint li = 0u; li < pc.light_count; ++li) {
+            LightGPU l = pc.lights.l[li];
+            vec3 d = l.pos_range.xyz - x;
+            float d2 = dot(d, d), r = l.pos_range.w;
+            if (d2 > r * r) continue;
+            float win = clamp(1.0 - d2 * d2 / (r * r * r * r), 0.0, 1.0);
+            float atten = win * win / max(d2, 0.25);
+            if (l.spot.w >= -1.0)
+                atten *= mix(l.extra.y, 1.0, smoothstep(l.spot.w, max(l.extra.x, l.spot.w + 1e-3), dot(-normalize(d), l.spot.xyz)));
+            // Shadowed lights cast shafts through the haze (fire escapes, awnings, cars).
+            if (l.extra.z >= 0.0 && atten > 0.0) atten *= local_shadow(f, int(l.extra.z), x, vec3(0.0), length(d), false);
+            float cosv = dot(normalize(d), dir);
+            float phase = 0.012 + 0.08 * pow(max(cosv, 0.0), 8.0);
+            local += l.color.rgb * atten * phase;
+        }
+        inscatter += (amb + sun * (hg * vis) + local) * (t_prev - t_next);
         t_prev = t_next;
     }
     o_vol = vec4(inscatter * f.exposure.x, t_prev);

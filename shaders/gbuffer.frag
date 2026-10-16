@@ -40,10 +40,102 @@ float fbm3(vec3 p) {
 }
 
 #include "common/surface.glsl"
+#include "common/rain_occlusion.glsl"
+
+// Material flag bit 5: parallax occlusion mapping. Height (1 = top) in the normal map's alpha, depth in UV units in
+// pad0 (float bits). Bit 6: interior mapping. The quad's UVs fall in one cell of a 4 x 3 room atlas; a ray is traced
+// into a virtual box behind the glass (depth in cell widths in pad0) and the walls, floor and ceiling are looked up
+// from that cell (van Dongen, "Interior Mapping", CGI 2008).
+const uint kFlagParallax = 32u, kFlagInterior = 64u;
+const float kPomNear = 22.0, kPomFade = 12.0;
+
+vec2 parallax_uv(Material m, vec2 uv, vec3 Vts, float depth, vec2 dx, vec2 dy, out float self_ao) {
+    self_ao = 1.0;
+    const float steps = mix(20.0, 8.0, clamp(Vts.z, 0.0, 1.0));
+    const vec2 delta = -Vts.xy / max(Vts.z, 0.2) * depth / steps;
+    float layer = 1.0 / steps, cur = 1.0;
+    vec2 p = uv;
+    float h = textureGrad(TEX2D(m.normal_tex, SMP_ANISO_REPEAT), p, dx, dy).a;
+    float prev_h = h, prev_cur = cur;
+    for (int i = 0; i < 24 && h < cur; ++i) {
+        prev_h = h;
+        prev_cur = cur;
+        p += delta;
+        cur -= layer;
+        h = textureGrad(TEX2D(m.normal_tex, SMP_ANISO_REPEAT), p, dx, dy).a;
+    }
+    // Linear interpolation between the last two layers (occlusion parallax).
+    const float a = h - cur, b = prev_h - prev_cur;
+    const float w = clamp(a / min(a - b, -1e-5), 0.0, 1.0);
+    p = mix(p, p - delta, w);
+    self_ao = mix(0.55, 1.0, h); // crevices read darker
+    return p;
+}
+
+// Interior mapping: returns the atlas UV to shade with and a brightness factor for walls, floor and ceiling.
+vec2 interior_uv(vec2 uv, vec3 Vts, float depth, out float shade, out float blur) {
+    blur = 1.0;
+    const vec2 grid = vec2(4.0, 3.0);
+    const vec2 cell = floor(uv * grid);
+    const vec2 local = clamp((fract(uv * grid) - 0.04) / 0.92, 0.0, 1.0);
+    // Ray into the room (tangent space, +z inward). uv.y grows downwards on the wall (glTF flips V).
+    const vec3 dir = normalize(vec3(-Vts.xy, max(Vts.z, 0.05)));
+    const vec3 o = vec3(local, 0.0);
+    const float tx = ((dir.x > 0.0 ? 1.0 : 0.0) - o.x) / (abs(dir.x) > 1e-4 ? dir.x : 1e-4);
+    const float ty = ((dir.y > 0.0 ? 1.0 : 0.0) - o.y) / (abs(dir.y) > 1e-4 ? dir.y : 1e-4);
+    const float tz = depth / dir.z;
+    const float t = min(tz, min(tx, ty));
+    const vec3 hit = o + dir * t;
+    vec2 q;
+    if (t == tz) {
+        q = hit.xy; // back wall: the cell's picture
+        shade = 1.0;
+    } else if (t == tx) {
+        q = vec2(dir.x > 0.0 ? 0.9 : 0.1, hit.y); // side wall: the cell's edge colours, blurred
+        blur = 48.0;
+        shade = mix(0.5, 0.28, hit.z / depth);
+    } else if (dir.y > 0.0) {
+        q = vec2(hit.x, 0.95); // floor (bottom of the picture)
+        blur = 48.0;
+        shade = mix(0.32, 0.2, hit.z / depth);
+    } else {
+        q = vec2(hit.x, 0.06); // ceiling (top of the picture, near the lamp)
+        blur = 48.0;
+        shade = mix(0.6, 0.4, hit.z / depth);
+    }
+    return (cell + 0.04 + clamp(q, 0.0, 1.0) * 0.92) / grid;
+}
+
+float emissive_hint(Material m) { return max(m.emissive_cutoff.r, max(m.emissive_cutoff.g, m.emissive_cutoff.b)); }
 
 void main() {
     Material m = pc.materials.m[v_material];
-    vec4 base = texture(TEX2D(m.base_color_tex, SMP_ANISO_REPEAT), v_uv) * m.base_color;
+    vec2 uv = v_uv;
+    vec2 uv_dx = dFdx(v_uv), uv_dy = dFdy(v_uv);
+    float pom_ao = 1.0, room_shade = 1.0;
+    const bool interior = (m.flags & kFlagInterior) != 0u;
+    if ((m.flags & (kFlagParallax | kFlagInterior)) != 0u) {
+        const vec3 Nv = normalize(gl_FrontFacing ? v_normal : -v_normal);
+        const vec3 Tv = normalize(v_tangent.xyz - Nv * dot(Nv, v_tangent.xyz));
+        const vec3 Bv = cross(Nv, Tv) * (v_tangent.w < 0.0 ? -1.0 : 1.0);
+        const float dist = length(v_pos);
+        const vec3 V = -v_pos / max(dist, 1e-4);
+        const vec3 Vts = vec3(dot(V, Tv), dot(V, Bv), dot(V, Nv));
+        const float depth = uintBitsToFloat(m.pad0);
+        if (interior) {
+            float blur;
+            uv = interior_uv(v_uv, Vts, depth, room_shade, blur);
+            // Walls, floor and ceiling read the cell's blurred colours (a coarse mip): no stretched streaks.
+            uv_dx *= blur;
+            uv_dy *= blur;
+        } else if (dist < kPomNear && Vts.z > 0.0) {
+            const float fade = 1.0 - smoothstep(kPomFade, kPomNear, dist);
+            uv = parallax_uv(m, v_uv, Vts, depth * fade, uv_dx, uv_dy, pom_ao);
+            pom_ao = mix(1.0, pom_ao, fade);
+        }
+    }
+    vec4 base = textureGrad(TEX2D(m.base_color_tex, SMP_ANISO_REPEAT), uv, uv_dx, uv_dy) * m.base_color;
+    base.rgb *= room_shade;
     if (m.emissive_cutoff.w > 0.0) {
         // Alpha-tested cards (palm fronds, needles, leaves): mip averaging thins the coverage with distance until
         // far crowns vanish. Boost alpha by the mip level and sharpen it to the pixel (Golus, "Anti-aliased alpha
@@ -53,12 +145,13 @@ void main() {
         a = (a - m.emissive_cutoff.w) / max(fwidth(a), 1e-4) + 0.5;
         if (a < 0.5) discard;
     }
-    vec3 orm = texture(TEX2D(m.orm_tex, SMP_ANISO_REPEAT), v_uv).rgb;
-    float ao = mix(1.0, orm.r, m.occlusion_strength);
+    vec3 orm = textureGrad(TEX2D(m.orm_tex, SMP_ANISO_REPEAT), uv, uv_dx, uv_dy).rgb;
+    float ao = mix(1.0, orm.r, m.occlusion_strength) * pom_ao;
     if ((m.flags & 1u) != 0u) ao *= clamp(abs(v_tangent.w), 0.0, 1.0); // foliage: baked crown occlusion
     float rough = clamp(orm.g * m.roughness, 0.02, 1.0);
     float metal = clamp(orm.b * m.metallic, 0.0, 1.0);
-    vec4 nsamp = texture(TEX2D(m.normal_tex, SMP_ANISO_REPEAT), v_uv);
+    vec4 nsamp = textureGrad(TEX2D(m.normal_tex, SMP_ANISO_REPEAT), uv, uv_dx, uv_dy);
+    if (interior) nsamp = vec4(0.5, 0.5, 1.0, 1.0); // the virtual room is flat
     vec3 tn = nsamp.xyz * 2.0 - 1.0;
     tn.xy *= m.normal_scale;
 
@@ -88,7 +181,9 @@ void main() {
     const vec3 P = v_pos + pc.frame.f.camera_pos.xyz;
     const float footprint = length(fwidth(P));
     float surf_h = 0.0;
+    vec3 surf_emit = vec3(0.0);
     const bool surf = (m.flags & kFlagSurface) != 0u;
+    g_surface_time = pc.frame.f.camera_pos.w;
     if (surf) {
         const vec3 ng = gl_FrontFacing ? normalize(v_normal) : -normalize(v_normal);
         const Surface sp = surface_pattern(m.pad1, P, ng, footprint);
@@ -96,6 +191,52 @@ void main() {
         rough = clamp(rough * sp.rough, 0.02, 1.0);
         ao *= sp.ao;
         surf_h = sp.height;
+        surf_emit = sp.emit;
+    }
+
+    // Rain (Lighting.Rain): wet surfaces darken and turn glossy; standing water collects in puddles on flat ground,
+    // mirror-smooth, with rings from the drops.
+    const vec4 weather = pc.frame.f.weather;
+    float puddle = 0.0;
+    vec3 ripple = vec3(0.0);
+    if (weather.x > 0.0 && (m.flags & 1u) == 0u && emissive_hint(m) == 0.0 && !interior) {
+        const vec3 ngw = gl_FrontFacing ? normalize(v_normal) : -normalize(v_normal);
+        const float up = smoothstep(0.75, 0.97, ngw.y);
+        // Sheltered (indoors, under a roof or an awning): dry. Walls test a point just in front of them.
+        const float open_sky = rain_visibility(pc.frame.f, v_pos + ngw * mix(0.4, 0.05, up));
+        const float porous = 1.0 - metal;
+        float pn = fbm3(vec3(P.x * 0.21, 0.0, P.z * 0.21)) + 0.12 * value_noise(vec3(P.x * 1.7, 2.0, P.z * 1.7));
+        float th = 1.0 - weather.y * 0.55;
+        puddle = up * smoothstep(th - 0.06, th + 0.04, pn) * weather.x * open_sky;
+        float wet = weather.x * mix(0.65, 1.0, up) * open_sky;
+        base.rgb *= mix(1.0, mix(0.6, 0.4, puddle), wet * porous);
+        // A porous surface (concrete, asphalt, plaster) only gets a thin, broken water film: it turns satin, not
+        // polished. Damp patches stay rough (~0.5), saturated ones reach ~0.3; only standing water is a mirror
+        // (Lagarde, "Water drop 2b - Dynamic rain and its effects").
+        float film = smoothstep(0.35, 0.75, value_noise(vec3(P.x * 0.9, 5.0, P.z * 0.9)) * 0.6 + pn * 0.6);
+        float wet_rough = max(rough * mix(0.75, 0.55, film), mix(0.5, 0.3, film));
+        rough = mix(rough, mix(min(rough, wet_rough), 0.03, puddle), wet * mix(porous, 1.0, puddle));
+        // Water fills the relief.
+        tn = mix(tn, vec3(0.0, 0.0, 1.0), puddle);
+        surf_h *= 1.0 - puddle;
+        if (weather.z > 0.0 && puddle > 0.05) {
+            // Drop rings: a 2x2 neighbourhood of 30 cm cells, each with its own phase.
+            vec2 q = P.xz / 0.3;
+            vec2 ci = floor(q);
+            for (int j = -1; j <= 1; ++j)
+                for (int i = -1; i <= 1; ++i) {
+                    vec2 c = ci + vec2(i, j);
+                    float h = hash13(vec3(c, 7.0));
+                    float t = fract(pc.frame.f.camera_pos.w * (0.9 + 0.6 * h) + h * 13.0);
+                    vec2 ctr = c + vec2(hash13(vec3(c, 1.0)), hash13(vec3(c, 2.0)));
+                    vec2 dv = q - ctr;
+                    float r = length(dv);
+                    float ring = t * 1.2;
+                    float a = (1.0 - t) * exp(-pow((r - ring) * 10.0, 2.0)) * step(h, weather.z);
+                    ripple.xz += dv / max(r, 1e-3) * a * cos((r - ring) * 30.0) * 0.35;
+                }
+            ripple *= puddle;
+        }
     }
 
     if ((m.flags & 8u) != 0u) ao *= nsamp.a; // needles: depth AO baked into the normal map's alpha
@@ -106,6 +247,7 @@ void main() {
     vec3 B = cross(N, T) * (v_tangent.w < 0.0 ? -1.0 : 1.0);
     N = normalize(T * tn.x + B * tn.y + N * max(tn.z, 1e-3));
     if (surf) N = bump_from_height(N, P, surf_h, 1.0);
+    if (puddle > 0.0) N = normalize(mix(N, Ng, puddle) + ripple);
     // Moss: rough and non-metallic, so it has almost no specular.
     rough = mix(rough, 0.95, moss);
     metal = mix(metal, 0.0, moss);
@@ -117,7 +259,13 @@ void main() {
     float a2 = rough * rough * rough * rough;
     a2 = clamp(a2 + min(2.0 * variance, 0.18), 0.0, 1.0);
     rough = sqrt(sqrt(a2));
-    float emissive = 0.0;
+    // Emission (Neon parts, glTF emissive): strength 0..1 in the G-buffer, its colour replaces the albedo there.
+    vec3 emit = m.emissive_cutoff.rgb;
+    if (m.emissive_tex != 0xFFFFFFFFu && dot(emit, emit) > 0.0)
+        emit *= textureGrad(TEX2D(m.emissive_tex, SMP_ANISO_REPEAT), uv, uv_dx, uv_dy).rgb * room_shade;
+    emit += surf_emit;
+    float emissive = clamp(max(emit.r, max(emit.g, emit.b)), 0.0, 1.0);
+    if (emissive > 0.0) base.rgb = mix(base.rgb, emit / max(emissive, 1e-4), emissive);
     o_albedo = vec4(base.rgb, ao);
     o_normal = vec4(oct_encode01(N), rough, (m.flags & 1u) != 0u ? 1.0 / 3.0 : 0.0);
     o_material = vec4(metal, m.translucency, emissive, 0.0);

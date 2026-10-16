@@ -26,6 +26,10 @@ tefra_compile_shaders(
         ${CMAKE_CURRENT_SOURCE_DIR}/water.frag
         ${CMAKE_CURRENT_SOURCE_DIR}/particle.vert
         ${CMAKE_CURRENT_SOURCE_DIR}/particle.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/clouds_vol.frag
+        ${CMAKE_CURRENT_SOURCE_DIR}/light_cull.comp
+        ${CMAKE_CURRENT_SOURCE_DIR}/rain.vert
+        ${CMAKE_CURRENT_SOURCE_DIR}/rain.frag
         ${CMAKE_CURRENT_SOURCE_DIR}/ocean.vert
         ${CMAKE_CURRENT_SOURCE_DIR}/ocean.frag
         ${CMAKE_CURRENT_SOURCE_DIR}/ocean_copy.frag

@@ -5,12 +5,14 @@
 // Needs hash13 / value_noise / fbm3 from the including shader.
 
 const uint kFlagSurface = 16u;
+float g_surface_time = 0.0; // seconds (set by the G-buffer shader): animated patterns (TV flicker)
 
 struct Surface {
     vec3 tint;    // multiplies the part colour
     float height; // metres-ish relief, only its derivatives matter
     float rough;  // multiplies the material roughness
     float ao;
+    vec3 emit;    // self-illumination (lit windows): colour x strength 0..1, display-referred like Neon
 };
 
 vec2 hash22(vec2 p) {
@@ -54,6 +56,7 @@ Surface surface_pattern(uint kind, vec3 P, vec3 N, float fp) {
     s.height = 0.0;
     s.rough = 1.0;
     s.ao = 1.0;
+    s.emit = vec3(0.0);
     vec2 uv = planar(P, N);
     bool top = N.y > 0.7;
     if (kind == 0u) { // Plastic: faint mottling
@@ -212,6 +215,95 @@ Surface surface_pattern(uint kind, vec3 P, vec3 N, float fp) {
         float c = 1.0 - abs(value_noise(P * 12.0) * 2.0 - 1.0);
         s.height = c * 0.004 * band(12.0, fp);
         s.rough = 0.8 + 0.6 * c;
+    } else if (kind == 24u) { // Facade: storeys of windows, some lit (warm, cool, flickering TV), frames and sills
+        if (top) { // roof: gravel and tar patches
+            float g = hash13(floor(P * 60.0)) * band(60.0, fp);
+            s.tint *= (0.75 + 0.3 * fbm3(P * 0.8)) * (0.9 + 0.2 * g);
+            s.height = g * 0.002;
+            return s;
+        }
+        float u = uv.x, v = P.y;
+        const float kFloor = 3.2, kBay = 2.4;
+        vec2 cell = vec2(floor(u / kBay), floor(v / kFloor));
+        vec2 f = vec2(fract(u / kBay) * kBay, fract(v / kFloor) * kFloor);
+        float bw = band(2.0, fp);
+        bool win = v > 4.2 && f.x > 0.45 && f.x < kBay - 0.45 && f.y > 0.85 && f.y < kFloor - 0.55;
+        float frame = (f.x > 0.38 && f.x < kBay - 0.38 && f.y > 0.78 && f.y < kFloor - 0.48 && !win && v > 4.2) ? 1.0 : 0.0;
+        float sill = (v > 4.2 && f.x > 0.38 && f.x < kBay - 0.38 && f.y > 0.7 && f.y < 0.82) ? 1.0 : 0.0;
+        // Wall: weathered panels with rain streaks under the sills.
+        float streak = smoothstep(0.55, 0.9, value_noise(vec3(u * 3.0, v * 0.25, 2.0))) * (1.0 - smoothstep(0.0, 1.6, f.y)) ;
+        s.tint *= (0.82 + 0.25 * fbm3(P * 0.6)) * (1.0 - 0.25 * streak * bw);
+        s.rough = 1.0;
+        if (frame > 0.0) s.tint = mix(s.tint, vec3(0.35), bw);
+        if (sill > 0.0) s.tint = mix(s.tint, vec3(1.25), bw);
+        if (win) {
+            float h = hash13(vec3(cell, floor(P.x * 0.01) + floor(P.z * 0.01) * 7.0));
+            float lit = step(h, 0.4);
+            // Glass: dark and glossy; lit rooms glow with a gradient (ceiling lamp), curtains and silhouettes.
+            vec2 w = vec2((f.x - 0.45) / (kBay - 0.9), (f.y - 0.85) / (kFloor - 1.4));
+            vec3 room = h < 0.18 ? vec3(1.0, 0.72, 0.42) : (h < 0.3 ? vec3(0.78, 0.86, 1.0) : vec3(1.0, 0.85, 0.6));
+            if (h > 0.37 && h < 0.4) room = vec3(0.45, 0.6, 1.0) * (0.75 + 0.25 * sin(g_surface_time * 7.0 + h * 50.0)); // TV
+            float curtain = step(0.5, hash13(vec3(cell, 3.0))) * smoothstep(0.62, 0.6, abs(w.x - 0.5) * 2.0 + 0.0) ;
+            float glow = mix(0.55, 1.0, w.y) * (1.0 - 0.6 * curtain * step(0.5, fract(w.x * 6.0 + h)));
+            float mull = step(abs(w.x - 0.5), 0.012) + step(abs(w.y - 0.55), 0.012);
+            s.tint = mix(vec3(1.0), vec3(0.12), bw);
+            s.rough = 0.06;
+            s.emit = room * lit * glow * (0.35 + 0.45 * hash13(vec3(cell, 9.0))) * (1.0 - clamp(mull, 0.0, 1.0)) * bw;
+        }
+        s.height = (frame * 0.02 + sill * 0.04) * bw;
+    } else if (kind == 25u) { // Asphalt: dark aggregate, patched repairs, cracks and oil
+        float agg = hash13(floor(P * 180.0)) * band(180.0, fp);
+        float patch_ = smoothstep(0.6, 0.62, fbm3(vec3(uv * 0.15, 4.0))) * band(0.15, fp);
+        vec3 v = voronoi(uv * 0.5);
+        float crack = (1.0 - smoothstep(0.0, 0.02, v.y - v.x)) * step(0.55, v.z) * band(6.0, fp);
+        float oil = smoothstep(0.65, 0.85, fbm3(vec3(uv * 0.4, 9.0)));
+        s.tint *= (0.8 + 0.35 * agg) * mix(1.0, 0.75, patch_) * (1.0 - 0.5 * crack) * mix(1.0, 0.7, oil);
+        s.height = agg * 0.0015 - crack * 0.004;
+        s.rough = mix(1.0, 0.8, oil);
+    } else if (kind == 21u) { // Wallpaper: 53 cm rolls, thin stripes and a faint diamond motif, aged and stained
+        float u = top ? uv.x : uv.x, v = top ? uv.y : P.y;
+        float bs = band(30.0, fp), bm = band(9.0, fp);
+        float stripe = 1.0 - smoothstep(0.0, 0.08, abs(fract(u / 0.105) - 0.5) - 0.42);
+        vec2 c = vec2(fract(u / 0.105) - 0.5, fract(v / 0.16) - 0.5);
+        float diamond = 1.0 - smoothstep(0.02, 0.06, abs(abs(c.x) * 1.5 + abs(c.y) - 0.32));
+        float seam = 1.0 - smoothstep(0.0, 0.002, abs(fract(u / 0.53) - 0.5) - 0.497);
+        float paper = value_noise(P * 90.0) * band(90.0, fp);
+        float blot = smoothstep(0.52, 0.8, fbm3(P * vec3(0.5, 0.35, 0.5) + 3.0));
+        float drip = smoothstep(0.6, 0.9, value_noise(vec3(u * 9.0, v * 0.8, 1.0))) * smoothstep(0.62, 0.3, fract(v * 0.37));
+        vec3 t = vec3(1.0);
+        t *= mix(1.0, 0.88, stripe * bs * 0.8) * mix(1.0, 0.9, diamond * bm * 0.7);
+        t *= mix(1.0, 0.8, seam * bs) * (0.96 + 0.08 * paper);
+        t *= mix(vec3(1.0), vec3(0.78, 0.7, 0.52), blot * 0.6) * mix(vec3(1.0), vec3(0.82, 0.76, 0.6), drip * 0.5);
+        s.tint *= t * (0.94 + 0.1 * fbm3(P * 1.3));
+        s.height = (paper * 0.0004 - seam * 0.0008) + stripe * 0.0002 * bs;
+        s.rough = 0.95;
+    } else if (kind == 22u) { // Carpet: dense fibre noise, worn paths and damp patches
+        float bf = band(160.0, fp);
+        float fib = hash13(floor(P * 320.0)) * band(320.0, fp);
+        float tuft = value_noise(P * 160.0) * bf;
+        float mott = fbm3(P * 1.6);
+        float damp = smoothstep(0.55, 0.78, fbm3(P * 0.45 + 7.0));
+        s.tint *= (0.82 + 0.3 * mott) * (0.86 + 0.22 * tuft) * (0.92 + 0.12 * fib);
+        s.tint *= mix(vec3(1.0), vec3(0.62, 0.58, 0.48), damp * 0.7);
+        s.height = tuft * 0.002 + fib * 0.0006;
+        s.rough = mix(1.0, 0.75, damp); // wet carpet catches a dull sheen
+        s.ao = 0.85 + 0.15 * tuft;
+    } else if (kind == 23u) { // CeilingTile: 61 x 122 cm acoustic tiles in a white T-bar grid
+        vec2 g = vec2(uv.x / 0.61, uv.y / 1.22);
+        vec2 f = fract(g) * vec2(0.61, 1.22);
+        float edge = min(min(f.x, 0.61 - f.x), min(f.y, 1.22 - f.y));
+        float tbar = 1.0 - smoothstep(0.012, 0.02, edge);
+        float id = hash13(vec3(floor(g), 9.0));
+        float pores = smoothstep(0.7, 0.85, value_noise(P * 140.0)) * band(140.0, fp);
+        float fissure = smoothstep(0.8, 0.95, value_noise(vec3(P.x * 30.0, P.z * 8.0, 3.0))) * band(30.0, fp) * 0.5;
+        float stain = step(0.86, id) * smoothstep(0.3, 0.7, fbm3(P * 2.2 + id * 13.0));
+        float bb = band(18.0, fp);
+        vec3 tile = vec3(0.97 + 0.04 * id) * (1.0 - 0.3 * pores - 0.2 * fissure);
+        tile *= mix(vec3(1.0), vec3(0.75, 0.62, 0.42), stain * 0.8);
+        s.tint *= mix(tile, vec3(1.05), tbar * bb);
+        s.height = (1.0 - tbar) * 0.006 * bb - pores * 0.0008 - fissure * 0.0006;
+        s.rough = mix(1.0, 0.45, tbar * bb);
+        s.ao = mix(1.0, 0.8, (1.0 - smoothstep(0.02, 0.04, edge)) * (1.0 - tbar) * bb);
     }
     return s;
 }

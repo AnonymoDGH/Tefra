@@ -105,6 +105,34 @@ void Ocean::build_waves() {
     }
     waves_ = rhi::upload_buffer(dev_, w.data(), w.size() * sizeof(OceanWaveGPU), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                 "ocean_waves");
+    host_waves_.assign(w.begin(), w.begin() + kGeometryWaves);
+}
+
+vec3 Ocean::displacement(vec2 xz, f32 t, f32 depth) const {
+    // Same as ocean_eval() in shaders/common/ocean.glsl (geometry waves, no footprint filter).
+    auto smooth = [](f32 a, f32 b, f32 x) {
+        const f32 u = clamp((x - a) / (b - a), 0.0f, 1.0f);
+        return u * u * (3.0f - 2.0f * u);
+    };
+    const f32 deep = smooth(0.5f, 12.0f, depth) * 0.8f + 0.2f * smooth(-0.3f, 1.0f, depth);
+    vec3 d{0.0f, 0.0f, 0.0f};
+    for (const OceanWaveGPU& w : host_waves_) {
+        const f32 k = w.dir_k.z, Q = w.amp.y, A = w.amp.x * deep;
+        const f32 th = k * (w.dir_k.x * xz.x + w.dir_k.y * xz.y) - w.dir_k.w * t + w.amp.z;
+        const f32 c = std::cos(th), s = std::sin(th);
+        d = d + vec3{Q * A * w.dir_k.x * c, A * s, Q * A * w.dir_k.y * c};
+    }
+    return d;
+}
+
+f32 Ocean::height_at(f32 x, f32 z, f32 t, f32 depth) const {
+    // A surface point that ends up over (x, z) started at p - disp(p): a few fixed-point steps find it.
+    vec2 p{x, z};
+    for (int i = 0; i < 3; ++i) {
+        const vec3 d = displacement(p, t, depth);
+        p = vec2{x - d.x, z - d.z};
+    }
+    return desc_.level + displacement(p, t, depth).y;
 }
 
 } // namespace tefra::render

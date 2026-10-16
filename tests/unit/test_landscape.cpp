@@ -1,12 +1,16 @@
 #define DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS
 #include <doctest.h>
 
+#include "tefra/core/fs.h"
 #include "tefra/physics/physics_world.h"
 #include "tefra/renderer/terrain_field.h"
 #include "tefra/world/datamodel.h"
 #include "tefra/world/environment_sync.h"
 
 #include <cmath>
+#include <cstdlib>
+#include <string>
+#include <vector>
 
 using namespace tefra;
 using namespace tefra::world;
@@ -112,4 +116,50 @@ TEST_CASE("physics: the landscape heightfield is raycast-able and reports its Te
     pw.clear_heightfield();
     CHECK(pw.raycast(vec3{10.0f, 50.0f, 20.0f}, vec3{0.0f, -1.0f, 0.0f}, 100.0f, hit) == false);
     CHECK_FALSE(pw.has_heightfield());
+}
+
+TEST_CASE("terrain field: the disk cache returns the generated samples exactly") {
+    // TEFRA_HOME points the configuration folder (and so the field cache) at a scratch directory of this test.
+    const std::string home = "tefra_field_cache_test";
+    remove_tree(home);
+#if defined(_WIN32)
+    _putenv_s("TEFRA_HOME", home.c_str());
+#else
+    setenv("TEFRA_HOME", home.c_str(), 1);
+#endif
+    render::TerrainDesc d;
+    d.resolution = 256;
+    d.texel_size = 4.0f;
+    d.seed = 77;
+    d.kind = render::TerrainKind::Coast;
+    d.sea_level = 0.5f;
+    const render::TerrainField generated(d); // writes the cache
+    CHECK(is_dir(path_join(home, ".config/cache/terrain")));
+    const render::TerrainField cached(d); // reads it back
+    CHECK(cached.heights() == generated.heights());
+    CHECK(cached.mask() == generated.mask());
+    CHECK(cached.shore() == generated.shore());
+    CHECK(cached.min_height() == generated.min_height());
+    CHECK(cached.max_height() == generated.max_height());
+    CHECK(cached.desc().sea_level == generated.desc().sea_level);
+    // A sea-level drag writes a field per value: only the most recent few stay on disk.
+    for (int i = 0; i < 8; ++i) {
+        render::TerrainDesc sea = d;
+        sea.sea_level = 1.0f + 0.25f * f32(i);
+        const render::TerrainField f(sea);
+        (void)f;
+    }
+    std::vector<DirEntry> files;
+    list_dir(path_join(home, ".config/cache/terrain"), files);
+    usize fields = 0;
+    for (const DirEntry& e : files) fields += e.name.size() > 5 && e.name.substr(e.name.size() - 5) == ".tfld" ? 1 : 0;
+    CHECK(fields <= 6);
+    CHECK(fields >= 1);
+    // Back to the real configuration folder for the tests that follow (an empty TEFRA_HOME counts as unset).
+#if defined(_WIN32)
+    _putenv_s("TEFRA_HOME", "");
+#else
+    unsetenv("TEFRA_HOME");
+#endif
+    remove_tree(home);
 }

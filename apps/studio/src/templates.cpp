@@ -1,10 +1,12 @@
 #include "tefra/studio/templates.h"
 #include "tefra/studio/session.h"
 
+#include "tefra/core/log.h"
 #include "tefra/world/environment_sync.h"
 
 #include <cmath>
 #include <string>
+#include <vector>
 
 namespace tefra::studio {
 
@@ -512,6 +514,1278 @@ void build_obby(DataModel& dm) {
     script(dm, hud, "LocalScript", "Hud", kHud);
 }
 
+// ---- Backrooms: endless yellow office rooms under buzzing fluorescent panels -------------------------------------
+
+const char* kFlicker = R"cs(using Tefra;
+
+// A dying fluorescent tube: mostly on, with irregular stutters and short blackouts.
+public class Flicker : TefraScript
+{
+    System.Random rng = new System.Random();
+    BasePart panel;
+    Instance lamp;
+    Color3 on;
+    float t, next = 1f;
+
+    public override void Start()
+    {
+        panel = (BasePart)Parent;
+        lamp = panel.FindFirstChild("Source")?.FindFirstChildOfClass("PointLight");
+        on = panel.Color;
+    }
+
+    public override void Update(float dt)
+    {
+        t += dt;
+        if (t < next) return;
+        t = 0f;
+        bool off = rng.NextDouble() < 0.4;
+        if (lamp != null) lamp["Enabled"] = !off;
+        panel.Color = off ? new Color3(0.22f, 0.21f, 0.18f) : on;
+        next = off ? (float)(0.03 + rng.NextDouble() * 0.15) : (float)(0.04 + rng.NextDouble() * (rng.NextDouble() < 0.7 ? 0.25 : 3.0));
+    }
+}
+)cs";
+
+void build_backrooms(DataModel& dm) {
+    Instance* ws = dm.workspace();
+    constexpr int kCells = 18;     // per side
+    constexpr f32 kCell = 5.0f;    // m
+    constexpr f32 kHeight = 2.75f; // floor to ceiling
+    constexpr f32 kWall = 0.18f;
+    const f32 half = f32(kCells) * kCell * 0.5f;
+    const f32 span = f32(kCells) * kCell;
+    const vec3 wall_col{0.80f, 0.72f, 0.40f}, carpet_col{0.50f, 0.45f, 0.28f}, ceiling_col{0.86f, 0.83f, 0.70f};
+    const vec3 base_col{0.42f, 0.33f, 0.18f};
+    u32 seed = 0x5EEDu;
+    auto rnd = [&seed] {
+        seed = seed * 1664525u + 1013904223u;
+        return f32(seed >> 8) / 16777216.0f;
+    };
+
+    Instance* rooms = dm.create("Model", ws, "Level0");
+    part(dm, rooms, "Carpet", {0, -0.05f, 0}, {span + 2, 0.1f, span + 2}, carpet_col, "Carpet");
+    part(dm, rooms, "Ceiling", {0, kHeight + 0.05f, 0}, {span + 2, 0.1f, span + 2}, ceiling_col, "CeilingTile");
+    // Outer walls.
+    for (int side = 0; side < 4; ++side) {
+        const bool x_axis = side < 2;
+        const f32 off = (side % 2 == 0 ? -1.0f : 1.0f) * (half + kWall * 0.5f);
+        const vec3 pos = x_axis ? vec3{0, kHeight * 0.5f, off} : vec3{off, kHeight * 0.5f, 0};
+        const vec3 size = x_axis ? vec3{span + 1, kHeight, kWall} : vec3{kWall, kHeight, span + 1};
+        part(dm, rooms, "OuterWall", pos, size, wall_col, "Wallpaper");
+    }
+    // Props modelled in Blender (tools/blender/make_backrooms_props.py), shipped in resources/models/backrooms.
+    auto prop = [&dm](Instance* parent, const char* name, const char* model, vec3 pos, f32 yaw) {
+        Instance* m = dm.create("MeshPart", parent, name);
+        m->set("MeshId", Value::string(std::string("builtin:models/backrooms/") + model + ".glb"));
+        m->set("Size", Value::vector3({1, 1, 1}));
+        m->set("Position", Value::vector3(pos));
+        m->set("Orientation", Value::vector3({0, yaw, 0}));
+        m->set("Anchored", Value::boolean(true));
+        return m;
+    };
+    // Interior walls on the cell edges: solid runs, doorways (frame + header above), some missing, a few pillars.
+    // Outlets near the floor and switches beside the doorways, on random faces.
+    Instance* walls = dm.create("Folder", rooms, "Walls");
+    Instance* fixtures = dm.create("Folder", rooms, "Fixtures");
+    constexpr f32 kDoor = 0.92f, kDoorH = 2.1f;
+    auto wall_run = [&](bool along_x, f32 x, f32 z, f32 a0, f32 a1) { // a0..a1 along the edge, from (x, z)
+        const f32 len = a1 - a0;
+        if (len <= 0.05f) return;
+        const f32 mid = (a0 + a1) * 0.5f;
+        const vec3 c = along_x ? vec3{x + mid, kHeight * 0.5f, z} : vec3{x, kHeight * 0.5f, z + mid};
+        const vec3 size = along_x ? vec3{len, kHeight, kWall} : vec3{kWall, kHeight, len};
+        part(dm, walls, "Wall", c, size, wall_col, "Wallpaper");
+        const vec3 bsize = along_x ? vec3{len, 0.12f, kWall + 0.03f} : vec3{kWall + 0.03f, 0.12f, len};
+        part(dm, walls, "Baseboard", {c.x, 0.06f, c.z}, bsize, base_col, "Wood");
+        if (len > 1.5f && rnd() < 0.35f) {
+            const f32 side = rnd() < 0.5f ? -1.0f : 1.0f;
+            const f32 at = a0 + 0.4f + rnd() * (len - 0.8f);
+            const f32 off = side * (kWall * 0.5f + 0.001f);
+            // Plate fronts face the prop's -Z: yaw turns them towards the room on that side.
+            const vec3 p = along_x ? vec3{x + at, 0.32f, z + off} : vec3{x + off, 0.32f, z + at};
+            const f32 yaw = along_x ? (side > 0 ? 180.0f : 0.0f) : (side > 0 ? -90.0f : 90.0f);
+            prop(fixtures, "Outlet", "outlet", p, yaw);
+        }
+    };
+    auto edge = [&](bool along_x, f32 x, f32 z) {
+        const f32 r = rnd();
+        if (r < 0.5f) return; // open
+        if (r < 0.78f) {      // solid
+            wall_run(along_x, x, z, -kWall * 0.5f, kCell + kWall * 0.5f);
+            return;
+        }
+        // Doorway somewhere along the edge.
+        const f32 d0 = 0.5f + rnd() * (kCell - kDoor - 1.0f), d1 = d0 + kDoor;
+        wall_run(along_x, x, z, -kWall * 0.5f, d0);
+        wall_run(along_x, x, z, d1, kCell + kWall * 0.5f);
+        const f32 dm_ = (d0 + d1) * 0.5f;
+        const vec3 head =
+            along_x ? vec3{x + dm_, (kHeight + kDoorH) * 0.5f, z} : vec3{x, (kHeight + kDoorH) * 0.5f, z + dm_};
+        const vec3 hsize = along_x ? vec3{kDoor, kHeight - kDoorH, kWall} : vec3{kWall, kHeight - kDoorH, kDoor};
+        part(dm, walls, "Header", head, hsize, wall_col, "Wallpaper");
+        prop(fixtures, "DoorFrame", "door_frame", along_x ? vec3{x + dm_, 0, z} : vec3{x, 0, z + dm_},
+             along_x ? 0.0f : 90.0f);
+        if (rnd() < 0.5f) {
+            const f32 side = rnd() < 0.5f ? -1.0f : 1.0f, off = side * (kWall * 0.5f + 0.001f);
+            const f32 at = d1 + 0.18f;
+            if (at < kCell - 0.1f) {
+                const vec3 p = along_x ? vec3{x + at, 1.2f, z + off} : vec3{x + off, 1.2f, z + at};
+                const f32 yaw = along_x ? (side > 0 ? 180.0f : 0.0f) : (side > 0 ? -90.0f : 90.0f);
+                prop(fixtures, "Switch", "switch", p, yaw);
+            }
+        }
+    };
+    for (int gx = 0; gx <= kCells; ++gx)
+        for (int gz = 0; gz <= kCells; ++gz) {
+            const f32 x = -half + f32(gx) * kCell, z = -half + f32(gz) * kCell;
+            const bool border_x = gx == 0 || gx == kCells, border_z = gz == 0 || gz == kCells;
+            if (gx < kCells && !border_z) edge(true, x, z);
+            if (gz < kCells && !border_x) edge(false, x, z);
+            if (!border_x && !border_z && rnd() < 0.06f)
+                part(dm, walls, "Pillar", {x, kHeight * 0.5f, z}, {0.5f, kHeight, 0.5f}, wall_col, "Wallpaper");
+        }
+    // Fluorescent troffers: one per cell, a few dead, some flickering (a Neon lens over the fixture lets the script
+    // switch it); return-air vents and the odd abandoned chair.
+    Instance* lights = dm.create("Folder", rooms, "Lights");
+    for (int cx = 0; cx < kCells; ++cx)
+        for (int cz = 0; cz < kCells; ++cz) {
+            const f32 x = -half + (f32(cx) + 0.5f) * kCell, z = -half + (f32(cz) + 0.5f) * kCell;
+            const f32 r = rnd();
+            const bool dead = r < 0.06f, flicker = !dead && r < 0.12f;
+            const f32 yaw = rnd() < 0.5f ? 0.0f : 90.0f;
+            Instance* fixture =
+                prop(lights, "Troffer", "troffer", {x, kHeight - 0.013f, z}, yaw); // lens just below the tiles
+            fixture->set("CastShadow", Value::boolean(false));
+            Instance* holder = fixture;
+            if (dead || flicker) {
+                Instance* lens =
+                    part(dm, fixture, "Lens", {x, kHeight - 0.016f, z},
+                         yaw == 0.0f ? vec3{0.54f, 0.004f, 1.16f} : vec3{1.16f, 0.004f, 0.54f},
+                         dead ? vec3{0.32f, 0.31f, 0.27f} : vec3{1.0f, 0.95f, 0.8f}, dead ? "SmoothPlastic" : "Neon");
+                lens->set("CastShadow", Value::boolean(false));
+                holder = lens;
+            }
+            if (!dead) {
+                // The light hangs 25 cm under the fixture (an invisible part) so the tiles around it catch light too.
+                Instance* src = part(dm, holder, "Source", {x, kHeight - 0.25f, z}, {0.1f, 0.1f, 0.1f}, {1, 1, 1});
+                src->set("Transparency", Value::number(1.0));
+                src->set("CanCollide", Value::boolean(false));
+                src->set("CastShadow", Value::boolean(false));
+                Instance* lamp = dm.create("PointLight", src, "Light");
+                lamp->set("Color", Value::color3({1.0f, 0.93f, 0.76f}));
+                lamp->set("Brightness", Value::number(3.4 + rnd() * 0.8));
+                lamp->set("Range", Value::number(11.0));
+                if (flicker) script(dm, holder, "Script", "Flicker", kFlicker);
+            }
+            if (rnd() < 0.18f) {
+                const f32 vx = x + (rnd() < 0.5f ? -1.6f : 1.6f), vz = z + (rnd() - 0.5f) * 2.0f;
+                prop(fixtures, "Vent", "vent", {vx, kHeight - 0.006f, vz}, rnd() < 0.5f ? 0.0f : 90.0f);
+            }
+            if (rnd() < 0.03f)
+                prop(fixtures, "Chair", "chair", {x + (rnd() - 0.5f) * 3.0f, 0, z + (rnd() - 0.5f) * 3.0f},
+                     rnd() * 360.0f);
+        }
+    // Spawn on the carpet, nearly invisible.
+    Instance* s = part(dm, ws, "SpawnLocation", {kCell * 0.5f, 0.02f, kCell * 0.5f}, {3, 0.04f, 3}, carpet_col,
+                       "Carpet", "SpawnLocation");
+    (void)s;
+    sound(dm, ws, "Hum", "builtin:hum_loop", 0.35f, true, true);
+    // Lighting: no daylight, warm bounce light, a faint haze that swallows the distance.
+    Instance* l = dm.service("Lighting");
+    l->set("ClockTime", Value::number(14.0));
+    l->set("CloudCover", Value::number(0.0));
+    l->set("SunBrightness", Value::number(0.0));
+    l->set("EnvironmentDiffuseScale", Value::number(0.0));
+    l->set("IndoorAmbient", Value::color3({1.0f, 0.88f, 0.58f}));
+    l->set("IndoorAmbientBrightness", Value::number(0.22));
+    l->set("ExposureCompensation", Value::number(7.5));
+    l->set("FogDensity", Value::number(0.035));
+    l->set("FogHeightFalloff", Value::number(0.0));
+    l->set("Saturation", Value::number(0.95));
+    l->set("Contrast", Value::number(1.0));
+}
+
+// ---- Rainy city at night: wet streets, street lamps, neon, lit windows, parked cars ------------------------------
+
+const char* kSteam = R"cs(using Tefra;
+
+// Steam from a manhole: puffs come and go.
+public class Steam : TefraScript
+{
+    System.Random rng = new System.Random();
+    float t;
+
+    public override void Update(float dt)
+    {
+        t += dt;
+        if (t < 0.5f) return;
+        t = 0f;
+        var e = Parent.FindFirstChildOfClass("ParticleEmitter") as ParticleEmitter;
+        if (e != null) e.Rate = (float)(4 + rng.NextDouble() * 8);
+    }
+}
+)cs";
+
+struct CityBuilding {
+    const char* model;
+    f32 height; // metres, roof parapet included
+};
+// Must match CATALOGUE in tools/blender/make_city_buildings.py (3 m floors + 0.75 m crown).
+constexpr CityBuilding kCityBuildings[] = {{"apt_a", 18.75f},     {"apt_b", 24.75f},  {"apt_c", 15.75f},
+                                           {"apt_tower", 42.75f}, {"loft_a", 15.3f},  {"loft_b", 21.3f},
+                                           {"loft_tower", 30.3f}, {"warehouse", 9.3f}};
+constexpr u32 kCityBuildingCount = sizeof(kCityBuildings) / sizeof(kCityBuildings[0]);
+constexpr f32 kBuilding = 18.0f;
+
+void build_city_rain(DataModel& dm) {
+    Instance* ws = dm.workspace();
+    constexpr int kBlocks = 5;
+    constexpr f32 kLot = 46.0f, kStreet = 16.0f, kPitch = kLot + kStreet, kSidewalk = 3.0f, kCurb = 0.15f;
+    const f32 span = f32(kBlocks) * kPitch;
+    u32 seed = 0xC17Bu;
+    auto rnd = [&seed] {
+        seed = seed * 1664525u + 1013904223u;
+        return f32(seed >> 8) / 16777216.0f;
+    };
+    auto yaw_to = [](vec3 d) { return degrees(std::atan2(-d.x, -d.z)); };
+    auto prop = [&dm](Instance* parent, const char* name, const char* model, vec3 pos, f32 yaw) {
+        Instance* m = dm.create("MeshPart", parent, name);
+        m->set("MeshId", Value::string(std::string("builtin:models/city/") + model + ".glb"));
+        m->set("Size", Value::vector3({1, 1, 1}));
+        m->set("Position", Value::vector3(pos));
+        m->set("Orientation", Value::vector3({0, yaw, 0}));
+        m->set("Anchored", Value::boolean(true));
+        return m;
+    };
+    auto light_at = [&dm](Instance* parent, vec3 pos, vec3 color, f32 brightness, f32 range) {
+        Instance* src = dm.create("Part", parent, "LightSource");
+        src->set("Position", Value::vector3(pos));
+        src->set("Size", Value::vector3({0.1f, 0.1f, 0.1f}));
+        src->set("Transparency", Value::number(1.0));
+        src->set("CanCollide", Value::boolean(false));
+        src->set("CastShadow", Value::boolean(false));
+        src->set("Anchored", Value::boolean(true));
+        Instance* l = dm.create("PointLight", src, "Light");
+        l->set("Color", Value::color3(color));
+        l->set("Brightness", Value::number(brightness));
+        l->set("Range", Value::number(range));
+        return src;
+    };
+    // Shaped light: a SpotLight whose source part looks along `orient` (pitch, yaw), with spill outside the cone and
+    // optionally a shadow map (street lamps: the cap blocks the light upwards, the post and cars cast shadows).
+    auto spot_at = [&dm](Instance* parent, vec3 pos, vec3 orient, vec3 color, f32 brightness, f32 range, f32 angle,
+                         f32 spill, bool shadows) {
+        Instance* src = dm.create("Part", parent, "LightSource");
+        src->set("Position", Value::vector3(pos));
+        src->set("Orientation", Value::vector3(orient));
+        src->set("Size", Value::vector3({0.1f, 0.1f, 0.1f}));
+        src->set("Transparency", Value::number(1.0));
+        src->set("CanCollide", Value::boolean(false));
+        src->set("CastShadow", Value::boolean(false));
+        src->set("Anchored", Value::boolean(true));
+        Instance* l = dm.create("SpotLight", src, "Light");
+        l->set("Color", Value::color3(color));
+        l->set("Brightness", Value::number(brightness));
+        l->set("Range", Value::number(range));
+        l->set("Angle", Value::number(angle));
+        l->set("Spill", Value::number(spill));
+        l->set("Shadows", Value::boolean(shadows));
+        return src;
+    };
+    auto center = [&](int i) { return (f32(i) - f32(kBlocks - 1) * 0.5f) * kPitch; };
+
+    Instance* city = dm.create("Model", ws, "City");
+    Instance* streets = dm.create("Folder", city, "Streets");
+    part(dm, streets, "Road", {0, -0.1f, 0}, {span + 60, 0.2f, span + 60}, {0.11f, 0.11f, 0.12f}, "Asphalt");
+    Instance* buildings = dm.create("Folder", city, "Buildings");
+    Instance* furniture = dm.create("Folder", city, "StreetFurniture");
+    Instance* lamps = dm.create("Folder", city, "StreetLamps");
+    Instance* cars = dm.create("Folder", city, "Cars");
+    const vec3 neon_cols[] = {{1.0f, 0.2f, 0.6f}, {0.2f, 0.85f, 1.0f}, {0.7f, 0.3f, 1.0f}, {1.0f, 0.55f, 0.15f}};
+
+    for (int bx = 0; bx < kBlocks; ++bx)
+        for (int bz = 0; bz < kBlocks; ++bz) {
+            const f32 cx = center(bx), cz = center(bz);
+            // Sidewalk slab with its curb, over the asphalt.
+            part(dm, streets, "Sidewalk", {cx, kCurb * 0.5f, cz}, {kLot, kCurb, kLot}, {0.42f, 0.41f, 0.40f},
+                 "Concrete");
+            // Buildings: 2 x 2 lots of 20 m; each holds an 18 x 18 m building assembled from a CC0 modular facade
+            // kit (tools/blender/make_city_buildings.py), outer faces flush with the sidewalk.
+            const f32 inner = kLot - 2.0f * kSidewalk, lot = inner * 0.5f;
+            for (int lx = 0; lx < 2; ++lx)
+                for (int lz = 0; lz < 2; ++lz) {
+                    const f32 ox = cx + (lx == 0 ? -1.0f : 1.0f) * (lot - kBuilding * 0.5f);
+                    const f32 oz = cz + (lz == 0 ? -1.0f : 1.0f) * (lot - kBuilding * 0.5f);
+                    const f32 r = rnd();
+                    const CityBuilding& kind = kCityBuildings[u32(r * f32(kCityBuildingCount)) % kCityBuildingCount];
+                    Instance* bld = dm.create("MeshPart", buildings, "Building");
+                    bld->set("MeshId",
+                             Value::string(std::string("builtin:models/city/buildings/") + kind.model + ".gltf"));
+                    bld->set("Size", Value::vector3({1, 1, 1}));
+                    bld->set("Position", Value::vector3({ox, kCurb, oz}));
+                    bld->set("Orientation", Value::vector3({0, 90.0f * f32(u32(rnd() * 4.0f) % 4), 0}));
+                    bld->set("Anchored", Value::boolean(true));
+                    bld->set("CanCollide", Value::boolean(false));
+                    // Collision: an invisible box over the footprint.
+                    Instance* col = part(dm, bld, "Collision", {ox, kCurb + kind.height * 0.5f, oz},
+                                         {kBuilding, kind.height, kBuilding}, {0.5f, 0.5f, 0.5f}, "Concrete");
+                    col->set("Transparency", Value::number(1.0));
+                    col->set("CastShadow", Value::boolean(false));
+                    // Street-facing faces: neon signs and awnings over some shopfronts.
+                    const vec3 nx{lx == 0 ? -1.0f : 1.0f, 0, 0}, nz{0, 0, lz == 0 ? -1.0f : 1.0f};
+                    for (int face = 0; face < 2; ++face) {
+                        const vec3 n = face == 0 ? nx : nz;
+                        const vec3 fc = vec3{ox, kCurb, oz} + n * (kBuilding * 0.5f);
+                        const vec3 t = face == 0 ? vec3{0, 0, 1} : vec3{1, 0, 0};
+                        for (int k = 0; k < 6; ++k) {
+                            const vec3 at = fc + t * ((f32(k) - 2.5f) * 3.0f);
+                            const f32 q = rnd();
+                            if (q < 0.2f) {
+                                // Sign flat on the facade, over the shop window (standoffs keep it off the
+                                // cornice); its glow washes the wall around it.
+                                static const char* const kNeon[] = {
+                                    "neon_sign_open", "neon_sign_bar",   "neon_sign_hotel", "neon_sign_ramen",
+                                    "neon_sign_24h",  "neon_sign_pizza", "neon_sign_cafe",  "neon_sign_liquor"};
+                                const u32 pick = u32(rnd() * 8.0f) % 8;
+                                const vec3 c = at + vec3{0, 3.0f, 0};
+                                prop(furniture, "NeonSign", kNeon[pick], c, yaw_to(n));
+                                light_at(furniture, c + n * 0.45f, neon_cols[pick % 4], 0.6f, 4.5f);
+                            } else if (q < 0.38f) {
+                                prop(furniture, "Awning", "awning", at + n * 0.02f + vec3{0, 2.95f, 0}, yaw_to(n));
+                            }
+                            // Shop window light: out of the glass and down onto the wet sidewalk, none back into the
+                            // wall.
+                            if (q < 0.55f)
+                                spot_at(furniture, at + n * 0.3f + vec3{0, 2.3f, 0}, {-35.0f, yaw_to(n), 0.0f},
+                                        rnd() < 0.5f ? vec3{1.0f, 0.84f, 0.64f} : vec3{0.86f, 0.93f, 1.0f}, 2.0f, 8.0f,
+                                        130.0f, 0.0f, false);
+                        }
+                    }
+                }
+            // Sidewalk furniture and street lamps along the four curbs of this block.
+            for (int side = 0; side < 4; ++side) {
+                const vec3 n = side == 0   ? vec3{1, 0, 0}
+                               : side == 1 ? vec3{-1, 0, 0}
+                               : side == 2 ? vec3{0, 0, 1}
+                                           : vec3{0, 0, -1};
+                const vec3 t{std::fabs(n.z), 0, std::fabs(n.x)};
+                const vec3 curb = vec3{cx, kCurb, cz} + n * (kLot * 0.5f - 0.6f);
+                int slot = 0;
+                for (f32 a = -kLot * 0.5f + 6.0f; a <= kLot * 0.5f - 6.0f; a += 11.0f, ++slot) {
+                    const vec3 p = curb + t * a;
+                    if (slot % 2 == 0) {
+                        // Cast-iron lamp post (CC0, Poly Haven): warm lantern 4 m up.
+                        prop(lamps, "StreetLamp", "lamp_classic", p, yaw_to(n));
+                        // The lantern lights downwards and sideways; its cap lets only a little light upwards.
+                        spot_at(lamps, p + vec3{0, 3.9f, 0}, {-90.0f, 0.0f, 0.0f}, {1.0f, 0.76f, 0.5f}, 14.0f, 22.0f,
+                                172.0f, 0.07f, true);
+                    } else {
+                        const f32 r = rnd();
+                        const char* what = r < 0.12f   ? "trash_bin"
+                                           : r < 0.2f  ? "trash_bin_rusty"
+                                           : r < 0.3f  ? "fire_hydrant"
+                                           : r < 0.4f  ? "bench"
+                                           : r < 0.5f  ? "parking_meter"
+                                           : r < 0.58f ? "bollard"
+                                           : r < 0.66f ? "utility_box"
+                                           : r < 0.72f ? "planter"
+                                                       : nullptr;
+                        if (what) prop(furniture, what, what, p - n * 0.2f, yaw_to(-n));
+                    }
+                }
+                // Parked cars along this curb, nose along the street.
+                static const char* const kCars[] = {"car_sedan",     "car_sedan_black", "car_sedan_silver",
+                                                    "car_hatch",     "car_hatch_white", "car_suv",
+                                                    "car_suv_green", "car_taxi",        "covered_car"};
+                for (f32 a = -kLot * 0.5f + 5.0f; a <= kLot * 0.5f - 5.0f; a += 5.8f) {
+                    if (rnd() < 0.45f) continue;
+                    const vec3 p = vec3{cx, 0.0f, cz} + n * (kLot * 0.5f + 1.3f) + t * a;
+                    const char* model = kCars[u32(rnd() * 9.0f) % 9];
+                    prop(cars, "Car", model, p, yaw_to(rnd() < 0.5f ? t : -t));
+                }
+            }
+            // Alleys between the four buildings: crates, boxes, an old tyre, a barrel stove, a security light.
+            static const char* const kClutter[] = {"cardboard_box", "wooden_crate", "plastic_crate",
+                                                   "tyre",          "barrel_stove", "trash_bin_rusty"};
+            for (int k = 0; k < 7; ++k) {
+                const bool along_x = k % 2 == 0;
+                const f32 off = (rnd() - 0.5f) * (kLot - 2.0f * kSidewalk - 4.0f);
+                const f32 side = (rnd() < 0.5f ? -1.0f : 1.0f) * 1.3f;
+                const vec3 p = along_x ? vec3{cx + off, kCurb, cz + side} : vec3{cx + side, kCurb, cz + off};
+                prop(furniture, "Clutter", kClutter[u32(rnd() * 6.0f) % 6], p, rnd() * 360.0f);
+            }
+            {
+                prop(furniture, "SecurityLight", "security_light", {cx + 1.85f, kCurb + 3.2f, cz}, 90.0f);
+                spot_at(furniture, {cx + 1.6f, kCurb + 3.05f, cz}, {-60.0f, 90.0f, 0.0f}, {0.86f, 0.93f, 1.0f}, 4.0f,
+                        12.0f, 110.0f, 0.04f, true);
+            }
+        }
+    // Intersections: lane markings, crosswalks, traffic lights, steam from manholes.
+    for (int ix = 0; ix < kBlocks - 1; ++ix)
+        for (int iz = 0; iz < kBlocks - 1; ++iz) {
+            const f32 x = center(ix) + kPitch * 0.5f, z = center(iz) + kPitch * 0.5f;
+            for (int k = 0; k < 7; ++k) {
+                const f32 o = (f32(k) - 3.0f) * 1.3f;
+                for (int side = 0; side < 4; ++side) {
+                    const f32 d = kStreet * 0.5f + 1.6f;
+                    const vec3 c = side == 0   ? vec3{x + o, 0.003f, z + d}
+                                   : side == 1 ? vec3{x + o, 0.003f, z - d}
+                                   : side == 2 ? vec3{x + d, 0.003f, z + o}
+                                               : vec3{x - d, 0.003f, z + o};
+                    const vec3 sz = side < 2 ? vec3{0.6f, 0.01f, 2.6f} : vec3{2.6f, 0.01f, 0.6f};
+                    part(dm, streets, "Crosswalk", c, sz, {0.85f, 0.85f, 0.82f}, "SmoothPlastic");
+                }
+            }
+            for (int c = 0; c < 4; ++c) {
+                const f32 sx = (c & 1) ? 1.0f : -1.0f, sz = (c & 2) ? 1.0f : -1.0f;
+                const vec3 p{x + sx * (kStreet * 0.5f + 0.5f), kCurb, z + sz * (kStreet * 0.5f + 0.5f)};
+                const bool ns = (c == 0 || c == 3);
+                const vec3 face = ns ? vec3{0, 0, -sz} : vec3{-sx, 0, 0};
+                prop(furniture, "TrafficLight", ns ? "traffic_light_red" : "traffic_light_green", p, yaw_to(face));
+                light_at(furniture, p + vec3{0, 3.6f, 0} + face * 0.5f,
+                         ns ? vec3{1, 0.12f, 0.08f} : vec3{0.2f, 1, 0.45f}, 1.2f, 6.0f);
+            }
+            if (rnd() < 0.5f) {
+                Instance* mh = prop(furniture, "Manhole", "manhole", {x + 3.0f, 0.0f, z - 4.0f}, 0.0f);
+                Instance* steam = dm.create("ParticleEmitter", mh, "Steam");
+                steam->set("Texture", Value::string("builtin:smoke"));
+                steam->set("Rate", Value::number(8.0));
+                steam->set("Lifetime", Value::number(3.5));
+                steam->set("Speed", Value::number(1.2));
+                steam->set("SpreadAngle", Value::number(25.0));
+                steam->set("Size", Value::number(0.8));
+                steam->set("SizeEnd", Value::number(3.5));
+                steam->set("Color", Value::color3({0.75f, 0.75f, 0.78f}));
+                steam->set("ColorEnd", Value::color3({0.6f, 0.6f, 0.65f}));
+                steam->set("Transparency", Value::number(0.55));
+                steam->set("TransparencyEnd", Value::number(1.0));
+                steam->set("Acceleration", Value::vector3({0.4f, 0.6f, 0.0f}));
+                steam->set("RotSpeed", Value::number(25.0));
+                script(dm, mh, "Script", "Steam", kSteam);
+            }
+        }
+    // Dashed centre lines along every street.
+    for (int i = 0; i < kBlocks - 1; ++i) {
+        const f32 c = center(i) + kPitch * 0.5f;
+        for (f32 a = -span * 0.5f; a < span * 0.5f; a += 9.0f) {
+            bool crossing = false;
+            for (int j = 0; j < kBlocks - 1; ++j)
+                if (std::fabs(a - (center(j) + kPitch * 0.5f)) < kStreet * 0.5f + 3.5f) crossing = true;
+            if (crossing) continue;
+            part(dm, streets, "LaneMark", {c, 0.003f, a}, {0.14f, 0.01f, 3.0f}, {0.85f, 0.75f, 0.3f}, "SmoothPlastic");
+            part(dm, streets, "LaneMark", {a, 0.003f, c}, {3.0f, 0.01f, 0.14f}, {0.85f, 0.75f, 0.3f}, "SmoothPlastic");
+        }
+    }
+    // Spawn on a sidewalk corner.
+    part(dm, ws, "SpawnLocation", {center(2) + kLot * 0.5f - 1.5f, kCurb + 0.02f, center(2) + kLot * 0.5f - 1.5f},
+         {2, 0.04f, 2}, {0.42f, 0.41f, 0.40f}, "Concrete", "SpawnLocation");
+    sound(dm, ws, "Rain", "builtin:rain_loop", 0.55f, true, true);
+    // Night, heavy overcast, rain, haze that catches the lamps.
+    Instance* l = dm.service("Lighting");
+    l->set("ClockTime", Value::number(23.0));
+    l->set("CloudCover", Value::number(0.95));
+    l->set("SunBrightness", Value::number(0.0));
+    l->set("EnvironmentDiffuseScale", Value::number(0.05));
+    l->set("IndoorAmbient", Value::color3({0.6f, 0.66f, 0.78f})); // cool bounce from wet streets and clouds
+    l->set("IndoorAmbientBrightness", Value::number(0.03));
+    l->set("ExposureCompensation", Value::number(2.9));
+    l->set("FogDensity", Value::number(0.003));
+    l->set("FogHeightFalloff", Value::number(0.015));
+    l->set("Saturation", Value::number(1.1));
+    l->set("Contrast", Value::number(1.08));
+    // Neutral blue-grey haze: the lamps tint it locally, the distance stays cold (no sepia wash).
+    Instance* atmo = dm.create("Atmosphere", l, "Atmosphere");
+    atmo->set("Color", Value::color3({0.7f, 0.77f, 0.9f}));
+    atmo->set("Density", Value::number(0.0));
+    Instance* rain = dm.create("Rain", l, "Rain");
+    rain->set("Intensity", Value::number(0.85));
+    rain->set("Wetness", Value::number(0.92));
+    rain->set("Puddles", Value::number(0.55));
+    Instance* sky = dm.create("Sky", l, "Sky");
+    sky->set("StarCount", Value::number(0.0));
+    sky->set("MoonVisible", Value::boolean(false));
+}
+
+// ---- Lighthouse in the storm: a playable night scene on a rocky coast -----------------------------------------
+// Storm sea (big swell, surf on the rocks), rain and lightning, a harbour with a wooden pier, rowing boats and an
+// anchored ship riding the waves (Floating attribute), a boardwalk up the headland, the keeper's cottage and a
+// lighthouse whose lamp the player lights at the top of the tower. Models: tools/blender/make_lighthouse.py and
+// make_coast_ph_props.py (Poly Haven CC0). Dimensions below must match make_lighthouse.py.
+
+const char* kStorm = R"cs(using Tefra;
+
+// Storm director: lightning at random intervals (a few flickering strokes lighting the scene from the strike), then
+// the thunder after the time sound takes to travel from the strike (343 m/s).
+public class Storm : TefraScript
+{
+    System.Random rng = new System.Random();
+    float next = 4f, t, flashT = -1f, thunderAt = -1f;
+    float strength;
+    bool far;
+    Sound thunder, thunderFar;
+
+    public override void Start()
+    {
+        thunder = Script.Parent.FindFirstChild("Thunder") as Sound;
+        thunderFar = Script.Parent.FindFirstChild("ThunderFar") as Sound;
+    }
+
+    public override void Update(float dt)
+    {
+        t += dt;
+        var lighting = Game.Lighting;
+        if (t >= next)
+        {
+            float distance = 400f + (float)rng.NextDouble() * 4500f;
+            far = distance > 2200f;
+            strength = far ? 0.25f + (float)rng.NextDouble() * 0.3f : 0.8f + (float)rng.NextDouble() * 0.6f;
+            float a = (float)(rng.NextDouble() * System.Math.PI * 2.0);
+            lighting.FlashDirection = new Vector3((float)System.Math.Cos(a), 0.55f + (float)rng.NextDouble() * 0.4f,
+                                                  (float)System.Math.Sin(a));
+            flashT = 0f;
+            thunderAt = t + distance / 343f;
+            next = t + 7f + (float)rng.NextDouble() * 14f;
+        }
+        if (flashT >= 0f)
+        {
+            // Return strokes: three or four bright pulses with dim glows between them, ~0.6 s in all.
+            flashT += dt;
+            float f = 0f;
+            float[] pulses = { 0f, 0.09f, 0.21f, 0.42f };
+            foreach (float p in pulses)
+            {
+                float d = flashT - p;
+                if (d >= 0f) f = System.Math.Max(f, (float)System.Math.Exp(-d * 22f) * (p == 0f ? 1f : 0.75f));
+            }
+            lighting.Flash = f * strength;
+            if (flashT > 0.9f) { flashT = -1f; lighting.Flash = 0f; }
+        }
+        if (thunderAt > 0f && t >= thunderAt)
+        {
+            thunderAt = -1f;
+            var s = far ? thunderFar : thunder;
+            if (s != null) { s.Volume = far ? 0.9f : 1.6f; s.TimePosition = 0f; s.Play(); }
+        }
+    }
+}
+)cs";
+
+const char* kLighthouseLever = R"cs(using Tefra;
+
+// The lamp lever in the watch room: touching it lights the lighthouse (lens glows, beams sweep the sea, the ship
+// answers with its horn) and completes the objective.
+public class LampLever : TefraScript
+{
+    bool lit;
+
+    public override void Start()
+    {
+        var console = (BasePart)Parent;
+        console.Touched += other =>
+        {
+            if (lit || Players.GetPlayerFromCharacter(other.Parent) == null) return;
+            lit = true;
+            (console.FindFirstChild("Lever") as Sound)?.Play();
+            var handle = console.Parent.FindFirstChild("LeverHandle") as BasePart;
+            if (handle != null) handle.Orientation = handle.Orientation + new Vector3(0f, 0f, -70f);
+            var light = Game.Workspace.FindFirstChild("Lighthouse");
+            var lamp = light?.FindFirstChild("Lamp");
+            lamp?.SetAttribute("On", true);
+            (lamp?.FindFirstChild("LampOn") as Sound)?.Play();
+            Debug.Log("The lighthouse is lit.");
+        };
+    }
+}
+)cs";
+
+const char* kLighthouseLamp = R"cs(using Tefra;
+
+// The lamp: off until the lever sets the attribute On. Then the lens lights up, the two beams fade in and turn
+// (one turn every 10 s), and the foghorn sounds now and then.
+public class Lamp : TefraScript
+{
+    BasePart beamA, beamB;
+    SpotLight lightA, lightB;
+    PointLight glow;
+    MeshPart lens;
+    float level, horn = 2f, yaw;
+    bool started;
+
+    public override void Start()
+    {
+        var lamp = Script.Parent;
+        beamA = lamp.FindFirstChild("BeamA") as BasePart;
+        beamB = lamp.FindFirstChild("BeamB") as BasePart;
+        lightA = beamA.FindFirstChildOfClass("SpotLight") as SpotLight;
+        lightB = beamB.FindFirstChildOfClass("SpotLight") as SpotLight;
+        glow = lamp.FindFirstChild("Glow")?.FindFirstChildOfClass("PointLight") as PointLight;
+        lens = lamp.FindFirstChild("Lens") as MeshPart;
+        yaw = beamA.Orientation.Y;
+    }
+
+    public override void Update(float dt)
+    {
+        var lamp = Script.Parent;
+        if (!(lamp.GetAttribute("On") is bool on) || !on) return;
+        if (!started)
+        {
+            started = true;
+            if (lens != null) lens.MeshId = "builtin:models/coast/lens_on.glb";
+            lightA.Enabled = lightB.Enabled = true;
+            if (glow != null) glow.Enabled = true;
+            var hud = Players.LocalPlayer.FindFirstChildOfClass("PlayerGui")?.FindFirstChild("Hud");
+            var obj = hud?.FindFirstChild("Objective") as TextLabel;
+            if (obj != null) obj.Text = "The lighthouse is lit. The ship can find the harbour now.";
+        }
+        level = System.Math.Min(level + dt / 3f, 1f); // the lamp warms up over 3 s
+        lightA.Brightness = lightB.Brightness = 900f * level * level;
+        if (glow != null) glow.Brightness = 5f * level;
+        yaw = (yaw + dt * 36f) % 360f;
+        beamA.Orientation = new Vector3(-1.5f, yaw, 0f);
+        beamB.Orientation = new Vector3(-1.5f, yaw + 180f, 0f);
+        horn -= dt;
+        if (horn <= 0f)
+        {
+            horn = 30f;
+            (lamp.FindFirstChild("Foghorn") as Sound)?.Play();
+        }
+    }
+}
+)cs";
+
+const char* kBuoyLight = R"cs(using Tefra;
+
+// Harbour buoy: a red light flashing once every 4 s.
+public class BuoyLight : TefraScript
+{
+    PointLight light;
+    float t;
+
+    public override void Start() { light = Script.Parent.FindFirstChildOfClass("PointLight") as PointLight; }
+
+    public override void Update(float dt)
+    {
+        t = (t + dt) % 4f;
+        if (light != null) light.Enabled = t < 0.6f;
+    }
+}
+)cs";
+
+const char* kLighthouseHud = R"cs(using Tefra;
+
+// HUD: the objective and the controls, which fade after a while.
+public class LighthouseHud : TefraScript
+{
+    TextLabel hint;
+    float t;
+
+    public override void Start() { hint = Script.Parent.FindFirstChild("Hint") as TextLabel; }
+
+    public override void Update(float dt)
+    {
+        t += dt;
+        if (hint != null && t > 14f) hint.Visible = false;
+    }
+}
+)cs";
+
+void build_lighthouse_storm(DataModel& dm) {
+    // make_lighthouse.py
+    constexpr f32 kPlinthH = 1.2f, kTowerTop = 20.5f, kRBase = 3.6f, kRTop = 2.7f, kWall = 0.55f;
+    constexpr f32 kWatchR = 2.35f, kWatchH = 2.9f, kLensZ = 20.5f + 2.9f + 1.9f, kDeckR = 3.8f;
+    constexpr f32 kPi = 3.14159265f;
+    auto radius_at = [&](f32 z) { return kRBase + (kRTop - kRBase) * (z - kPlinthH) / (kTowerTop - kPlinthH); };
+
+    Instance* ws = dm.workspace();
+    Instance* t = dm.create("Terrain", ws, "Terrain");
+    set_enum(t, "Kind", "Coast");
+    t->set("Vegetation", Value::boolean(false));
+    Instance* ocean = dm.create("Ocean", ws, "Ocean");
+    ocean->set("SwellHeight", Value::number(2.6));
+    ocean->set("SurfHeight", Value::number(2.1));
+    ocean->set("WindDirection", Value::vector3({0.3f, 0, 1}));
+    ocean->set("WaterColor", Value::color3({0.03f, 0.14f, 0.15f}));
+    auto h = [&](f32 x, f32 z) { return world::terrain_height(*t, x, z); };
+
+    // ---- Site of the lighthouse: a flat spot on the eastern headland, close to the cliff edge.
+    vec3 site{480, 0, -250};
+    f32 best = -1e9f;
+    for (f32 x = 360.0f; x <= 640.0f; x += 5.0f)
+        for (f32 z = -520.0f; z <= -60.0f; z += 5.0f) {
+            const f32 y = h(x, z);
+            if (y < 12.0f || y > 42.0f) continue;
+            f32 lo = 1e9f, hi = -1e9f;
+            for (int k = 0; k < 8; ++k) {
+                const f32 a = f32(k) * kPi * 0.25f;
+                const f32 yy = h(x + std::cos(a) * 6.0f, z + std::sin(a) * 6.0f);
+                lo = min(lo, yy);
+                hi = max(hi, yy);
+            }
+            if (hi - lo > 2.2f) continue;
+            f32 sea = 1e9f; // lowest ground 40 m away: the sea should be right below
+            for (int k = 0; k < 12; ++k) {
+                const f32 a = f32(k) * kPi / 6.0f;
+                sea = min(sea, h(x + std::cos(a) * 40.0f, z + std::sin(a) * 40.0f));
+            }
+            if (sea > 1.0f) continue;
+            const f32 score = -(hi - lo) * 3.0f - std::fabs(x - 430.0f) * 0.05f + y * 0.1f;
+            if (score > best) {
+                best = score;
+                site = {x, y, z};
+            }
+        }
+    // Plinth on the highest ground of its footprint; a stone foundation fills the gap below it.
+    f32 ground_lo = 1e9f, ground_hi = -1e9f;
+    for (int k = 0; k < 16; ++k) {
+        const f32 a = f32(k) * kPi / 8.0f;
+        const f32 yy = h(site.x + std::cos(a) * 5.3f, site.z + std::sin(a) * 5.3f);
+        ground_lo = min(ground_lo, yy);
+        ground_hi = max(ground_hi, yy);
+    }
+    site.y = ground_hi;
+
+    // ---- Harbour: the beach point nearest to the lighthouse, at least 70 m away.
+    vec3 beach{site.x - 150.0f, 1.2f, site.z + 120.0f};
+    f32 beach_d = 1e9f;
+    for (f32 x = site.x - 320.0f; x <= site.x + 60.0f; x += 4.0f)
+        for (f32 z = site.z - 60.0f; z <= site.z + 320.0f; z += 4.0f) {
+            const f32 y = h(x, z);
+            if (y < 0.9f || y > 1.8f) continue;
+            const f32 d = std::hypot(x - site.x, z - site.z);
+            if (d < 70.0f || d > beach_d) continue;
+            if (std::fabs(h(x + 3, z) - y) + std::fabs(h(x, z + 3) - y) > 0.6f) continue;
+            beach_d = d;
+            beach = {x, y, z};
+        }
+    // Towards the sea from the beach point: the steepest way down.
+    vec3 sea_dir{0, 0, -1};
+    {
+        f32 low = 1e9f;
+        for (int k = 0; k < 24; ++k) {
+            const f32 a = f32(k) * kPi / 12.0f;
+            const f32 yy = h(beach.x + std::cos(a) * 25.0f, beach.z + std::sin(a) * 25.0f);
+            if (yy < low) {
+                low = yy;
+                sea_dir = {std::cos(a), 0, std::sin(a)};
+            }
+        }
+    }
+    auto yaw_to = [](vec3 d) { return degrees(std::atan2(-d.x, -d.z)); };
+    TEFRA_LOG_INFO("Lighthouse template: tower at (%.0f, %.1f, %.0f), pier at (%.0f, %.1f, %.0f)", f64(site.x),
+                   f64(site.y), f64(site.z), f64(beach.x), f64(beach.y), f64(beach.z));
+
+    Instance* coast = dm.create("Model", ws, "Coast");
+    auto mesh = [&](Instance* parent, const char* name, const std::string& file, vec3 pos, vec3 orient) {
+        Instance* m = dm.create("MeshPart", parent, name);
+        m->set("MeshId", Value::string("builtin:models/coast/" + file));
+        m->set("Size", Value::vector3({1, 1, 1}));
+        m->set("Position", Value::vector3(pos));
+        m->set("Orientation", Value::vector3(orient));
+        m->set("Anchored", Value::boolean(true));
+        m->set("CanCollide", Value::boolean(false));
+        return m;
+    };
+    auto hidden = [&](Instance* parent, const char* name, vec3 pos, vec3 size, vec3 orient,
+                      const char* shape = nullptr) {
+        Instance* p = part(dm, parent, name, pos, size, {0.5f, 0.5f, 0.5f}, "Concrete");
+        p->set("Orientation", Value::vector3(orient));
+        p->set("Transparency", Value::number(1.0));
+        p->set("CastShadow", Value::boolean(false));
+        if (shape) set_enum(p, "Shape", shape);
+        return p;
+    };
+    auto light_part = [&](Instance* parent, const char* name, vec3 pos, vec3 orient) {
+        Instance* src = dm.create("Part", parent, name);
+        src->set("Position", Value::vector3(pos));
+        src->set("Orientation", Value::vector3(orient));
+        src->set("Size", Value::vector3({0.1f, 0.1f, 0.1f}));
+        src->set("Transparency", Value::number(1.0));
+        src->set("CanCollide", Value::boolean(false));
+        src->set("CastShadow", Value::boolean(false));
+        src->set("Anchored", Value::boolean(true));
+        return src;
+    };
+    auto point_light = [&](Instance* src, vec3 color, f32 brightness, f32 range, bool shadows = false) {
+        Instance* l = dm.create("PointLight", src, "Light");
+        l->set("Color", Value::color3(color));
+        l->set("Brightness", Value::number(brightness));
+        l->set("Range", Value::number(range));
+        l->set("Shadows", Value::boolean(shadows));
+        return l;
+    };
+    const vec3 warm{1.0f, 0.7f, 0.42f};
+
+    // ---- The lighthouse.
+    Instance* lh = dm.create("Model", ws, "Lighthouse");
+    const vec3 to_beach = normalize(vec3{beach.x - site.x, 0, beach.z - site.z});
+    const f32 yaw = yaw_to(to_beach); // the door faces the boardwalk
+    const f32 yr = radians(yaw);
+    // Blender-local (x, y = front, z = up) to world.
+    auto local = [&](f32 bx, f32 by, f32 bz) {
+        const f32 gx = bx, gz = -by;
+        return vec3{site.x + gx * std::cos(yr) + gz * std::sin(yr), site.y + bz,
+                    site.z - gx * std::sin(yr) + gz * std::cos(yr)};
+    };
+    auto local_yaw = [&](f32 a) { return yaw + degrees(-a); }; // part yaw so its local +X follows Blender angle a
+    mesh(lh, "Tower", "lighthouse.gltf", site, {0, yaw, 0});
+    if (ground_hi - ground_lo > 0.2f) {
+        Instance* f = part(dm, lh, "Foundation", {site.x, (ground_lo - 1.0f + site.y) * 0.5f, site.z},
+                           {10.8f, site.y - ground_lo + 1.0f, 10.8f}, {0.42f, 0.42f, 0.4f}, "Slate");
+        set_enum(f, "Shape", "Cylinder");
+    }
+    // Collision: plinth, steps, the shaft wall (rings of blocks with the doorway), floors, watch room, gallery.
+    hidden(lh, "PlinthCollider", {site.x, site.y + kPlinthH * 0.5f, site.z}, {10.6f, kPlinthH, 10.6f}, {}, "Cylinder");
+    for (int k = 0; k < 3; ++k) {
+        const f32 hh = kPlinthH * f32(k + 1) / 3.0f;
+        hidden(lh, "StepCollider", local(0, 5.2f + 0.45f * f32(2 - k) + 0.225f, hh * 0.5f), {1.8f, hh, 0.45f},
+               {0, yaw, 0});
+    }
+    for (int tier = 0; tier < 6; ++tier) {
+        const f32 z0 = kPlinthH + f32(tier) * (kTowerTop - kPlinthH) / 6.0f;
+        const f32 z1 = z0 + (kTowerTop - kPlinthH) / 6.0f;
+        const f32 r = radius_at((z0 + z1) * 0.5f) - kWall;
+        for (int k = 0; k < 28; ++k) {
+            const f32 a = f32(k) * 2.0f * kPi / 28.0f;
+            if (tier == 0 && std::fabs(std::remainder(a - kPi * 0.5f, 2.0f * kPi)) < 0.3f) continue; // doorway
+            const vec3 c = local(std::cos(a) * (r + 0.2f), std::sin(a) * (r + 0.2f), (z0 + z1) * 0.5f);
+            hidden(lh, "WallCollider", c, {0.4f, z1 - z0, 2.0f * kPi * r / 28.0f * 1.2f}, {0, local_yaw(a), 0});
+        }
+    }
+    // Spiral stair against the wall: cast-iron treads, 0.19 m rise, 16 per turn, an inner handrail.
+    Instance* stair = dm.create("Model", lh, "Stair");
+    const vec3 iron{0.1f, 0.1f, 0.11f};
+    const int steps = int((kTowerTop - kPlinthH) / 0.19f);
+    const f32 a0 = kPi * 0.5f + radians(75.0f);
+    for (int i = 0; i < steps; ++i) {
+        const f32 z = kPlinthH + 0.19f * f32(i + 1);
+        const f32 a = a0 + f32(i) * 2.0f * kPi / 16.0f;
+        const f32 r_out = radius_at(z) - kWall - 0.03f, r_in = r_out - 1.0f;
+        const f32 rm = (r_in + r_out) * 0.5f;
+        Instance* s = part(dm, stair, "Step", local(std::cos(a) * rm, std::sin(a) * rm, z - 0.035f),
+                           {1.0f, 0.07f, 2.0f * kPi * r_out / 16.0f * 1.15f}, iron, "Metal");
+        s->set("Orientation", Value::vector3({0, local_yaw(a), 0}));
+        // Inner rail post and the invisible guard that keeps players off the well.
+        Instance* post =
+            part(dm, stair, "Baluster", local(std::cos(a) * (r_in + 0.04f), std::sin(a) * (r_in + 0.04f), z + 0.45f),
+                 {0.04f, 0.9f, 0.04f}, iron, "Metal");
+        set_enum(post, "Shape", "Cylinder");
+        hidden(stair, "Guard", local(std::cos(a) * (r_in - 0.05f), std::sin(a) * (r_in - 0.05f), z + 0.6f),
+               {0.1f, 1.3f, 2.0f * kPi * r_in / 16.0f * 1.3f}, {0, local_yaw(a), 0});
+        const f32 an = a + 2.0f * kPi / 16.0f;
+        const f32 zn = z + 0.19f;
+        const vec3 p0 = local(std::cos(a) * (r_in + 0.04f), std::sin(a) * (r_in + 0.04f), z + 0.9f);
+        const vec3 p1 = local(std::cos(an) * (r_in + 0.04f), std::sin(an) * (r_in + 0.04f), zn + 0.9f);
+        const vec3 d = p1 - p0;
+        Instance* rail =
+            part(dm, stair, "Handrail", (p0 + p1) * 0.5f, {0.05f, 0.05f, length(d)}, {0.28f, 0.18f, 0.1f}, "Wood");
+        rail->set("Orientation", Value::vector3({degrees(std::asin(d.y / max(length(d), 1e-4f))),
+                                                 degrees(std::atan2(-d.x, -d.z)), 0}));
+    }
+    // Watch-room floor: a solid centre and an outer ring left open above the last treads (the stair comes up
+    // through it).
+    const vec3 planks{0.36f, 0.25f, 0.16f};
+    Instance* floor = dm.create("Model", lh, "WatchFloor");
+    Instance* centre =
+        part(dm, floor, "Floor", local(0, 0, kTowerTop - 0.12f), {2.3f, 0.24f, 2.3f}, planks, "WoodPlanks");
+    set_enum(centre, "Shape", "Cylinder");
+    for (int k = 0; k < 16; ++k) {
+        const f32 a = f32(k) * 2.0f * kPi / 16.0f;
+        bool open = false;
+        for (int i = steps - 13; i < steps; ++i) {
+            const f32 sa = a0 + f32(i) * 2.0f * kPi / 16.0f;
+            if (std::fabs(std::remainder(sa - a, 2.0f * kPi)) < kPi / 16.0f + 0.05f) open = true;
+        }
+        if (open) continue;
+        const f32 rm = (1.1f + (kRTop - kWall)) * 0.5f;
+        Instance* seg =
+            part(dm, floor, "Floor", local(std::cos(a) * rm, std::sin(a) * rm, kTowerTop - 0.12f),
+                 {kRTop - kWall - 1.05f, 0.24f, 2.0f * kPi * (kRTop - kWall) / 16.0f * 1.12f}, planks, "WoodPlanks");
+        seg->set("Orientation", Value::vector3({0, local_yaw(a), 0}));
+    }
+    // Watch room walls with the gallery door (front), gallery deck and railing.
+    for (int k = 0; k < 18; ++k) {
+        const f32 a = f32(k) * 2.0f * kPi / 18.0f;
+        if (std::fabs(std::remainder(a - kPi * 0.5f, 2.0f * kPi)) < 0.25f) continue;
+        const f32 r = kWatchR - 0.25f + 0.15f;
+        hidden(lh, "WatchWall", local(std::cos(a) * r, std::sin(a) * r, kTowerTop + kWatchH * 0.5f),
+               {0.3f, kWatchH, 2.0f * kPi * r / 18.0f * 1.2f}, {0, local_yaw(a), 0});
+    }
+    for (int k = 0; k < 20; ++k) {
+        const f32 a = f32(k) * 2.0f * kPi / 20.0f;
+        const f32 rm = (kWatchR + kDeckR) * 0.5f;
+        hidden(lh, "GalleryDeck", local(std::cos(a) * rm, std::sin(a) * rm, kTowerTop - 0.15f),
+               {kDeckR - kWatchR + 0.1f, 0.3f, 2.0f * kPi * kDeckR / 20.0f * 1.15f}, {0, local_yaw(a), 0});
+        hidden(lh, "Railing", local(std::cos(a) * (kDeckR - 0.1f), std::sin(a) * (kDeckR - 0.1f), kTowerTop + 0.6f),
+               {0.15f, 1.2f, 2.0f * kPi * kDeckR / 20.0f * 1.15f}, {0, local_yaw(a), 0});
+    }
+    // The lamp: lens (swapped for the lit one), two rotating beams, the lantern glow, sounds and the script.
+    Instance* lamp = dm.create("Model", lh, "Lamp");
+    lamp->set_attribute("On", Value::boolean(false));
+    mesh(lamp, "Lens", "lens_off.glb", local(0, 0, kLensZ), {0, yaw, 0});
+    for (int b = 0; b < 2; ++b) {
+        Instance* src =
+            light_part(lamp, b == 0 ? "BeamA" : "BeamB", local(0, 0, kLensZ), {-1.5f, yaw + (b ? 180.0f : 0.0f), 0});
+        Instance* l = dm.create("SpotLight", src, "Beam");
+        l->set("Color", Value::color3({1.0f, 0.93f, 0.8f}));
+        l->set("Brightness", Value::number(0.0));
+        l->set("Range", Value::number(120.0));
+        l->set("Angle", Value::number(7.0));
+        l->set("Spill", Value::number(0.002));
+        l->set("Shadows", Value::boolean(b == 0));
+        l->set("Enabled", Value::boolean(false));
+    }
+    {
+        Instance* g = light_part(lamp, "Glow", local(0, 0, kLensZ), {});
+        Instance* l = point_light(g, {1.0f, 0.88f, 0.7f}, 0.0f, 12.0f);
+        l->set("Enabled", Value::boolean(false));
+    }
+    Instance* lamp_on = sound(dm, lamp, "LampOn", "builtin:lamp_on", 1.0f);
+    (void)lamp_on;
+    Instance* horn = sound(dm, lamp, "Foghorn", "builtin:foghorn", 2.5f);
+    horn->set("RollOffMaxDistance", Value::number(1500.0));
+    script(dm, lamp, "Script", "Lamp", kLighthouseLamp);
+    // Lever console in the watch room, on the solid floor opposite the stair opening.
+    {
+        const f32 a = a0 + f32(steps - 7) * 2.0f * kPi / 16.0f + kPi;
+        Instance* console =
+            part(dm, lh, "LeverConsole", local(std::cos(a) * 1.35f, std::sin(a) * 1.35f, kTowerTop + 0.45f),
+                 {0.45f, 0.9f, 0.7f}, {0.12f, 0.2f, 0.16f}, "Metal");
+        console->set("Orientation", Value::vector3({0, local_yaw(a), 0}));
+        sound(dm, console, "Lever", "builtin:lever", 1.2f);
+        script(dm, console, "Script", "LampLever", kLighthouseLever);
+        Instance* handle = part(dm, lh, "LeverHandle", local(std::cos(a) * 1.2f, std::sin(a) * 1.2f, kTowerTop + 1.1f),
+                                {0.06f, 0.55f, 0.06f}, {0.7f, 0.08f, 0.05f}, "SmoothPlastic");
+        handle->set("Orientation", Value::vector3({0, local_yaw(a), 35}));
+        handle->set("CanCollide", Value::boolean(false));
+        Instance* sign = mesh(lh, "Compass", "compass.glb",
+                              local(std::cos(a) * 1.35f, std::sin(a) * 1.35f, kTowerTop + 0.9f), {0, yaw, 0});
+        (void)sign;
+    }
+    // Interior: lamps up the stair, the keeper's things on the ground floor and in the watch room.
+    for (int k = 0; k < 4; ++k) {
+        const f32 z = 4.0f + f32(k) * 4.5f;
+        const f32 a = kPi * 0.5f + kPi + f32(k) * 1.7f;
+        const f32 r = radius_at(z) - kWall - 0.1f;
+        mesh(lh, "Sconce", "wall_sconce.glb", local(std::cos(a) * r, std::sin(a) * r, z), {0, local_yaw(a) - 90.0f, 0});
+        Instance* src =
+            light_part(lh, "SconceLight", local(std::cos(a) * (r - 0.45f), std::sin(a) * (r - 0.45f), z + 0.1f), {});
+        point_light(src, warm, 1.4f, 9.0f, k == 1 || k == 3);
+    }
+    {
+        const f32 rr = 1.3f;
+        mesh(lh, "Desk", "desk.glb", local(-0.4f, -0.9f, kPlinthH + 0.05f), {0, yaw + 180.0f, 0});
+        mesh(lh, "Radio", "radio.glb", local(-0.7f, -0.9f, kPlinthH + 0.84f), {0, yaw + 180.0f, 0});
+        mesh(lh, "Stool", "stool.glb", local(-0.3f, -0.1f, kPlinthH + 0.05f), {0, yaw + 20.0f, 0});
+        mesh(lh, "OilTin", "oil_tin.glb", local(0.4f, -1.0f, kPlinthH + 0.84f), {0, yaw + 40.0f, 0});
+        mesh(lh, "Boots", "rubber_boots.glb", local(1.2f, 0.9f, kPlinthH + 0.05f), {0, yaw - 30.0f, 0});
+        mesh(lh, "Barrel", "barrel.glb", local(1.6f, -0.6f, kPlinthH + 0.05f), {0, yaw, 0});
+        Instance* lamp_h = light_part(lh, "HangingLamp", local(0, -rr * 0.2f, kPlinthH + 2.6f), {});
+        point_light(lamp_h, warm, 1.6f, 8.0f, true);
+        mesh(lh, "HangingLampModel", "hanging_lamp.glb", local(0, -rr * 0.2f, kPlinthH + 2.25f), {0, yaw, 0});
+        const f32 ab = a0 + f32(steps - 4) * 2.0f * kPi / 16.0f + kPi;
+        mesh(lh, "Binoculars", "binoculars.glb", local(std::cos(ab) * 1.0f, std::sin(ab) * 1.0f, kTowerTop + 0.01f),
+             {0, yaw + 60.0f, 0});
+        mesh(lh, "Hat", "fishermans_hat.glb",
+             local(std::cos(ab + 0.5f) * 0.7f, std::sin(ab + 0.5f) * 0.7f, kTowerTop + 0.01f), {0, yaw, 0});
+        Instance* wl =
+            light_part(lh, "WatchLamp", local(std::cos(ab) * 0.5f, std::sin(ab) * 0.5f, kTowerTop + 2.2f), {});
+        point_light(wl, warm, 1.2f, 6.0f);
+    }
+    // Gallery lantern by the door, life buoy on the plinth.
+    {
+        mesh(lh, "Lifebuoy", "lifebuoy.glb", local(1.6f, radius_at(2.5f) + 0.05f, kPlinthH + 1.0f),
+             {0, yaw + 180.0f, 0});
+        Instance* src = light_part(lh, "DoorLamp", local(0.0f, kRBase + 0.25f, kPlinthH + 2.85f), {});
+        point_light(src, warm, 2.0f, 10.0f, true);
+        mesh(lh, "DoorLantern", "lantern.glb", local(0.0f, kRBase + 0.25f, kPlinthH + 2.6f), {0, yaw, 0});
+    }
+
+    // ---- Keeper's cottage beside the tower, its chimney smoking, warm windows.
+    {
+        const vec3 side = normalize(vec3{-to_beach.z, 0, to_beach.x});
+        vec3 c = site + side * 15.0f + to_beach * 4.0f;
+        c.y = h(c.x, c.z);
+        f32 hi = c.y;
+        for (int k = 0; k < 8; ++k) {
+            const f32 a = f32(k) * kPi * 0.25f;
+            hi = max(hi, h(c.x + std::cos(a) * 4.5f, c.z + std::sin(a) * 4.5f));
+        }
+        c.y = hi;
+        const f32 cy = yaw;
+        Instance* cot = dm.create("Model", ws, "KeepersCottage");
+        mesh(cot, "Cottage", "keeper_cottage.gltf", c, {0, cy, 0});
+        part(dm, cot, "Footing", {c.x, c.y - 1.5f, c.z}, {8.6f, 3.0f, 6.1f}, {0.36f, 0.34f, 0.32f}, "Slate")
+            ->set("Orientation", Value::vector3({0, cy, 0}));
+        hidden(cot, "Collider", {c.x, c.y + 2.5f, c.z}, {8.0f, 5.0f, 5.5f}, {0, cy, 0});
+        const f32 cr = radians(cy);
+        auto cl = [&](f32 bx, f32 by, f32 bz) {
+            return vec3{c.x + bx * std::cos(cr) - by * std::sin(cr), c.y + bz,
+                        c.z - bx * std::sin(cr) - by * std::cos(cr)};
+        };
+        Instance* chim = light_part(cot, "Chimney", cl(3.0f, -0.8f, 6.9f), {});
+        Instance* smoke = dm.create("ParticleEmitter", chim, "Smoke");
+        smoke->set("Texture", Value::string("builtin:smoke"));
+        smoke->set("Rate", Value::number(6.0));
+        smoke->set("Lifetime", Value::number(5.0));
+        smoke->set("Speed", Value::number(1.0));
+        smoke->set("SpreadAngle", Value::number(15.0));
+        smoke->set("Size", Value::number(0.6));
+        smoke->set("SizeEnd", Value::number(4.0));
+        smoke->set("Color", Value::color3({0.35f, 0.35f, 0.37f}));
+        smoke->set("ColorEnd", Value::color3({0.25f, 0.25f, 0.27f}));
+        smoke->set("Transparency", Value::number(0.4));
+        smoke->set("TransparencyEnd", Value::number(1.0));
+        smoke->set("Acceleration", Value::vector3({1.6f, 0.4f, 0.6f}));
+        for (f32 x : {1.4f, -3.0f}) {
+            Instance* wl = light_part(cot, "WindowLight", cl(x, 3.3f, 1.7f), {-20.0f, cy + 180.0f, 0});
+            Instance* l = dm.create("SpotLight", wl, "Light");
+            l->set("Color", Value::color3({1.0f, 0.66f, 0.36f}));
+            l->set("Brightness", Value::number(1.5));
+            l->set("Range", Value::number(9.0));
+            l->set("Angle", Value::number(110.0));
+        }
+        Instance* dl = light_part(cot, "DoorLamp", cl(-0.8f, 3.05f, 2.3f), {});
+        point_light(dl, warm, 1.6f, 9.0f, true);
+        mesh(cot, "DoorLantern", "lantern.glb", cl(-0.8f, 3.05f, 2.05f), {0, cy, 0});
+        mesh(cot, "Barrel", "barrel_b.glb", cl(3.5f, 3.4f, 0.0f), {0, cy + 30.0f, 0});
+        mesh(cot, "Crate", "crate.glb", cl(3.2f, 4.1f, 0.0f), {0, cy - 15.0f, 0});
+    }
+
+    // ---- Pier from the beach out to sea, rowing boats tied up, the anchored ship, a buoy.
+    Instance* harbour = dm.create("Model", ws, "Harbour");
+    const f32 pier_yaw = yaw_to(sea_dir);
+    const f32 deck = 1.9f; // deck height above the still sea
+    const int modules = 12;
+    static const char* const kPier[] = {"pier_a.glb", "pier_b.glb", "pier_c.glb"};
+    for (int i = 0; i < modules; ++i) {
+        const vec3 c = beach + sea_dir * (2.0f + f32(i) * 2.9f);
+        const char* file = i == modules - 1 ? "pier_end.glb" : kPier[i % 3];
+        mesh(harbour, "Pier", file, {c.x, deck - 2.65f, c.z}, {0, pier_yaw, 0});
+    }
+    const f32 pier_len = 2.0f + f32(modules) * 2.9f;
+    {
+        const vec3 c = beach + sea_dir * (pier_len * 0.5f + 0.5f);
+        hidden(harbour, "PierDeck", {c.x, deck - 0.15f, c.z}, {2.4f, 0.3f, pier_len + 1.0f}, {0, pier_yaw, 0});
+        const vec3 ramp = beach + sea_dir * 0.2f;
+        Instance* r = hidden(harbour, "PierRamp", {ramp.x, (deck + beach.y) * 0.5f - 0.15f, ramp.z}, {2.4f, 0.3f, 3.5f},
+                             {degrees(std::atan2(deck - beach.y, 3.4f)), pier_yaw, 0});
+        (void)r;
+        const vec3 side = normalize(vec3{-sea_dir.z, 0, sea_dir.x});
+        for (int s = -1; s <= 1; s += 2)
+            hidden(harbour, "PierRail", c + side * (1.3f * f32(s)) + vec3{0, deck + 0.5f, 0}, {0.15f, 1.0f, pier_len},
+                   {0, pier_yaw, 0});
+        // Lamp posts with lanterns along the pier.
+        for (int k = 0; k < 3; ++k) {
+            const vec3 p = beach + sea_dir * (6.0f + f32(k) * 13.0f) + side * 1.05f;
+            Instance* post = part(dm, harbour, "LampPost", {p.x, deck + 1.1f, p.z}, {0.14f, 2.2f, 0.14f},
+                                  {0.22f, 0.16f, 0.1f}, "Wood");
+            (void)post;
+            part(dm, harbour, "LampArm", p + side * -0.25f + vec3{0, deck + 2.15f, 0}, {0.06f, 0.06f, 0.5f},
+                 {0.22f, 0.16f, 0.1f}, "Wood")
+                ->set("Orientation", Value::vector3({0, pier_yaw + 90.0f, 0}));
+            mesh(harbour, "Lantern", "lantern.glb", p + side * -0.45f + vec3{0, deck + 1.6f, 0}, {0, pier_yaw, 0});
+            Instance* src = light_part(harbour, "LanternLight", p + side * -0.45f + vec3{0, deck + 1.85f, 0}, {});
+            point_light(src, warm, 2.4f, 12.0f, k == 1);
+        }
+        // Clutter on the pier.
+        mesh(harbour, "Barrel", "barrel.glb", beach + sea_dir * 9.0f - side * 0.8f + vec3{0, deck, 0}, {0, 20, 0});
+        mesh(harbour, "Barrel", "barrel_b.glb", beach + sea_dir * 9.8f - side * 0.7f + vec3{0, deck, 0}, {0, 75, 0});
+        mesh(harbour, "Crate", "crate.glb", beach + sea_dir * 16.0f - side * 0.7f + vec3{0, deck, 0},
+             {0, pier_yaw + 8.0f, 0});
+        mesh(harbour, "Bucket", "bucket.glb", beach + sea_dir * 16.6f - side * 0.2f + vec3{0, deck, 0}, {0, 0, 0});
+        mesh(harbour, "Lifebuoy", "lifebuoy.glb", beach + sea_dir * 22.0f + side * 1.2f + vec3{0, deck + 0.6f, 0},
+             {0, pier_yaw + 90.0f, 0});
+        mesh(harbour, "LifeJacket", "life_jacket.glb", beach + sea_dir * 22.6f - side * 0.8f + vec3{0, deck, 0},
+             {-80, pier_yaw, 0});
+        // Rowing boats moored alongside, riding the swell.
+        for (int b = 0; b < 2; ++b) {
+            const vec3 p = beach + sea_dir * (24.0f + f32(b) * 7.0f) + side * (b ? -2.6f : 2.6f);
+            Instance* boat =
+                mesh(harbour, "Rowboat", "rowboat.glb", {p.x, 0.0f, p.z}, {0, pier_yaw + (b ? 8.0f : -6.0f), 0});
+            boat->set_attribute("Floating", Value::boolean(true));
+            boat->set_attribute("FloatLength", Value::number(4.2));
+            boat->set_attribute("FloatWidth", Value::number(1.45));
+            boat->set_attribute("FloatDraft", Value::number(0.05));
+        }
+        // The ship at anchor out in the bay, with her stern lantern and a riding light on the mast.
+        const vec3 sp = beach + sea_dir * 170.0f + side * 40.0f;
+        Instance* ship = mesh(harbour, "Ship", "sailing_ship.glb", {sp.x, -1.2f, sp.z}, {0, pier_yaw + 70.0f, 0});
+        ship->set_attribute("Floating", Value::boolean(true));
+        ship->set_attribute("FloatLength", Value::number(20.0));
+        ship->set_attribute("FloatWidth", Value::number(6.0));
+        ship->set_attribute("FloatDraft", Value::number(1.2));
+        {
+            const f32 sr = radians(pier_yaw + 70.0f);
+            const vec3 fwd{-std::sin(sr), 0, -std::cos(sr)};
+            Instance* stern = light_part(ship, "SternLantern", sp - fwd * 10.0f + vec3{0, 4.0f, 0}, {});
+            point_light(stern, warm, 3.0f, 14.0f);
+            Instance* mast = light_part(ship, "RidingLight", sp + fwd * 2.0f + vec3{0, 15.0f, 0}, {});
+            point_light(mast, {1.0f, 0.95f, 0.85f}, 2.0f, 10.0f);
+        }
+        // Harbour buoy with a flashing red light.
+        const vec3 bp = beach + sea_dir * 70.0f - side * 18.0f;
+        Instance* buoy = mesh(harbour, "Buoy", "buoy.glb", {bp.x, -0.9f, bp.z}, {0, 0, 0});
+        buoy->set_attribute("Floating", Value::boolean(true));
+        buoy->set_attribute("FloatLength", Value::number(1.0));
+        buoy->set_attribute("FloatWidth", Value::number(1.0));
+        buoy->set_attribute("FloatDraft", Value::number(0.9));
+        Instance* bl = light_part(buoy, "BuoyLamp", {bp.x, 1.6f, bp.z}, {});
+        point_light(bl, {1.0f, 0.1f, 0.05f}, 4.0f, 12.0f);
+        script(dm, bl, "Script", "BuoyLight", kBuoyLight);
+    }
+
+    // ---- Boardwalk from the pier up the headland to the lighthouse door: planks on posts with handrails. The
+    // profile follows the ground (never below it) and is smoothed so no stretch is steeper than ~25 degrees.
+    {
+        Instance* walk = dm.create("Model", ws, "Boardwalk");
+        const vec3 start = beach + vec3{0, 0, 0};
+        const vec3 door = local(0, 5.2f + 1.6f, 0);
+        const vec3 span{door.x - start.x, 0, door.z - start.z};
+        const f32 len = length(span);
+        const vec3 dir = span / len;
+        const vec3 side{-dir.z, 0, dir.x};
+        const int n = max(2, int(len / 1.2f));
+        std::vector<f32> y(usize(n) + 1);
+        for (int i = 0; i <= n; ++i) {
+            const f32 u = f32(i) / f32(n);
+            const vec3 p = start + span * u;
+            const f32 line = start.y + (door.y - start.y) * u;
+            y[usize(i)] = max(max(h(p.x, p.z), h(p.x + side.x * 0.8f, p.z + side.z * 0.8f)) + 0.35f, line);
+        }
+        y.front() = beach.y + 0.1f;
+        y.back() = site.y + 0.05f;
+        const f32 max_rise = 1.2f * 0.47f;
+        for (int pass = 0; pass < 4; ++pass) {
+            for (int i = 1; i <= n; ++i) y[usize(i)] = max(y[usize(i)], y[usize(i - 1)] - max_rise);
+            for (int i = n - 1; i >= 0; --i) y[usize(i)] = max(y[usize(i)], y[usize(i + 1)] - max_rise);
+        }
+        const vec3 wood{0.3f, 0.22f, 0.15f};
+        for (int i = 0; i < n; ++i) {
+            const vec3 p0 = start + span * (f32(i) / f32(n)), p1 = start + span * (f32(i + 1) / f32(n));
+            const vec3 a{p0.x, y[usize(i)], p0.z}, b{p1.x, y[usize(i + 1)], p1.z};
+            const vec3 d = b - a;
+            const f32 seg = length(d);
+            const vec3 c = (a + b) * 0.5f;
+            const vec3 o{degrees(std::asin(d.y / seg)), yaw_to(dir), 0};
+            Instance* plank = part(dm, walk, "Boards", c, {1.6f, 0.12f, seg + 0.05f}, wood, "WoodPlanks");
+            plank->set("Orientation", Value::vector3(o));
+            for (int s = -1; s <= 1; s += 2) {
+                Instance* rail = part(dm, walk, "Handrail", c + side * (0.75f * f32(s)) + vec3{0, 0.95f, 0},
+                                      {0.08f, 0.08f, seg + 0.05f}, wood, "Wood");
+                rail->set("Orientation", Value::vector3(o));
+                hidden(walk, "Guard", c + side * (0.8f * f32(s)) + vec3{0, 0.6f, 0}, {0.1f, 1.2f, seg}, o);
+                if (i % 2 == 0) {
+                    const vec3 pp = a + side * (0.75f * f32(s));
+                    const f32 g = h(pp.x, pp.z);
+                    const f32 top = a.y + 0.95f, bot = min(g - 0.3f, a.y - 0.1f);
+                    part(dm, walk, "Post", {pp.x, (top + bot) * 0.5f, pp.z}, {0.12f, top - bot, 0.12f}, wood, "Wood");
+                }
+            }
+            // A lantern every 14 m, alternating sides.
+            if (i % 12 == 6) {
+                const f32 s = (i / 12) % 2 ? 1.0f : -1.0f;
+                const vec3 lp = a + side * (0.75f * s) + vec3{0, 1.35f, 0};
+                mesh(walk, "Lantern", "lantern.glb", lp - vec3{0, 0.3f, 0}, {0, yaw_to(dir), 0});
+                Instance* src = light_part(walk, "LanternLight", lp, {});
+                point_light(src, warm, 1.6f, 10.0f);
+            }
+        }
+    }
+
+    // ---- Shore dressing: scanned sea cliffs below the lighthouse, rocks along the beach, boulders.
+    {
+        const vec3 out = -to_beach;
+        vec3 cliff = site + out * 26.0f;
+        mesh(coast, "SeaCliff", "cliff_a.glb", {cliff.x, -2.0f, cliff.z}, {0, yaw + 90.0f, 0});
+        const vec3 side = normalize(vec3{-to_beach.z, 0, to_beach.x});
+        vec3 cliff2 = site + out * 18.0f + side * 30.0f;
+        mesh(coast, "SeaCliff", "cliff_b.glb", {cliff2.x, -1.5f, cliff2.z}, {0, yaw + 60.0f, 0});
+        const vec3 r1 = beach + sea_dir * 6.0f + vec3{-sea_dir.z, 0, sea_dir.x} * 26.0f;
+        mesh(coast, "ShoreRocks", "shore_rocks_a.glb", {r1.x, h(r1.x, r1.z) - 1.0f, r1.z}, {0, pier_yaw + 30.0f, 0});
+        const vec3 r2 = beach + sea_dir * 2.0f - vec3{-sea_dir.z, 0, sea_dir.x} * 30.0f;
+        mesh(coast, "ShoreLine", "shore_line.glb", {r2.x, h(r2.x, r2.z) - 0.8f, r2.z}, {0, pier_yaw - 20.0f, 0});
+        for (int k = 0; k < 6; ++k) {
+            const vec3 bp = beach + vec3{std::cos(f32(k) * 2.1f), 0, std::sin(f32(k) * 2.1f)} * (12.0f + f32(k) * 5.0f);
+            mesh(coast, "Boulders", "boulders.glb", {bp.x, h(bp.x, bp.z) - 0.3f, bp.z}, {0, f32(k) * 63.0f, 0});
+        }
+    }
+
+    // ---- Spawn at the root of the pier, facing the lighthouse.
+    {
+        Instance* s = spawn(dm, ws, beach - sea_dir * 3.0f + vec3{0, 0, 0}, {0.33f, 0.25f, 0.17f});
+        set_enum(s, "Material", "WoodPlanks");
+        s->set("Size", Value::vector3({3.0f, 0.3f, 3.0f}));
+        const vec3 sp = beach - sea_dir * 3.0f;
+        s->set("Position", Value::vector3({sp.x, h(sp.x, sp.z) + 0.2f, sp.z}));
+        s->set("Orientation", Value::vector3({0, yaw_to(vec3{site.x - sp.x, 0, site.z - sp.z}), 0}));
+    }
+
+    // ---- Weather: dusk under a storm, heavy rain driven by the wind, lightning; ambience.
+    Instance* l = dm.service("Lighting");
+    // Night under the storm: the moon behind the clouds gives a cold, dim light (shadows included).
+    l->set("ClockTime", Value::number(23.0));
+    l->set("CloudCover", Value::number(1.0));
+    l->set("ExposureCompensation", Value::number(2.3));
+    l->set("FogDensity", Value::number(0.006));
+    l->set("FogHeightFalloff", Value::number(0.02));
+    l->set("Saturation", Value::number(0.72));
+    l->set("Contrast", Value::number(1.1));
+    l->set("IndoorAmbient", Value::color3({0.55f, 0.62f, 0.75f}));
+    l->set("IndoorAmbientBrightness", Value::number(0.02));
+    Instance* clouds = dm.create("Clouds", l, "Clouds");
+    clouds->set("Cover", Value::number(0.95));
+    clouds->set("Density", Value::number(2.2));
+    clouds->set("Color", Value::color3({0.42f, 0.44f, 0.48f}));
+    clouds->set("Volumetric", Value::boolean(true));
+    clouds->set("Thickness", Value::number(1400.0));
+    Instance* atmo = dm.create("Atmosphere", l, "Atmosphere");
+    atmo->set("Color", Value::color3({0.62f, 0.68f, 0.74f}));
+    Instance* rain = dm.create("Rain", l, "Rain");
+    rain->set("Intensity", Value::number(0.95));
+    rain->set("Wetness", Value::number(1.0));
+    rain->set("Puddles", Value::number(0.35));
+    rain->set("Wind", Value::vector3({7.0f, 0.0f, 3.0f}));
+    rain->set("DropSpeed", Value::number(11.0));
+    Instance* sky = dm.create("Sky", l, "Sky");
+    sky->set("StarCount", Value::number(0.0));
+    sky->set("MoonBrightness", Value::number(1.3));
+    Instance* storm = dm.create("Folder", ws, "Storm");
+    sound(dm, storm, "Thunder", "builtin:thunder", 1.6f);
+    sound(dm, storm, "ThunderFar", "builtin:thunder_far", 0.9f);
+    sound(dm, storm, "Rain", "builtin:rain_loop", 0.6f, true, true);
+    sound(dm, storm, "Wind", "builtin:wind_storm_loop", 0.7f, true, true);
+    script(dm, storm, "Script", "Storm", kStorm);
+    {
+        Instance* surf_src = light_part(harbour, "SurfSound", beach + sea_dir * 8.0f, {});
+        Instance* surf = sound(dm, surf_src, "Surf", "builtin:surf_loop", 1.4f, true, true);
+        surf->set("RollOffMaxDistance", Value::number(220.0));
+        Instance* cliff_src = light_part(coast, "CliffSurf", site - to_beach * 30.0f + vec3{0, -site.y, 0}, {});
+        Instance* surf2 = sound(dm, cliff_src, "Surf", "builtin:surf_loop", 1.8f, true, true);
+        surf2->set("RollOffMaxDistance", Value::number(260.0));
+    }
+
+    // ---- HUD: objective and controls.
+    Instance* hud = dm.create("ScreenGui", dm.service("StarterGui"), "Hud");
+    hud->set("ResetOnSpawn", Value::boolean(false));
+    Instance* obj =
+        gui_label(dm, hud, "TextLabel", "Objective",
+                  "The lighthouse is dark and a ship is out in the storm. Climb the tower and light the lamp.",
+                  {0.5f, 0, 0}, {0, 16, 0}, {0, 0, 0}, {760, 48, 0}, 22, {1, 0.95f, 0.85f});
+    obj->set("AnchorPoint", Value::vector3({0.5f, 0, 0}));
+    obj->set("BackgroundColor", Value::color3({0.05f, 0.06f, 0.08f}));
+    obj->set("BackgroundTransparency", Value::number(0.35));
+    obj->set("CornerRadius", Value::number(12.0));
+    Instance* hint = gui_label(dm, hud, "TextLabel", "Hint",
+                               "WASD walk  -  Shift run  -  Space jump  -  right mouse look  -  touch the lever up top",
+                               {0.5f, 1, 0}, {0, -24, 0}, {0, 0, 0}, {760, 40, 0}, 18, {1, 1, 1});
+    hint->set("AnchorPoint", Value::vector3({0.5f, 1, 0}));
+    hint->set("BackgroundColor", Value::color3({0.05f, 0.06f, 0.08f}));
+    hint->set("BackgroundTransparency", Value::number(0.45));
+    hint->set("CornerRadius", Value::number(10.0));
+    script(dm, hud, "LocalScript", "LighthouseHud", kLighthouseHud);
+}
+
 const std::vector<TemplateInfo> kTemplates = {
     {"baseplate", "Baseplate", "A grey baseplate and a spawn: the usual starting point.", "Basic"},
     {"classic_baseplate", "Classic Baseplate", "The bright green baseplate of old-school games.", "Basic"},
@@ -521,6 +1795,12 @@ const std::vector<TemplateInfo> kTemplates = {
     {"meadow", "Meadow", "Rolling grassland covered in tall grass and wildflowers that sway in the wind.",
      "Environment"},
     {"valley", "Valley", "Misty forest valley with trees, grass and morning light.", "Environment"},
+    {"city_rain", "Rainy City", "A city block grid at night in the rain: wet streets, neon, street lamps, lit windows.",
+     "Environment"},
+    {"backrooms", "Backrooms", "Endless yellow rooms, damp carpet and buzzing fluorescent lights.", "Environment"},
+    {"lighthouse_storm", "Lighthouse in the Storm",
+     "A playable night storm on a rocky coast: climb the lighthouse and light the lamp for the ship in the bay.",
+     "Game"},
 };
 
 } // namespace
@@ -546,6 +1826,12 @@ bool build_template(std::string_view id, DataModel& dm) {
         build_beach(dm);
     else if (id == "valley")
         build_valley(dm);
+    else if (id == "city_rain")
+        build_city_rain(dm);
+    else if (id == "backrooms")
+        build_backrooms(dm);
+    else if (id == "lighthouse_storm")
+        build_lighthouse_storm(dm);
     else if (id == "meadow")
         build_meadow(dm);
     else

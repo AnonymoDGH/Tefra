@@ -115,4 +115,28 @@ float sun_shadow_tap(Frame f, vec3 p, float view_depth) {
     return 1.0;
 }
 
+// Shadow of a local light (perspective map in the local shadow atlas). p, n camera-relative; dist = distance to the
+// light (normal offset grows with it, the texels do too). taps: 4 (surfaces) or 1 (volumetric fog).
+float local_shadow(Frame f, int k, vec3 p, vec3 n, float dist, bool soft) {
+    if (f.local_shadow_tex == 0xFFFFFFFFu) return 1.0;
+    vec4 s = f.local_shadow_vp[k] * vec4(p + n * (0.015 + dist * 0.012), 1.0);
+    if (s.w <= 1e-4) return 1.0;
+    vec3 c = s.xyz / s.w;
+    vec2 uv = c.xy * 0.5 + 0.5;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))) || c.z > 1.0) return 1.0;
+    vec4 a = f.local_shadow_atlas[k];
+    vec2 texel = vec2(f.local_shadow_texel, f.local_shadow_texel * 2.0);
+    vec2 lo = a.xy + texel * 1.5, hi = a.xy + a.zw - texel * 1.5;
+    vec2 at = uv * a.zw + a.xy;
+    float ref = c.z - 2e-5;
+    if (!soft)
+        return texture(sampler2DShadow(g_textures[f.local_shadow_tex], g_samplers[SMP_SHADOW]), vec3(clamp(at, lo, hi), ref));
+    float sum = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        vec2 o = vec2((i & 1) == 0 ? -0.75 : 0.75, (i & 2) == 0 ? -0.75 : 0.75) * texel;
+        sum += texture(sampler2DShadow(g_textures[f.local_shadow_tex], g_samplers[SMP_SHADOW]), vec3(clamp(at + o, lo, hi), ref));
+    }
+    return sum * 0.25;
+}
+
 #endif

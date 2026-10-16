@@ -33,7 +33,23 @@ struct Frame {
     vec4 water_scattering; // xyz 1/m
     vec4 clouds;           // x coverage (0 = none), y base altitude (m), z feature size (m), w drift (m)
     Atmosphere atmo;
+    vec4 celestial;  // x sun disc (0/1), y moon disc (0/1), z moon angular radius (rad), w sun glare strength
+    vec4 moon;       // xyz towards the moon, w moon phase (0 new, 0.5 full)
+    vec4 stars;      // x star count (whole sphere), y brightness, z night (0 day .. 1 night), w unused
+    vec4 fog_tint;   // xyz colour of the height fog
+    vec4 cloud_look; // xyz colour of the cumulus, w optical depth multiplier
+    vec4 cloud_wind; // xy unit wind direction (world x, z)
+    vec4 sun_true;   // xyz towards the sun itself (sun_dir is the moon at night)
+    vec4 ambient;    // xyz flat indoor/bounce irradiance (lux)
+    vec4 vclouds;    // x volumetric clouds on (1), y thickness (m), z view steps
+    vec4 weather;    // x wetness, y puddles, z rain intensity, w drop speed (m/s)
+    vec4 rain_wind;  // xyz wind (m/s), w drop length (m)
+    mat4 local_shadow_vp[8];    // shadowed local lights (cascade index 4.. in the shadow pass)
+    vec4 local_shadow_atlas[8]; // xy offset, zw scale (uv)
+    uint local_shadow_tex; uint local_shadow_count; float local_shadow_texel; uint rain_occlusion;
 };
+struct LightGPU { vec4 pos_range; vec4 color; vec4 spot; vec4 extra; };
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer LightBuffer { LightGPU l[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer VertexBuffer { Vertex v[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer MaterialBuffer { Material m[]; };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer InstanceBuffer { Instance i[]; };

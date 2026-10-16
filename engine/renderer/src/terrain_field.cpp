@@ -1,11 +1,16 @@
 #include "tefra/renderer/terrain_field.h"
 
+#include "tefra/core/fs.h"
+#include "tefra/core/jobs.h"
 #include "tefra/core/log.h"
 #include "tefra/core/time.h"
 
+#include <atomic>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <mutex>
-#include <thread>
 
 namespace tefra::render {
 namespace {
@@ -18,15 +23,33 @@ u32 hash2(i32 x, i32 y, u32 seed) {
     return h;
 }
 
+// cos / sin of every gradient angle code (16 bits). Built with the same expressions the noise used to evaluate per
+// corner, so the samples are bit-identical; the table replaces ~8 transcendental calls per noise lookup.
+struct GradientTable {
+    std::vector<f32> cs, sn;
+    GradientTable() : cs(65536), sn(65536) {
+        for (u32 code = 0; code < 65536u; ++code) {
+            const f32 a = static_cast<f32>(code) * (kTwoPi / 65536.0f);
+            cs[code] = std::cos(a);
+            sn[code] = std::sin(a);
+        }
+    }
+};
+
+const GradientTable& gradient_table() {
+    static const GradientTable table;
+    return table;
+}
+
 // 2D gradient noise in [-1, 1] (quintic fade).
 f32 gnoise(f32 x, f32 y, u32 seed) {
     const f32 fx = std::floor(x), fy = std::floor(y);
     const i32 ix = static_cast<i32>(fx), iy = static_cast<i32>(fy);
     const f32 tx = x - fx, ty = y - fy;
+    const GradientTable& gt = gradient_table();
     auto grad = [&](i32 cx, i32 cy, f32 dx, f32 dy) {
-        const u32 h = hash2(cx, cy, seed);
-        const f32 a = static_cast<f32>(h & 0xFFFFu) * (kTwoPi / 65536.0f);
-        return std::cos(a) * dx + std::sin(a) * dy;
+        const u32 code = hash2(cx, cy, seed) & 0xFFFFu;
+        return gt.cs[code] * dx + gt.sn[code] * dy;
     };
     const f32 n00 = grad(ix, iy, tx, ty), n10 = grad(ix + 1, iy, tx - 1, ty);
     const f32 n01 = grad(ix, iy + 1, tx, ty - 1), n11 = grad(ix + 1, iy + 1, tx - 1, ty - 1);
@@ -95,22 +118,144 @@ void edt_1d(const f32* f, f32* d, u32 n, std::vector<i32>& v, std::vector<f32>& 
     }
 }
 
-// 2D Euclidean distance (texels) to the nearest site (sites[i] != 0).
+// 2D Euclidean distance (texels) to the nearest site (sites[i] != 0). Every column and row is independent: the passes
+// run as parallel jobs with per-chunk scratch buffers (the result is identical to a serial sweep).
 std::vector<f32> edt_2d(const std::vector<u8>& sites, u32 n) {
-    std::vector<f32> g(usize(n) * n), col(n), out(n);
-    std::vector<i32> v;
-    std::vector<f32> z;
-    for (usize i = 0; i < g.size(); ++i) g[i] = sites[i] ? 0.0f : 1e20f;
-    for (u32 x = 0; x < n; ++x) {
-        for (u32 y = 0; y < n; ++y) col[y] = g[usize(y) * n + x];
-        edt_1d(col.data(), out.data(), n, v, z);
-        for (u32 y = 0; y < n; ++y) g[usize(y) * n + x] = out[y];
-    }
-    for (u32 y = 0; y < n; ++y) {
-        edt_1d(&g[usize(y) * n], out.data(), n, v, z);
-        for (u32 x = 0; x < n; ++x) g[usize(y) * n + x] = std::sqrt(out[x]);
-    }
+    std::vector<f32> g(usize(n) * n);
+    global_jobs().parallel_for(n, 16, [&](u32 y0, u32 y1) {
+        for (usize i = usize(y0) * n; i < usize(y1) * n; ++i) g[i] = sites[i] ? 0.0f : 1e20f;
+    });
+    global_jobs().parallel_for(n, 16, [&](u32 x0, u32 x1) {
+        std::vector<f32> col(n), out(n);
+        std::vector<i32> v;
+        std::vector<f32> z;
+        for (u32 x = x0; x < x1; ++x) {
+            for (u32 y = 0; y < n; ++y) col[y] = g[usize(y) * n + x];
+            edt_1d(col.data(), out.data(), n, v, z);
+            for (u32 y = 0; y < n; ++y) g[usize(y) * n + x] = out[y];
+        }
+    });
+    global_jobs().parallel_for(n, 16, [&](u32 y0, u32 y1) {
+        std::vector<f32> out(n);
+        std::vector<i32> v;
+        std::vector<f32> z;
+        for (u32 y = y0; y < y1; ++y) {
+            edt_1d(&g[usize(y) * n], out.data(), n, v, z);
+            for (u32 x = 0; x < n; ++x) g[usize(y) * n + x] = std::sqrt(out[x]);
+        }
+    });
     return g;
+}
+
+// ---- Disk cache
+// ------------------------------------------------------------------------------------------------------ The generated
+// samples are stored under config_dir()/cache/terrain, one file per field: a small header (the descriptor that produced
+// it) followed by the raw heights, mask and shore arrays. Bump kFieldCacheVersion whenever a generator changes its
+// output. TEFRA_NO_FIELD_CACHE=1 disables the cache (generation is always bit-identical).
+constexpr u32 kFieldCacheVersion = 1;
+constexpr char kFieldMagic[4] = {'T', 'F', 'L', 'D'};
+
+u32 bits_of(f32 v) {
+    u32 u;
+    std::memcpy(&u, &v, sizeof u);
+    return u;
+}
+
+f32 float_of(u32 u) {
+    f32 v;
+    std::memcpy(&v, &u, sizeof v);
+    return v;
+}
+
+// Only the fields that change the samples belong to the key (sea level only shapes a coast).
+std::string field_cache_path(const TerrainDesc& d) {
+    if (const char* off = std::getenv("TEFRA_NO_FIELD_CACHE"); off && off[0] == '1') return {};
+    const char* kind = d.kind == TerrainKind::Coast ? "coast" : d.kind == TerrainKind::Plains ? "plains" : "valley";
+    const u32 sea_bits = d.kind == TerrainKind::Coast ? bits_of(d.sea_level) : 0u;
+    char name[192];
+    std::snprintf(name, sizeof name, "%s-s%u-n%u-t%08x-h%08x-v%u.tfld", kind, d.seed, d.resolution,
+                  bits_of(d.texel_size), sea_bits, kFieldCacheVersion);
+    return path_join(path_join(config_dir(), "cache/terrain"), name);
+}
+
+void put_u32(std::vector<u8>& out, u32 v) {
+    for (int i = 0; i < 4; ++i) out.push_back(static_cast<u8>(v >> (8 * i)));
+}
+
+u32 get_u32(const u8* p) { return u32(p[0]) | (u32(p[1]) << 8) | (u32(p[2]) << 16) | (u32(p[3]) << 24); }
+
+constexpr usize kFieldHeaderBytes = 4 + 4 * 11; // magic + 11 words
+
+struct FieldArrays {
+    std::vector<f32>& heights;
+    std::vector<u8>& mask;
+    std::vector<f32>& shore;
+    f32& min_h;
+    f32& max_h;
+};
+
+// Header: magic, version, kind, seed, resolution, texel bits, sea bits, heights, mask bytes, shore count, min, max.
+bool read_field_file(const std::string& path, const TerrainDesc& d, FieldArrays a) {
+    std::vector<u8> bytes;
+    if (path.empty() || !file_read_all(path.c_str(), bytes) || bytes.size() < kFieldHeaderBytes) return false;
+    const u8* p = bytes.data();
+    if (std::memcmp(p, kFieldMagic, 4) != 0) return false;
+    const u8* w = p + 4;
+    const u32 n = d.resolution;
+    const u32 sea_bits = d.kind == TerrainKind::Coast ? bits_of(d.sea_level) : 0u;
+    if (get_u32(w) != kFieldCacheVersion || get_u32(w + 4) != u32(d.kind) || get_u32(w + 8) != d.seed ||
+        get_u32(w + 12) != n || get_u32(w + 16) != bits_of(d.texel_size) || get_u32(w + 20) != sea_bits)
+        return false;
+    const u32 heights = get_u32(w + 24), mask_bytes = get_u32(w + 28), shore = get_u32(w + 32);
+    if (heights != n * n || mask_bytes != (n / 2) * (n / 2) * 4 ||
+        shore != (d.kind == TerrainKind::Coast ? (n / 2) * (n / 2) : 0u))
+        return false;
+    const usize expected = kFieldHeaderBytes + usize(heights) * 4 + mask_bytes + usize(shore) * 4;
+    if (bytes.size() != expected) return false;
+    a.min_h = float_of(get_u32(w + 36));
+    a.max_h = float_of(get_u32(w + 40));
+    usize off = kFieldHeaderBytes;
+    a.heights.resize(heights);
+    std::memcpy(a.heights.data(), p + off, usize(heights) * 4);
+    off += usize(heights) * 4;
+    a.mask.resize(mask_bytes);
+    std::memcpy(a.mask.data(), p + off, mask_bytes);
+    off += mask_bytes;
+    a.shore.resize(shore);
+    if (shore) std::memcpy(a.shore.data(), p + off, usize(shore) * 4);
+    return true;
+}
+
+void write_field_file(const std::string& path, const TerrainDesc& d, const FieldArrays& a) {
+    if (path.empty()) return;
+    std::vector<u8> out;
+    out.reserve(kFieldHeaderBytes + a.heights.size() * 4 + a.mask.size() + a.shore.size() * 4);
+    out.insert(out.end(), kFieldMagic, kFieldMagic + 4);
+    put_u32(out, kFieldCacheVersion);
+    put_u32(out, u32(d.kind));
+    put_u32(out, d.seed);
+    put_u32(out, d.resolution);
+    put_u32(out, bits_of(d.texel_size));
+    put_u32(out, d.kind == TerrainKind::Coast ? bits_of(d.sea_level) : 0u);
+    put_u32(out, u32(a.heights.size()));
+    put_u32(out, u32(a.mask.size()));
+    put_u32(out, u32(a.shore.size()));
+    put_u32(out, bits_of(a.min_h));
+    put_u32(out, bits_of(a.max_h));
+    const u8* hp = reinterpret_cast<const u8*>(a.heights.data());
+    out.insert(out.end(), hp, hp + a.heights.size() * 4);
+    out.insert(out.end(), a.mask.begin(), a.mask.end());
+    const u8* sp = reinterpret_cast<const u8*>(a.shore.data());
+    out.insert(out.end(), sp, sp + a.shore.size() * 4);
+    // Written beside the target and renamed: a crash never leaves a truncated file behind.
+    make_dirs(path_parent(path).c_str());
+    static std::atomic<u32> writes{0}; // acquire() may generate the same field twice on two threads
+    const std::string tmp = path + ".tmp" + std::to_string(writes.fetch_add(1));
+    if (file_write_all(tmp.c_str(), out.data(), out.size())) {
+        rename_path(tmp, path);
+        // A sea-level drag writes one field per value: keep the most recent few (each is ~24 MB at 2048^2).
+        keep_newest_files(path_parent(path), ".tfld", 6);
+    }
 }
 
 // Process-wide cache of recent fields (most recent first).
@@ -188,8 +333,16 @@ TerrainField::TerrainField(const TerrainDesc& desc) : desc_(desc) {
     desc_.resolution = max(desc_.resolution, 4u) & ~1u; // even: the mask and shore fields are half resolution
     desc_.texel_size = max(desc_.texel_size, 1e-3f);
     const u64 t0 = time_now_ns();
+    const std::string cache = field_cache_path(desc_);
+    FieldArrays arrays{heights_, mask_, shore_, min_h_, max_h_};
+    if (read_field_file(cache, desc_, arrays)) {
+        build_ms_ = ns_to_ms(time_now_ns() - t0);
+        TEFRA_LOG_INFO("TerrainField: loaded %s from the cache in %.0f ms", path_filename(cache).c_str(), build_ms_);
+        return;
+    }
     generate();
     build_ms_ = ns_to_ms(time_now_ns() - t0);
+    write_field_file(cache, desc_, arrays);
 }
 
 TerrainField::TerrainField(const TerrainField& src, f32 sea_level, Shifted)
@@ -313,20 +466,16 @@ void TerrainField::generate() {
     auto height_fn = [&](f32 x, f32 z) {
         return coast ? coast_height(x, z) : plains ? plains_height(x, z) : valley_height(x, z);
     };
-    // Parallel over rows (the reference PC has 4 threads; the cloud has 4).
-    const u32 threads = max(1u, std::thread::hardware_concurrency());
-    std::vector<std::thread> pool;
-    for (u32 t = 0; t < threads; ++t) {
-        pool.emplace_back([&, t] {
-            for (u32 y = t; y < n; y += threads)
-                for (u32 x = 0; x < n; ++x) {
-                    const f32 wx = (f32(x) + 0.5f) * desc_.texel_size - half;
-                    const f32 wz = (f32(y) + 0.5f) * desc_.texel_size - half;
-                    heights_[usize(y) * n + x] = height_fn(wx, wz);
-                }
-        });
-    }
-    for (auto& th : pool) th.join();
+    // Parallel over rows on the job system: every sample is independent, so the result does not depend on the thread
+    // count.
+    global_jobs().parallel_for(n, 8, [&](u32 y0, u32 y1) {
+        for (u32 y = y0; y < y1; ++y)
+            for (u32 x = 0; x < n; ++x) {
+                const f32 wx = (f32(x) + 0.5f) * desc_.texel_size - half;
+                const f32 wz = (f32(y) + 0.5f) * desc_.texel_size - half;
+                heights_[usize(y) * n + x] = height_fn(wx, wz);
+            }
+    });
     min_h_ = 1e30f;
     max_h_ = -1e30f;
     for (f32 h : heights_) {
@@ -335,35 +484,37 @@ void TerrainField::generate() {
     }
     // Mask (half resolution): r = wetness (river/lake proximity), g = patchiness, b = path, a = unused.
     const u32 m = n / 2;
-    for (u32 y = 0; y < m; ++y)
-        for (u32 x = 0; x < m; ++x) {
-            const f32 wx = (f32(x) + 0.5f) * desc_.texel_size * 2.0f - half;
-            const f32 wz = (f32(y) + 0.5f) * desc_.texel_size * 2.0f - half;
-            const f32 h = height_at(wx, wz);
-            f32 wet;
-            if (coast) {
-                // Wet sand below the swash limit (~0.9 m above the still sea); the sea bed is fully wet.
-                wet = 1.0f - smoothstep(desc_.sea_level + 0.15f, desc_.sea_level + 0.9f, h);
-            } else if (plains) {
-                wet = 0.0f; // well-drained grassland
-            } else {
-                const f32 d = std::fabs(river_distance(wx, wz));
-                wet = max(1.0f - smoothstep(4.0f, 22.0f, d), 1.0f - smoothstep(15.6f, 17.5f, h));
+    global_jobs().parallel_for(m, 4, [&](u32 y0, u32 y1) {
+        for (u32 y = y0; y < y1; ++y)
+            for (u32 x = 0; x < m; ++x) {
+                const f32 wx = (f32(x) + 0.5f) * desc_.texel_size * 2.0f - half;
+                const f32 wz = (f32(y) + 0.5f) * desc_.texel_size * 2.0f - half;
+                const f32 h = height_at(wx, wz);
+                f32 wet;
+                if (coast) {
+                    // Wet sand below the swash limit (~0.9 m above the still sea); the sea bed is fully wet.
+                    wet = 1.0f - smoothstep(desc_.sea_level + 0.15f, desc_.sea_level + 0.9f, h);
+                } else if (plains) {
+                    wet = 0.0f; // well-drained grassland
+                } else {
+                    const f32 d = std::fabs(river_distance(wx, wz));
+                    wet = max(1.0f - smoothstep(4.0f, 22.0f, d), 1.0f - smoothstep(15.6f, 17.5f, h));
+                }
+                const f32 patch = 0.5f + 0.5f * fbm(wx / 9.0f, wz / 9.0f, seed + 21, 4);
+                u8* p = &mask_[(usize(y) * m + x) * 4];
+                p[0] = static_cast<u8>(saturate(wet) * 255.0f);
+                p[1] = static_cast<u8>(saturate(patch) * 255.0f);
+                // b: vegetation cover (coast: scrub and grass behind the dunes).
+                f32 cover = 0.0f;
+                if (coast) {
+                    const f32 land = coast_shore_z_dist(wx, wz);
+                    cover = smoothstep(90.0f, 170.0f, land + 40.0f * fbm(wx / 80.0f, wz / 80.0f, seed + 23, 3));
+                    cover = max(cover, smoothstep(9.0f, 16.0f, h - desc_.sea_level)); // headland tops and hills
+                }
+                p[2] = static_cast<u8>(saturate(cover) * 255.0f);
+                p[3] = 255;
             }
-            const f32 patch = 0.5f + 0.5f * fbm(wx / 9.0f, wz / 9.0f, seed + 21, 4);
-            u8* p = &mask_[(usize(y) * m + x) * 4];
-            p[0] = static_cast<u8>(saturate(wet) * 255.0f);
-            p[1] = static_cast<u8>(saturate(patch) * 255.0f);
-            // b: vegetation cover (coast: scrub and grass behind the dunes).
-            f32 cover = 0.0f;
-            if (coast) {
-                const f32 land = coast_shore_z_dist(wx, wz);
-                cover = smoothstep(90.0f, 170.0f, land + 40.0f * fbm(wx / 80.0f, wz / 80.0f, seed + 23, 3));
-                cover = max(cover, smoothstep(9.0f, 16.0f, h - desc_.sea_level)); // headland tops and hills
-            }
-            p[2] = static_cast<u8>(saturate(cover) * 255.0f);
-            p[3] = 255;
-        }
+    });
     if (coast) build_shore_distance();
 }
 
@@ -379,22 +530,29 @@ void TerrainField::build_shore_distance() {
         }
     const std::vector<f32> to_land = edt_2d(land, m), to_sea = edt_2d(sea, m);
     shore_.resize(usize(m) * m);
-    for (usize i = 0; i < shore_.size(); ++i) shore_[i] = (land[i] ? -(to_sea[i] - 0.5f) : (to_land[i] - 0.5f)) * texel;
+    global_jobs().parallel_for(m, 16, [&](u32 y0, u32 y1) {
+        for (usize i = usize(y0) * m; i < usize(y1) * m; ++i)
+            shore_[i] = (land[i] ? -(to_sea[i] - 0.5f) : (to_land[i] - 0.5f)) * texel;
+    });
     // Two box passes: the medial-axis kinks of the distance field would show up as kinks in the surf.
     std::vector<f32> tmp(shore_.size());
     for (int pass = 0; pass < 2; ++pass) {
-        for (u32 y = 0; y < m; ++y)
-            for (u32 x = 0; x < m; ++x) {
-                f32 acc = 0;
-                for (i32 k = -2; k <= 2; ++k) acc += shore_[usize(y) * m + u32(clamp(i32(x) + k, 0, i32(m) - 1))];
-                tmp[usize(y) * m + x] = acc / 5.0f;
-            }
-        for (u32 y = 0; y < m; ++y)
-            for (u32 x = 0; x < m; ++x) {
-                f32 acc = 0;
-                for (i32 k = -2; k <= 2; ++k) acc += tmp[usize(u32(clamp(i32(y) + k, 0, i32(m) - 1))) * m + x];
-                shore_[usize(y) * m + x] = acc / 5.0f;
-            }
+        global_jobs().parallel_for(m, 16, [&](u32 y0, u32 y1) {
+            for (u32 y = y0; y < y1; ++y)
+                for (u32 x = 0; x < m; ++x) {
+                    f32 acc = 0;
+                    for (i32 k = -2; k <= 2; ++k) acc += shore_[usize(y) * m + u32(clamp(i32(x) + k, 0, i32(m) - 1))];
+                    tmp[usize(y) * m + x] = acc / 5.0f;
+                }
+        });
+        global_jobs().parallel_for(m, 16, [&](u32 y0, u32 y1) {
+            for (u32 y = y0; y < y1; ++y)
+                for (u32 x = 0; x < m; ++x) {
+                    f32 acc = 0;
+                    for (i32 k = -2; k <= 2; ++k) acc += tmp[usize(u32(clamp(i32(y) + k, 0, i32(m) - 1))) * m + x];
+                    shore_[usize(y) * m + x] = acc / 5.0f;
+                }
+        });
     }
 }
 

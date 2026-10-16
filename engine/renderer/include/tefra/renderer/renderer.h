@@ -56,6 +56,15 @@ struct RenderSettings {
     vec3 sun_color{1.0f, 0.86f, 0.70f};                         // normalized to luminance 1 internally
     f32 sun_illuminance = 30000.0f;                             // lux
     f32 ibl_intensity = 1.0f;
+    f32 flash = 0.0f;                        // lightning flash (0..1+): a bright directional light for a moment
+    vec3 flash_direction{0.3f, 0.8f, -0.5f}; // towards the strike
+    f32 sun_scale = 1.0f;                    // multiplies the sun / moon light (0 = interiors without daylight)
+    vec3 ambient{0.0f, 0.0f, 0.0f};          // flat indoor/bounce irradiance (lux): interiors lit by local lights
+    bool ssr = true;                         // screen-space reflections on glossy surfaces (needs TAA history)
+    u32 gi_rays = 2;                         // screen-space bounce light: rays per pixel (0 = off)
+    u32 local_shadows = 8;                   // nearest local lights with Shadows = true that get a shadow map
+    u32 local_shadow_resolution = 512;       // per light (atlas of 4 x 2 tiles)
+    u32 max_lights = 512;                    // nearest visible local lights per frame (tiled: 64 per 16x16 tile)
     // Height fog (spec 2 §2). density = 0 disables.
     f32 fog_density = 0.0f;  // 1/m at fog_height
     f32 fog_falloff = 0.02f; // 1/m
@@ -65,7 +74,17 @@ struct RenderSettings {
     f32 cloud_coverage = 0.0f;
     f32 cloud_altitude = 1600.0f; // m
     f32 cloud_size = 2200.0f;     // m: size of the cloud features
-    f32 cloud_wind = 6.0f;        // m/s drift
+    // Volumetric clouds (raymarched at reduced resolution, composited behind the scene). Off: the 2D layer.
+    // Rain (Lighting.Rain): wet surfaces, puddles with drop rings, falling streaks around the camera.
+    f32 wetness = 0.0f, puddles = 0.0f, rain = 0.0f;
+    vec3 rain_wind{1.0f, 0.0f, 0.4f};
+    f32 rain_speed = 9.0f, rain_length = 0.45f;
+    u32 rain_drops = 16000; // streaks at intensity 1 (quality presets lower it)
+    bool volumetric_clouds = false;
+    f32 cloud_thickness = 1400.0f; // m
+    u32 cloud_steps = 32;          // view ray samples (quality presets lower it)
+    u32 cloud_res_div = 2;         // 2 = half resolution, 4 = quarter
+    f32 cloud_wind = 6.0f;         // m/s drift
     // Volumetric fog and sun shafts (half resolution, 16 steps to 150 m). Needs fog_density > 0 to have an effect.
     bool volumetric_fog = false;
     bool taa = true;
@@ -97,6 +116,22 @@ struct RenderSettings {
     f32 grass_radius = 30.0f;       // m, disc of blades around the camera (max 60; cost ~ radius^2, thinned far out)
     f32 vegetation_distance = 1.0f; // scales vegetation draw / LOD / shadow distances (0.4-1.5)
     bool grass_stats = false;       // count the blades drawn with an extra compute pass; see Renderer::grass_blades()
+    // Sky objects (engine/world/sky.h). The defaults are the look before Sky, Atmosphere and Clouds existed.
+    // Night: when the sun is below -0.1 (normalized y) and moon_illuminance > 0 the moon is the directional light
+    // (sun_direction/sun_illuminance are replaced); moon_direction is the moon's position in the sky.
+    bool celestial_shown = true;           // sun and moon discs
+    bool moon_visible = true;              // moon disc and moonlight
+    f32 moon_phase = 0.5f;                 // 0 new, 0.5 full
+    f32 moon_angular_radius = 0.0262f;     // rad
+    vec3 moon_direction{0.0f, 1.0f, 0.0f}; // towards the moon
+    f32 moon_illuminance = 40.0f;          // lux at full moon (0 = no moonlight)
+    f32 star_count = 3000.0f;              // stars over the whole sphere, seen at night
+    f32 star_brightness = 1.0f;
+    f32 sky_glare = 0.0f;                  // halo around the sun (0 = none)
+    vec3 fog_tint{1.0f, 1.0f, 1.0f};       // colour of the height fog
+    vec3 cloud_tint{1.0f, 1.0f, 1.0f};     // colour of the cumulus
+    f32 cloud_density = 1.0f;              // optical depth multiplier of the cumulus
+    vec2 cloud_wind_dir{0.9578f, 0.2873f}; // unit wind direction in world x, z
 };
 
 // Quality presets (Roblox-style graphics level): limit the costly features of a RenderSettings to what a GPU tier can
@@ -151,6 +186,10 @@ class Renderer {
         rhi::Buffer veg_visible, veg_shadow_visible, veg_cmds, veg_shadow_cmds;
         rhi::Buffer particles;
         u32 particle_capacity = 0;
+        rhi::Buffer lights;
+        u32 light_capacity = 0;
+        rhi::Buffer light_tiles;
+        u32 tile_capacity = 0;
         rhi::Buffer exposure; // ExposureState (auto exposure); per slot so it is fenced like the other buffers
         u32 veg_capacity = 0;
         rhi::Buffer grass_cells;    // visible cell list (host-written each frame)
@@ -175,7 +214,8 @@ class Renderer {
     VkPipeline p_lighting_ = VK_NULL_HANDLE, p_tonemap_ = VK_NULL_HANDLE;
     VkPipeline p_skyview_ = VK_NULL_HANDLE, p_terrain_ = VK_NULL_HANDLE, p_terrain_shadow_ = VK_NULL_HANDLE;
     VkPipeline p_veg_ = VK_NULL_HANDLE, p_veg_2s_ = VK_NULL_HANDLE, p_veg_shadow_ = VK_NULL_HANDLE,
-               p_veg_cull_ = VK_NULL_HANDLE, p_water_ = VK_NULL_HANDLE, p_particles_ = VK_NULL_HANDLE;
+               p_veg_cull_ = VK_NULL_HANDLE, p_water_ = VK_NULL_HANDLE, p_particles_ = VK_NULL_HANDLE,
+               p_clouds_ = VK_NULL_HANDLE, p_light_cull_ = VK_NULL_HANDLE, p_rain_ = VK_NULL_HANDLE;
     bool cpu_veg_cull_ = false; // legacy AMD drivers: vegetation culled on the CPU (TEFRA_GPU_CULL=0/1 forces)
     rhi::Buffer veg_cmd_template_;
     std::unique_ptr<CanopyMap> canopy_;

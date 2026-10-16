@@ -58,6 +58,7 @@ class SceneSync {
     u32 material_for(const Instance& part);
     u32 mesh_for(const Instance& part);
     void rebuild();
+    void sync_lights();
     void write_transform(const Instance& part, u32 render_index);
 
     render::Scene& scene_;
@@ -65,6 +66,8 @@ class SceneSync {
     usize listener_ = 0;
     bool structure_dirty_ = true;
     std::string asset_root_;
+    std::vector<u64> light_ids_;
+    u64 lights_revision_ = ~0ull;
     bool materials_dirty_ = false;
     std::vector<u64> dirty_parts_;
     std::vector<PartEntry> parts_;

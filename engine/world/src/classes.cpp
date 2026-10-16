@@ -51,9 +51,10 @@ struct Builder {
 
 void register_builtin_classes(ClassRegistry& r) {
     const EnumInfo* material = r.add_enum(
-        "Material", {"Plastic", "SmoothPlastic", "Wood",    "WoodPlanks", "Metal", "DiamondPlate", "Concrete",
-                     "Brick",   "Cobblestone",   "Granite", "Marble",     "Slate", "Sand",         "Grass",
-                     "Ground",  "Rock",          "Ice",     "Glass",      "Neon",  "Fabric",       "Foil"});
+        "Material", {"Plastic",   "SmoothPlastic", "Wood",        "WoodPlanks", "Metal",  "DiamondPlate", "Concrete",
+                     "Brick",     "Cobblestone",   "Granite",     "Marble",     "Slate",  "Sand",         "Grass",
+                     "Ground",    "Rock",          "Ice",         "Glass",      "Neon",   "Fabric",       "Foil",
+                     "Wallpaper", "Carpet",        "CeilingTile", "Facade",     "Asphalt"});
     const EnumInfo* shape = r.add_enum("PartType", {"Block", "Ball", "Cylinder", "Wedge"});
     const EnumInfo* terrain_kind = r.add_enum("TerrainKind", {"None", "Valley", "Coast", "Plains"});
     const EnumInfo* script_ctx = r.add_enum("RunContext", {"Server", "Client"});
@@ -84,16 +85,81 @@ void register_builtin_classes(ClassRegistry& r) {
     b.prop("FallenPartsDestroyHeight", Value::number(-500.0), "Unanchored parts below this height are destroyed.");
     b.group("Camera").prop("CurrentCamera", Value::reference(0), "Camera used by the player.");
 
-    b.cls("Lighting", "Instance", "Sun, sky, fog and exposure.").service();
+    b.cls("Lighting", "Instance", "Sun, moon, sky, fog and exposure. Sky, Atmosphere and Clouds go inside it.")
+        .service();
     b.group("Appearance").prop("ClockTime", Value::number(14.0), "Hour of the day (0-24): sets the sun position.");
     b.prop("GeographicLatitude", Value::number(20.0), "Latitude in degrees (sun path).");
     b.prop("SunAzimuthOffset", Value::number(0.0), "Rotates the sun path around the vertical axis (degrees).");
-    b.prop("CloudCover", Value::number(0.3), "Cumulus coverage (0 = clear).");
+    b.prop("CloudCover", Value::number(0.3), "Cumulus coverage (0 = clear). Used when there is no Clouds object.");
     b.prop("FogDensity", Value::number(0.0), "Height fog density at sea level (1/m).");
     b.prop("FogHeightFalloff", Value::number(0.03), "Height fog falloff (1/m).");
     b.prop("ExposureCompensation", Value::number(0.0), "EV added to the automatic exposure.");
     b.prop("Saturation", Value::number(1.05), "Colour grading saturation.");
     b.prop("Contrast", Value::number(1.05), "Colour grading contrast.");
+    b.group("Interior")
+        .prop("SunBrightness", Value::number(1.0), "Multiplies the sun and moon light (0 for interiors).");
+    b.prop("EnvironmentDiffuseScale", Value::number(1.0), "Sky light on surfaces (0 for closed interiors).");
+    b.prop("IndoorAmbient", Value::color3({0, 0, 0}), "Flat bounce light colour for interiors.");
+    b.prop("IndoorAmbientBrightness", Value::number(0.0), "Strength of IndoorAmbient (lux / 100).");
+    b.group("Lightning")
+        .prop("Flash", Value::number(0.0),
+              "Lightning flash strength (0 = none, 1 = a close strike). Scripts animate it: the flash lights the "
+              "scene from FlashDirection with shadows, and brightens the clouds and the haze.");
+    b.prop("FlashDirection", Value::vector3({0.3f, 0.8f, -0.5f}), "Direction towards the lightning strike.");
+
+    // Sky objects inside Lighting (Insert menu, category Environment). Defaults give the look of the Lighting alone.
+    const EnumInfo* skybox_mode = r.add_enum("SkyboxMode", {"Procedural", "Cubemap", "HDRI"});
+    b.cls("Sky", "Instance",
+          "Sky background, stars, sun and moon. Procedural: physical atmosphere. Cubemap: six images. HDRI: one "
+          "equirect .hdr, which also lights the scene (IBL).",
+          "Environment");
+    b.group("Skybox").prop("SkyboxMode", Value::enumeration(0), "Where the sky comes from.", 0, skybox_mode);
+    b.prop("SkyboxFt", Value::string(""), "Cubemap face towards -Z (front), image file.");
+    b.prop("SkyboxBk", Value::string(""), "Cubemap face towards +Z (back), image file.");
+    b.prop("SkyboxLf", Value::string(""), "Cubemap face towards -X (left), image file.");
+    b.prop("SkyboxRt", Value::string(""), "Cubemap face towards +X (right), image file.");
+    b.prop("SkyboxUp", Value::string(""), "Cubemap face up (+Y), image file.");
+    b.prop("SkyboxDn", Value::string(""), "Cubemap face down (-Y), image file.");
+    b.prop("HdriPath", Value::string(""), "Radiance .hdr equirect used when SkyboxMode is HDRI.");
+    b.group("Stars").prop("StarCount", Value::number(3000.0), "Stars over the whole sky, visible at night.");
+    b.prop("StarBrightness", Value::number(1.0), "Brightness of the stars (0 = none).");
+    b.group("Sun").prop("SunAngularSize", Value::number(0.5358), "Angular diameter of the sun disc (degrees).");
+    b.prop("CelestialBodiesShown", Value::boolean(true), "Draws the sun and the moon discs.");
+    b.group("Moon").prop("MoonVisible", Value::boolean(true), "Draws the moon, and it lights the night.");
+    b.prop("MoonPhase", Value::number(0.5), "0 = new moon, 0.5 = full moon.");
+    b.prop("MoonAngularSize", Value::number(3.0), "Angular diameter of the moon disc (degrees).");
+    b.prop("MoonBrightness", Value::number(1.0), "Scales the moonlight (1 = full moon at 40 lux).");
+
+    b.cls("Atmosphere", "Instance",
+          "Haze and light scattering of the sky, and height fog. Defaults match the built-in look.", "Environment");
+    b.group("Appearance").prop("Density", Value::number(0.0), "Extra height fog (0 = none, 1 = thick fog).");
+    b.prop("Offset", Value::number(0.0), "Reference height (m) of the height fog.");
+    b.prop("Color", Value::color3({1.0f, 1.0f, 1.0f}), "Tint of the height fog.");
+    b.prop("Decay", Value::color3({1.0f, 1.0f, 1.0f}), "Tint of the sky scattering (lower blue = warmer sky).");
+    b.prop("Glare", Value::number(0.0), "Halo around the sun (0 = none).");
+    b.prop("Haze", Value::number(6.0), "Aerosol density of the sky (Mie). 6 = the hazy valley.");
+
+    b.cls("Clouds", "Instance", "Cumulus layer over the sky, lit by the sun (or by the moon at night).", "Environment");
+    b.group("Appearance").prop("Enabled", Value::boolean(true), "Shows the clouds.");
+    b.prop("Cover", Value::number(0.3), "Coverage (0 = clear, 1 = overcast).");
+    b.prop("Density", Value::number(1.0), "Optical thickness of the clouds.");
+    b.prop("Color", Value::color3({1.0f, 1.0f, 1.0f}), "Tint of the clouds.");
+    b.prop("Altitude", Value::number(1600.0), "Base altitude of the cloud layer (m).");
+    b.prop("Size", Value::number(2200.0), "Size of the cloud features (m).");
+    b.prop("Volumetric", Value::boolean(false),
+           "Raymarched 3D clouds (heavier on the GPU; quality presets scale their resolution and steps).");
+    b.prop("Thickness", Value::number(1400.0), "Vertical extent of volumetric clouds (m).");
+    b.group("Wind").prop("WindSpeed", Value::number(6.0), "Drift speed (m/s).");
+    b.prop("WindDirection", Value::number(16.7), "Drift direction (degrees; 0 = +X, 90 = +Z).");
+
+    b.cls("Rain", "Instance", "Rain over the place: falling streaks, wet glossy surfaces and puddles with drop rings.",
+          "Environment");
+    b.group("Appearance").prop("Enabled", Value::boolean(true), "Rains.");
+    b.prop("Intensity", Value::number(0.7), "Amount of rain (0-1): streak count and drop rings.");
+    b.prop("Wetness", Value::number(0.85), "How wet surfaces look (0-1): darker, glossier.");
+    b.prop("Puddles", Value::number(0.5), "Standing water on flat ground (0-1).");
+    b.prop("Wind", Value::vector3({1.5f, 0.0f, 0.5f}), "Wind tilting the rain (m/s).");
+    b.prop("DropSpeed", Value::number(9.0), "Fall speed (m/s).");
 
     b.cls("ReplicatedStorage", "Instance", "Storage shared by server and clients (templates, modules).").service();
     b.cls("ServerScriptService", "Instance", "Server scripts that are not attached to world objects.").service();
@@ -189,6 +255,9 @@ void register_builtin_classes(ClassRegistry& r) {
     b.cls("PointLight", "Light", "Omnidirectional light.", "Lights");
     b.cls("SpotLight", "Light", "Cone light along the part's -Z (front) face.", "Lights");
     b.group("Appearance").prop("Angle", Value::number(45.0), "Cone angle (degrees).");
+    b.prop("Spill", Value::number(0.0),
+           "Fraction of the light that still leaves outside the cone (0 = hard cone, 1 = a point light). A street "
+           "lantern with an opaque cap: Angle 160, Spill 0.05.");
 
     // ---- Scripts ---------------------------------------------------------------------------------------------
     b.cls("BaseScript", "Instance", "C# code that runs in play mode.").abstract();

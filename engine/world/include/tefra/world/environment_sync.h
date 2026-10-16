@@ -105,6 +105,8 @@ class EnvironmentSync {
     f32 sea_level() const;            // Terrain.SeaLevel as applied; 0 without a terrain
     // Height (m) of the landscape at (x, z); 0 without a terrain.
     f32 height_at(f32 x, f32 z) const;
+    // Height of the animated sea surface over world xz at time t (the renderer's ocean time). False without an Ocean.
+    bool ocean_height(f32 x, f32 z, f32 t, f32& out) const;
     // The shared CPU field (null without a terrain).
     const render::TerrainField* field() const;
     // Counts rebuilds of the terrain (0 = none yet); changes whenever the GPU terrain is replaced.

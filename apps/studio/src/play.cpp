@@ -8,6 +8,7 @@
 #include "tefra/core/log.h"
 #include "tefra/mcp/server.h"
 #include "tefra/mcp/world_tools.h"
+#include "tefra/platform/window.h"
 #include "tefra/rbx/importer.h"
 #include "tefra/rhi/commands.h"
 #include "tefra/rhi/device.h"
@@ -21,10 +22,12 @@
 #include "tefra/world/environment_sync.h"
 #include "tefra/world/scene_sync.h"
 
+#include <GLFW/glfw3.h>
 #include <imgui.h>
 
 #include <cmath>
 #include <cstdio>
+#include <functional>
 
 namespace tefra::studio {
 
@@ -32,6 +35,88 @@ using world::Instance;
 using world::Value;
 
 namespace {
+
+// Floating objects (BasePart with the attribute Floating = true): each step the part rides the animated sea. Four
+// samples of the ocean surface (bow, stern, port, starboard; FloatLength / FloatWidth metres apart) give heave,
+// pitch and roll; a first-order lag stands in for the hull's inertia. Descendant parts (lights, masts) move with it.
+class BuoyancySystem final : public runtime::RuntimeSystem {
+  public:
+    using Sampler = std::function<bool(f32, f32, f32, f32&)>;
+    BuoyancySystem(Sampler sample, std::function<f32()> clock) : sample_(std::move(sample)), clock_(std::move(clock)) {}
+    const char* name() const override { return "buoyancy"; }
+
+    bool start(runtime::GameRuntime& rt) override {
+        for (world::Instance* i : rt.model().workspace()->descendants()) {
+            const world::Value* f = i->get_attribute("Floating");
+            if (!f || !i->is_a("BasePart") || f->n[0] == 0.0) continue;
+            Body b;
+            b.part = i;
+            b.pos = i->get_vec3("Position");
+            b.rot = world::orientation_to_quat(i->get_vec3("Orientation"));
+            auto num = [&](const char* n, f32 def) {
+                const world::Value* v = i->get_attribute(n);
+                return v ? f32(v->n[0]) : def;
+            };
+            b.length = max(num("FloatLength", 4.0f), 0.5f);
+            b.width = max(num("FloatWidth", 1.6f), 0.3f);
+            b.draft = num("FloatDraft", 0.3f);
+            b.heave = b.pos.y;
+            const quat inv{-b.rot.x, -b.rot.y, -b.rot.z, b.rot.w};
+            for (world::Instance* c : i->descendants())
+                if (c->is_a("BasePart"))
+                    b.attached.push_back({c, rotate(inv, c->get_vec3("Position") - b.pos),
+                                          inv * world::orientation_to_quat(c->get_vec3("Orientation"))});
+            bodies_.push_back(std::move(b));
+        }
+        return true;
+    }
+
+    void pre_physics(runtime::GameRuntime& rt, f32 dt) override {
+        (void)rt;
+        const f32 t = clock_();
+        const f32 k = 1.0f - std::exp(-dt / 0.35f);
+        for (Body& b : bodies_) {
+            const vec3 fwd = rotate(b.rot, vec3{0, 0, -1}), right = rotate(b.rot, vec3{1, 0, 0});
+            auto h = [&](vec3 o) {
+                f32 y = b.pos.y;
+                sample_(b.pos.x + o.x, b.pos.z + o.z, t, y);
+                return y;
+            };
+            const f32 hb = h(fwd * (b.length * 0.5f)), hs = h(fwd * (-b.length * 0.5f));
+            const f32 hr = h(right * (b.width * 0.5f)), hl = h(right * (-b.width * 0.5f));
+            b.heave += ((hb + hs + hr + hl) * 0.25f - b.draft - b.heave) * k;
+            b.pitch += (std::atan2(hb - hs, b.length) - b.pitch) * k;
+            b.roll += (std::atan2(hr - hl, b.width) - b.roll) * k;
+            const quat r = b.rot * quat_axis_angle({1, 0, 0}, b.pitch) * quat_axis_angle({0, 0, 1}, b.roll);
+            const vec3 p{b.pos.x, b.heave, b.pos.z};
+            b.part->set("Position", world::Value::vector3(p));
+            b.part->set("Orientation", world::Value::vector3(world::quat_to_orientation(r)));
+            for (const Attached& a : b.attached) {
+                a.part->set("Position", world::Value::vector3(p + rotate(r, a.offset)));
+                a.part->set("Orientation", world::Value::vector3(world::quat_to_orientation(r * a.rot)));
+            }
+        }
+    }
+
+  private:
+    struct Attached {
+        world::Instance* part;
+        vec3 offset;
+        quat rot;
+    };
+    struct Body {
+        world::Instance* part = nullptr;
+        vec3 pos{};
+        quat rot{};
+        f32 length = 4.0f, width = 1.6f, draft = 0.3f;
+        f32 heave = 0.0f, pitch = 0.0f, roll = 0.0f;
+        std::vector<Attached> attached;
+    };
+    Sampler sample_;
+    std::function<f32()> clock_;
+    std::vector<Body> bodies_;
+};
+
 std::string base64(const std::vector<u8>& data) {
     static const char* tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string out;
@@ -83,6 +168,12 @@ bool App::play_start(world::DataModel& dm) {
     rc.project_dir = session_.path().empty() ? std::string() : path_parent(session_.path());
     runtime_ = std::make_unique<runtime::GameRuntime>(dm, rc);
     runtime_->add_system(audio::make_audio_system());
+    runtime_->add_system(std::make_unique<BuoyancySystem>(
+        [this](f32 x, f32 z, f32 t, f32& y) {
+            auto* env = static_cast<const world::EnvironmentSync*>(environment_.get());
+            return env && env->ocean_height(x, z, t, y);
+        },
+        [this] { return f32(time_); }));
     if (!game_gui_) game_gui_ = std::make_unique<ui::GameGui>();
     game_gui_->set_asset_root(rc.project_dir);
     return runtime_->start();
@@ -96,9 +187,31 @@ void App::play_step(world::DataModel& dm, f32 dt) {
     camera_.position = {f64(c.position.x), f64(c.position.y), f64(c.position.z)};
     camera_.yaw = c.yaw;
     camera_.pitch = c.pitch;
+    camera_.fovy = c.fov_y;
+    camera_.z_near = runtime_->first_person() ? 0.05f : 0.1f;
+    // Relative mouse while the game steers the camera with it (orbit, shift lock, first person).
+    auto* win = static_cast<GLFWwindow*>(window_->native_handle());
+    const bool lock = runtime_->mouse_locked();
+    if (lock != cursor_locked_) {
+        glfwSetInputMode(win, GLFW_CURSOR, lock ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+        if (glfwRawMouseMotionSupported()) glfwSetInputMode(win, GLFW_RAW_MOUSE_MOTION, lock ? GLFW_TRUE : GLFW_FALSE);
+        ImGuiIO& io = ImGui::GetIO();
+        if (lock)
+            io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+        else
+            io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+        cursor_locked_ = lock;
+    }
 }
 
 void App::play_stop() {
+    if (cursor_locked_) {
+        glfwSetInputMode(static_cast<GLFWwindow*>(window_->native_handle()), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+        cursor_locked_ = false;
+    }
+    camera_.fovy = radians(70.0f);
+    camera_.z_near = 0.1f;
     if (runtime_) runtime_->stop();
     runtime_.reset();
     camera_ = edit_camera_;
@@ -108,7 +221,7 @@ void App::play_stop() {
 // UI is drawn over it and gets the clicks first.
 void App::play_input(vec2 view_min, vec2 view_size) {
     const ImGuiIO& io = ImGui::GetIO();
-    ui::input_from_imgui(play_input_, view_min, view_size, viewport_hovered_, !io.WantTextInput);
+    ui::input_from_imgui(play_input_, view_min, view_size, viewport_hovered_ || cursor_locked_, !io.WantTextInput);
     if (runtime_ && game_gui_) {
         game_gui_->set_fonts(font_regular_, font_bold_, font_mono_);
         game_gui_->enable_textures(*device_);
@@ -341,29 +454,23 @@ void App::setup_mcp() {
     }
     mcp_->add_tool(
         "import_model",
-        "Inserts a glTF model (.glb/.gltf file path on this computer) as a MeshPart. In a saved project the file is "
-        "copied into its assets folder. scale multiplies the model's own size (glTF metres).",
+        "Inserts a 3D model as a MeshPart. Accepts .glb/.gltf (used as they are) and .fbx, .obj (+ .mtl), .stl and "
+        ".ply (converted to .glb in metres, +Y up). In a saved project the file goes into its assets folder. scale "
+        "multiplies the model's own size; unit_scale sets the unit of OBJ/STL/PLY files (1 = metres, 0.01 = cm); "
+        "max_triangles simplifies the model (0 = keep).",
         R"({"type":"object","properties":{"path":{"type":"string"},"name":{"type":"string"},)"
         R"("position":{"type":"array"},"scale":{"type":"number"},"orientation":{"type":"array"},)"
+        R"("unit_scale":{"type":"number"},"max_triangles":{"type":"number"},)"
         R"("parent_path":{"type":"string"}},"required":["path"]})",
         [this](const JsonValue& a) {
             const std::string src = a["path"].as_string();
-            const std::string ext = path_extension(src);
-            if (ext != ".glb" && ext != ".gltf") return mcp::ToolResult::error("path must be a .glb or .gltf file");
-            if (!file_exists(src.c_str())) return mcp::ToolResult::error("file not found: " + src);
-            std::string mesh_id = src;
-            if (!session_.path().empty()) {
-                const std::string project = path_parent(session_.path());
-                const std::string rel = "assets/" + path_stem(src) + "/" + path_filename(src);
-                const std::string dst = path_join(project, rel);
-                bool ok = make_dirs(path_parent(dst).c_str());
-                if (ext == ".gltf")
-                    ok = ok && copy_tree(path_parent(src), path_parent(dst)); // buffers and textures
-                else
-                    ok = ok && copy_file(src, dst);
-                if (!ok) return mcp::ToolResult::error("cannot copy the model into " + project);
-                mesh_id = rel;
-            }
+            render::ModelImportOptions opt;
+            opt.unit_scale = a["unit_scale"].is_number() ? f32(a["unit_scale"].as_number()) : 1.0f;
+            const f64 max_tris = a["max_triangles"].as_number(0.0);
+            opt.max_triangles = max_tris > 0.0 ? u32(max_tris) : 0u;
+            std::string mesh_id, err;
+            render::ModelImportReport rep;
+            if (!import_model_asset(src, opt, mesh_id, err, &rep)) return mcp::ToolResult::error(err);
             world::DataModel& dm = session_.model();
             Instance* parent = dm.workspace();
             if (a["parent_path"].is_string()) {
@@ -389,6 +496,12 @@ void App::setup_mcp() {
             r.set("id", JsonValue(f64(mp->id())));
             r.set("path", JsonValue(mp->full_name()));
             r.set("MeshId", JsonValue(mesh_id));
+            if (!rep.format.empty()) r.set("format", JsonValue(rep.format));
+            if (!rep.warnings.empty()) {
+                JsonValue ws = JsonValue::array();
+                for (const std::string& w : rep.warnings) ws.push(JsonValue(w));
+                r.set("warnings", ws);
+            }
             return mcp::ToolResult::json(r);
         });
     mcp_->add_tool(

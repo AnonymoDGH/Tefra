@@ -170,6 +170,17 @@ struct CharacterImpl {
     JPH::Ref<JPH::CharacterVirtual> cv;
     vec3 move_dir{};
     bool jump_requested = false;
+    f32 jump_buffer = 0.0f; // s left of a jump request waiting for the ground
+    f32 coyote = 0.0f;      // s left in which a jump still works after leaving the ground
+    bool jump_held = true;
+    bool jump_cut = false;
+    f32 speed_scale = 1.0f;
+    vec3 facing{};  // override direction (zero = movement)
+    f32 yaw = 0.0f; // current facing (rad), turned smoothly
+    bool yaw_init = false;
+    vec3 hvel{}; // smoothed horizontal velocity relative to the ground
+    vec3 prev_feet{}, cur_feet{};
+    bool have_prev = false;
     bool jumping = false;
     bool was_airborne = false;
     f32 landed_timer = 0.0f;
@@ -185,7 +196,7 @@ bool cast_shape(WorldImpl& w, JPH::RefConst<JPH::Shape> shape, vec3 center, quat
 
 // Defined in character.cpp.
 void character_pre_step(CharacterImpl& c, WorldImpl& w, f32 dt);
-void character_post_step(CharacterImpl& c, WorldImpl& w, f32 dt);
+void character_post_step(CharacterImpl& c, WorldImpl& w, f32 dt, f32 alpha);
 void character_detach(CharacterImpl& c);
 
 // Lets CharacterController reach the world without exposing Jolt in physics_world.h.

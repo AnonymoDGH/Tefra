@@ -10,9 +10,12 @@
 #include "tefra/core/input.h"
 #include "tefra/core/log.h"
 
+#include "tefra/renderer/atmosphere.h"
 #include "tefra/renderer/camera.h"
+#include "tefra/renderer/model_import.h"
 #include "tefra/renderer/renderer.h"
 #include "tefra/rhi/resources.h"
+#include "tefra/world/sky.h"
 
 #include <deque>
 #include <functional>
@@ -45,7 +48,7 @@ class Renderer;
 namespace tefra::world {
 class SceneSync;
 class ParticleSystem;
-}
+} // namespace tefra::world
 namespace tefra::scripting {
 class ScriptHost;
 }
@@ -148,6 +151,13 @@ class App {
     void open_place_dialog();
     void import_roblox_dialog(); // import.cpp
     bool import_roblox_file(const std::string& path);
+    void import_model_dialog(); // import.cpp: File > Import 3D Model...
+    // Converts (or copies) a model into the project's assets folder, or a cache folder when the place is unsaved, and
+    // returns the MeshId. .glb and .gltf are used as they are; FBX, OBJ, STL and PLY are converted to .glb.
+    bool import_model_asset(const std::string& src, const render::ModelImportOptions& opt, std::string& mesh_id,
+                            std::string& error, render::ModelImportReport* report);
+    // Imports a model file as a MeshPart in the Workspace, where the camera looks (or 12 m ahead), and selects it.
+    bool import_model_at_camera(const std::string& path, std::string& error);
     void export_game_dialog(); // export.cpp
     void draw_export_modal();
     void save_place(bool save_as);
@@ -197,6 +207,7 @@ class App {
     std::unique_ptr<render::Renderer> renderer_;
     std::unique_ptr<world::SceneSync> sync_;
     std::unique_ptr<world::ParticleSystem> particles_;
+    bool cursor_locked_ = false; // play mode: relative mouse (GameRuntime::mouse_locked)
     f64 particles_time_ = -1.0;
     std::shared_ptr<void> environment_; // world::EnvironmentSync (type-erased: no world/renderer types here)
     u64 synced_generation_ = ~0ull;
@@ -222,8 +233,13 @@ class App {
     f32 move_snap_ = 0.5f, rotate_snap_ = 15.0f;
     bool snap_ = true;
 
-    // Lighting state last applied to the environment.
-    f32 applied_clock_ = -1.0f, applied_lat_ = -1000.0f, applied_az_ = -1000.0f;
+    // Sky state last applied to the environment (IBL, atmosphere LUTs). The image-based light is re-baked only when
+    // one of these changes: the background, the atmosphere, or the sun by more than half a degree (procedural sky).
+    bool have_applied_sky_ = false;
+    world::SkyBackground applied_background_;
+    render::AtmosphereParams applied_atmosphere_;
+    vec3 applied_sun_{0.0f, 1.0f, 0.0f};
+    bool procedural_sky_ = true; // false: the visible sky is the Cubemap / HDRI background (no atmosphere draw)
 
     // Output panel.
     mutable std::mutex log_mutex_;

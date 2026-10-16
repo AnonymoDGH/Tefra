@@ -33,10 +33,13 @@ struct DirEntry {
 bool list_dir(const std::string& dir, std::vector<DirEntry>& out); // sorted by name; false if not a directory
 bool is_dir(const std::string& path);
 i64 file_mtime(const std::string& path);                        // seconds since the Unix epoch, 0 if missing
+u64 file_size(const std::string& path);                         // bytes, 0 if missing
 bool copy_file(const std::string& from, const std::string& to); // overwrites
 bool copy_tree(const std::string& from, const std::string& to); // recursive, overwrites files
 bool rename_path(const std::string& from, const std::string& to);
 bool remove_tree(const std::string& path); // file or directory (recursive)
+// Deletes the oldest files of dir whose name ends with suffix until at most max_files remain (caches).
+void keep_newest_files(const std::string& dir, const std::string& suffix, u32 max_files);
 i64 unix_time_now();
 
 // The user's Documents folder (Windows: the shell's Documents, OneDrive-aware; Linux: ~/Documents or ~), and the

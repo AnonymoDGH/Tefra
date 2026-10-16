@@ -8,7 +8,11 @@
 #include "common/fog.glsl"
 #include "common/shadow.glsl"
 #include "common/clouds.glsl"
-layout(push_constant) uniform Push { FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; uint ao; uint vol; } pc;
+#include "common/sky.glsl"
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer TileBuffer { uint v[]; };
+layout(push_constant) uniform Push {
+    FrameBuffer frame; uint depth; uint rt0; uint rt1; uint rt2; uint ao; uint vol; LightBuffer lights; uint light_count; uint clouds; TileBuffer tiles; uint tiles_x; uint history; uint fx;
+} pc;
 layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 o_color;
 
@@ -117,22 +121,192 @@ float contact_shadow(Frame f, vec3 p, vec3 n, vec3 L, uint depth_idx, float nois
 }
 
 vec3 sky_color(Frame f, vec3 dir) {
-    if (f.atmo.skyview_lut == 0xFFFFFFFFu)
-        return textureLod(TEX2D(f.env_background, SMP_LINEAR_REPEAT), equirect_uv(dir), 0.0).rgb * f.exposure.y;
+    if (f.atmo.skyview_lut == 0xFFFFFFFFu) {
+        // Image sky (Cubemap / HDRI): the background image, with the cumulus over it.
+        vec3 bg = textureLod(TEX2D(f.env_background, SMP_LINEAR_REPEAT), equirect_uv(dir), 0.0).rgb * f.exposure.y;
+        if (f.vclouds.x > 0.5) return bg; // volumetric clouds are composited in main()
+        vec4 cl = clouds_eval(f, dir, bg);
+        return mix(bg, cl.rgb, cl.a);
+    }
     Atmosphere a = f.atmo;
     vec3 s = a.sun.xyz;
     vec3 L = textureLod(TEX2D(a.skyview_lut, SMP_LINEAR_CLAMP), skyview_uv(dir, s), 0.0).rgb * a.ground.w;
-    // Sun disk with limb darkening, attenuated by the atmosphere.
     float cos_d = dot(dir, s), cos_r = cos(a.sun.w);
-    if (cos_d > cos_r) {
+    const bool sun_hit = cos_d > cos_r && f.celestial.x > 0.0;
+    if (sun_hit || (f.celestial.w > 0.0 && cos_d > 0.0)) {
         float r = a.radii.x + a.radii.w + max(f.camera_pos.y, 0.0);
         vec3 T = atmo_transmittance(a, r, dir.y);
-        float x = clamp(acos(min(cos_d, 1.0)) / a.sun.w, 0.0, 1.0);
-        float limb = 1.0 - 0.6 * (1.0 - sqrt(1.0 - x * x));
-        L += T * a.ground.w / (ATMO_PI * a.sun.w * a.sun.w) * limb;
+        // Sun disk with limb darkening, attenuated by the atmosphere.
+        if (sun_hit) {
+            float x = clamp(acos(min(cos_d, 1.0)) / a.sun.w, 0.0, 1.0);
+            float limb = 1.0 - 0.6 * (1.0 - sqrt(1.0 - x * x));
+            L += T * a.ground.w / (ATMO_PI * a.sun.w * a.sun.w) * limb;
+        }
+        // Forward-scattered halo around the sun (Atmosphere.Glare).
+        if (f.celestial.w > 0.0) {
+            float c = max(cos_d, 0.0);
+            L += T * a.ground.w * f.celestial.w * (0.01 * pow(c, 6.0) + 0.08 * pow(c, 200.0));
+        }
     }
+    // Night: stars and the moon (sk_stars and sk_moon return 0 by day).
+    L += sk_stars(f, dir) + sk_moon(f, dir);
+    if (f.vclouds.x > 0.5) return L; // volumetric clouds are composited in main()
     vec4 cl = clouds_eval(f, dir, L);
     return mix(L, cl.rgb, cl.a);
+}
+
+// Screen-space reflections: march the reflected ray through the depth buffer, read the hit from last frame's
+// resolved image (reprojected). Returns radiance (not exposed); conf = how much to trust it.
+vec3 ssr_trace(Frame f, vec3 p, vec3 N, vec3 V, float rough, float jitter, out float conf) {
+    conf = 0.0;
+    vec3 R = reflect(-V, N);
+    const int kSteps = 20;
+    const float kMax = 40.0;
+    vec3 start = p + N * 0.03;
+    float prev_t = 0.0;
+    for (int i = 1; i <= kSteps; ++i) {
+        float s = (float(i) - 1.0 + jitter) / float(kSteps);
+        float t = kMax * s * s + 0.05; // finer steps near the surface
+        vec3 q = start + R * t;
+        vec4 cq = f.view_proj * vec4(q, 1.0);
+        if (cq.w <= 0.0) return vec3(0.0);
+        vec2 uv = cq.xy / cq.w * 0.5 + 0.5;
+        if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec3(0.0);
+        float sd = textureLod(TEX2D(pc.depth, SMP_NEAREST_CLAMP), uv, 0.0).r;
+        float scene_vd = linear_depth(f, sd);
+        float ray_vd = cq.w;
+        float thick = 0.25 + 0.04 * ray_vd;
+        if (ray_vd > scene_vd + 0.02 && ray_vd - scene_vd < thick) {
+            // Binary refinement between the last miss and this hit.
+            float a = prev_t, b = t;
+            for (int k = 0; k < 4; ++k) {
+                float m = 0.5 * (a + b);
+                vec4 cm = f.view_proj * vec4(start + R * m, 1.0);
+                vec2 um = cm.xy / cm.w * 0.5 + 0.5;
+                float dm = linear_depth(f, textureLod(TEX2D(pc.depth, SMP_NEAREST_CLAMP), um, 0.0).r);
+                if (cm.w > dm + 0.02) b = m; else a = m;
+            }
+            vec3 hit = start + R * b;
+            vec4 pp = f.prev_view_proj * vec4(hit, 1.0);
+            vec2 puv = pp.xy / pp.w * 0.5 + 0.5;
+            if (any(lessThan(puv, vec2(0.0))) || any(greaterThan(puv, vec2(1.0)))) return vec3(0.0);
+            vec2 edge = smoothstep(vec2(0.0), vec2(0.08), puv) * smoothstep(vec2(0.0), vec2(0.08), 1.0 - puv);
+            conf = edge.x * edge.y * (1.0 - smoothstep(0.6, 1.0, s)) * (1.0 - smoothstep(0.06, 0.22, rough)); // sharp trace: only near-mirror surfaces
+            return textureLod(TEX2D(pc.history, SMP_LINEAR_CLAMP), puv, 0.0).rgb / max(f.exposure.x, 1e-8);
+        }
+        prev_t = t;
+    }
+    return vec3(0.0);
+}
+
+// Glow of the most important local lights in the haze (analytic single scattering along the view ray: the integral of
+// 1 / distance^2 has a closed form), for when the raymarched fog is off. tmax: ray length (m).
+vec3 light_halos(Frame f, vec3 dir, float tmax) {
+    float sigma = max(f.fog.x, 0.0) * 1.5 + f.weather.z * 0.004; // rain makes the air glow too
+    if (sigma <= 0.0 || pc.light_count == 0u) return vec3(0.0);
+    vec3 sum = vec3(0.0);
+    uint n = min(pc.light_count, 16u);
+    for (uint i = 0u; i < n; ++i) {
+        LightGPU l = pc.lights.l[i];
+        vec3 c = l.pos_range.xyz;
+        float s0 = dot(c, dir);
+        if (l.spot.w > 0.85) {
+            // Narrow beam (lighthouse, searchlight): the glow is a shaft, not a sphere. March the view ray through
+            // the light's sphere and add the in-scattering inside the cone (phase with a forward lobe).
+            float r = l.pos_range.w;
+            float t0 = max(s0 - r, 0.0), t1 = min(s0 + r, tmax);
+            if (t1 <= t0) continue;
+            const int kBeamSteps = 24;
+            float dt = (t1 - t0) / float(kBeamSteps);
+            float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+            vec3 beam = vec3(0.0);
+            for (int k = 0; k < kBeamSteps; ++k) {
+                vec3 x = dir * (t0 + (float(k) + jit) * dt);
+                vec3 d = c - x;
+                float d2 = dot(d, d);
+                if (d2 > r * r) continue;
+                vec3 Ld = d * inversesqrt(max(d2, 1e-6));
+                float cone = smoothstep(l.spot.w, max(l.extra.x, l.spot.w + 1e-3), dot(-Ld, l.spot.xyz));
+                if (cone <= 0.0) continue;
+                float win = clamp(1.0 - d2 * d2 / (r * r * r * r), 0.0, 1.0);
+                float phase = 0.25 + 2.5 * pow(max(dot(Ld, dir), 0.0), 6.0); // forward lobe towards the lamp
+                beam += vec3(cone * win * win / max(d2, 1.0) * phase);
+            }
+            sum += l.color.rgb * beam * dt * 4.0 * BRDF_PI;
+            continue;
+        }
+        float h2 = max(dot(c, c) - s0 * s0, 0.0) + 0.04;
+        float r = l.pos_range.w;
+        if (h2 > r * r) continue;
+        float h = sqrt(h2);
+        float integral = (atan((tmax - s0) / h) - atan(-s0 / h)) / h;
+        float fade = 1.0 - smoothstep(0.4 * r * r, r * r, h2);
+        if (l.spot.w >= -1.0) {
+            // Shaped emission: weight the glow by the profile towards the closest point of the ray (a lantern with
+            // a cap glows below and around it, not above).
+            vec3 q = dir * clamp(s0, 0.0, tmax) - c;
+            float cone = smoothstep(l.spot.w, max(l.extra.x, l.spot.w + 1e-3), dot(normalize(q + vec3(1e-4)), l.spot.xyz));
+            fade *= mix(l.extra.y, 1.0, cone);
+        }
+        sum += l.color.rgb * integral * fade;
+    }
+    return sum * sigma * (1.0 / (4.0 * BRDF_PI)) * 1.2;
+}
+
+// Screen-space indirect diffuse (one bounce per frame, accumulating over frames through the history): a few
+// cosine-distributed rays per pixel march the depth buffer up to 5 m; where they hit a surface, last frame's lit image
+// gives the light that surface sends back. Lamps, neon and lit windows tint the walls and ground around them; TAA
+// resolves the noise. Returns the mean incoming radiance over the hemisphere from hits (misses count as 0) and the
+// fraction of rays that hit (the ambient term covers the rest of the hemisphere).
+vec3 ssgi(Frame f, vec3 p, vec3 N, float noise, uint rays, out float hit_frac) {
+    hit_frac = 0.0;
+    vec3 sum = vec3(0.0);
+    vec3 T = normalize(abs(N.y) < 0.99 ? cross(N, vec3(0, 1, 0)) : cross(N, vec3(1, 0, 0)));
+    vec3 B = cross(N, T);
+    const int kSteps = 10;
+    const float kMax = 5.0;
+    for (uint r = 0u; r < rays; ++r) {
+        // Cosine-weighted direction: golden-angle spiral rotated per pixel and per frame.
+        float u1 = fract(noise + float(r) * 0.618034);
+        float u2 = fract(noise * 7.31 + float(r) * 0.381966 + 0.5);
+        float phi = 6.2831853 * u2, sr = sqrt(u1);
+        vec3 d = normalize(T * (cos(phi) * sr) + B * (sin(phi) * sr) + N * sqrt(max(1.0 - u1, 0.0)));
+        vec3 start = p + N * 0.04;
+        for (int i = 1; i <= kSteps; ++i) {
+            float s = (float(i) - 0.5 + 0.5 * noise) / float(kSteps);
+            float t = kMax * s * s + 0.05;
+            vec3 q = start + d * t;
+            vec4 cq = f.view_proj * vec4(q, 1.0);
+            if (cq.w <= 0.0) break;
+            vec2 uv = cq.xy / cq.w * 0.5 + 0.5;
+            if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) break;
+            float scene_vd = linear_depth(f, textureLod(TEX2D(pc.depth, SMP_NEAREST_CLAMP), uv, 0.0).r);
+            float ray_vd = cq.w;
+            if (ray_vd > scene_vd + 0.03 && ray_vd - scene_vd < 0.3 + 0.03 * ray_vd) {
+                vec4 pp = f.prev_view_proj * vec4(q, 1.0);
+                vec2 puv = pp.xy / pp.w * 0.5 + 0.5;
+                if (pp.w > 0.0 && all(greaterThan(puv, vec2(0.0))) && all(lessThan(puv, vec2(1.0)))) {
+                    vec3 L = textureLod(TEX2D(pc.history, SMP_LINEAR_CLAMP), puv, 0.0).rgb / max(f.exposure.x, 1e-8);
+                    // Fireflies: a ray that lands on a lamp lens would dominate; clamp its luminance.
+                    float lum = dot(L, vec3(0.2126, 0.7152, 0.0722));
+                    float cap = 4.0 / max(f.exposure.x, 1e-8);
+                    sum += L * min(1.0, cap / max(lum, 1e-6));
+                    hit_frac += 1.0;
+                }
+                break;
+            }
+        }
+    }
+    hit_frac /= float(max(rays, 1u));
+    return sum / float(max(rays, 1u));
+}
+
+// Sky with the volumetric clouds over it (reduced resolution, bilinear: clouds are soft).
+vec3 sky_with_clouds(Frame f, vec3 dir) {
+    vec3 sky = sky_color(f, dir);
+    if (pc.clouds == 0xFFFFFFFFu) return sky;
+    vec4 c = textureLod(TEX2D(pc.clouds, SMP_LINEAR_CLAMP), v_uv, 0.0);
+    return sky * c.a + c.rgb;
 }
 
 void main() {
@@ -148,9 +322,9 @@ void main() {
         vec3 dir = -V;
         if (use_vol) {
             const vec4 vol = volumetric_upsample(f, depth, v_uv);
-            o_color = vec4(min(apply_fog_volumetric(f, sky_color(f, dir), dir, 1e5, vol), vec3(60000.0)), 1.0);
+            o_color = vec4(min(apply_fog_volumetric(f, sky_with_clouds(f, dir), dir, 1e5, vol), vec3(60000.0)), 1.0);
         } else {
-            vec3 sky = apply_fog(f, sky_color(f, dir), dir, 1e5);
+            vec3 sky = apply_fog(f, sky_with_clouds(f, dir), dir, 1e5) + light_halos(f, dir, 400.0);
             o_color = vec4(min(sky * f.exposure.x, vec3(60000.0)), 1.0); // pre-exposed
         }
         return;
@@ -221,6 +395,48 @@ void main() {
         color += trans_col * translucency * (0.35 * back + 1.6 * forward) / BRDF_PI * (f.sun_color.rgb * f.sun_dir.w) * sh * ao;
     }
 
+    // Local lights (PointLight / SpotLight): GGX + Lambert, windowed inverse-square falloff (Karis 2013).
+    // Tiled: only the lights of this pixel's 16x16 tile (light_cull.comp).
+    uint tile_base = (uint(gl_FragCoord.y) / 16u * pc.tiles_x + uint(gl_FragCoord.x) / 16u) * 65u;
+    uint tile_n = pc.light_count > 0u ? pc.tiles.v[tile_base] : 0u;
+    for (uint ti = 0u; ti < tile_n; ++ti) {
+        LightGPU lt = pc.lights.l[pc.tiles.v[tile_base + 1u + ti]];
+        vec3 dl = lt.pos_range.xyz - p;
+        float d2 = dot(dl, dl);
+        float range = lt.pos_range.w;
+        if (d2 >= range * range) continue;
+        vec3 Ll = dl * inversesqrt(max(d2, 1e-8));
+        float nl = dot(N, Ll);
+        if (nl <= 0.0) continue;
+        float win = clamp(1.0 - (d2 * d2) / (range * range * range * range), 0.0, 1.0);
+        float atten = win * win / max(d2, 0.04);
+        float cone = 1.0;
+        if (lt.spot.w >= -1.0) {
+            // Emission profile: full inside the cone, `spill` outside it (an opaque lamp cap still lets a little
+            // light through the glass and off the fixture).
+            cone = smoothstep(lt.spot.w, max(lt.extra.x, lt.spot.w + 1e-3), dot(-Ll, lt.spot.xyz));
+            atten *= mix(lt.extra.y, 1.0, cone);
+        }
+        if (lt.extra.z >= 0.0 && atten > 0.0)
+            atten *= local_shadow(f, int(lt.extra.z), p, N, sqrt(d2), true);
+        vec3 Hl = normalize(V + Ll);
+        vec3 Fl = F_Schlick(f0, max(dot(V, Hl), 0.0));
+        vec3 specl = D_GGX(max(dot(N, Hl), 0.0), a) * V_SmithGGX(ndv, nl, a) * Fl;
+        color += (diff_col / BRDF_PI * (1.0 - Fl) + specl) * lt.color.rgb * (atten * nl);
+    }
+    // Emission: display-referred (glows the same at any exposure; 1 = a few times a sunlit white wall, so it blooms).
+    color += albedo * g2.b * (1.6 / f.exposure.x);
+    // Bounce light (screen-space): diffuse irradiance from nearby lit surfaces.
+    float gi_hits = 0.0;
+    const uint gi_rays = (pc.fx >> 8u) & 15u;
+    if (pc.history != 0xFFFFFFFFu && gi_rays > 0u) {
+        vec3 gi = ssgi(f, p, N, noise, gi_rays, gi_hits);
+        color += diff_col * gi * ao;
+    }
+    // Flat bounce light for interiors (Lighting.IndoorAmbient): diffuse only, occluded by AO. Where the bounce rays
+    // found nearby surfaces, those already supply part of that light.
+    color += diff_col * f.ambient.xyz / BRDF_PI * ao * (1.0 - 0.7 * gi_hits);
+
     // Image-based lighting (split-sum, multi-scatter compensation).
     vec2 ab = texture(TEX2D(f.brdf_lut, SMP_LINEAR_CLAMP), vec2(ndv, rough)).rg;
     vec3 fss = f0 * ab.x + ab.y;
@@ -230,16 +446,22 @@ void main() {
     vec3 R = reflect(-V, N);
     vec3 prefiltered = textureLod(TEXCUBE(f.env_cube, SMP_LINEAR_CLAMP_MIP), R, rough * float(f.env_mips - 1u)).rgb;
     vec3 irradiance = sh9_eval(f, N);
-    vec3 kd = diff_col * (1.0 - fss - fms * ems);
+    vec3 kd = diff_col * (1.0 - fss - fms * ems) * (1.0 - 0.5 * gi_hits);
     float spec_occ = clamp(pow(ndv + ao, exp2(-16.0 * a - 1.0)) - 1.0 + ao, 0.0, 1.0);
     float canopy = canopy_visibility(f, p);
-    color += (prefiltered * fss * spec_occ * spec_keep + (fms * ems + kd) * irradiance / BRDF_PI * ao) * f.exposure.y *
+    vec3 env_spec = prefiltered * f.exposure.y * canopy * amb_tint;
+    if (pc.history != 0xFFFFFFFFu && (pc.fx & 1u) != 0u && rough < 0.22) {
+        float conf;
+        vec3 refl = ssr_trace(f, p, N, V, rough, noise, conf);
+        env_spec = mix(env_spec, refl, conf);
+    }
+    color += env_spec * fss * spec_occ * spec_keep + (fms * ems + kd) * irradiance / BRDF_PI * ao * f.exposure.y *
              canopy * amb_tint;
     if (use_vol) {
         const vec4 vol = volumetric_upsample(f, depth, v_uv);
         o_color = vec4(min(apply_fog_volumetric(f, color, -V, length(p), vol), vec3(60000.0)), 1.0);
         return;
     }
-    color = apply_fog(f, color, -V, length(p));
+    color = apply_fog(f, color, -V, length(p)) + light_halos(f, -V, length(p));
     o_color = vec4(min(color * f.exposure.x, vec3(60000.0)), 1.0); // pre-exposed
 }

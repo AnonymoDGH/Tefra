@@ -37,18 +37,6 @@ namespace {
 constexpr u32 kFramesInFlight = 2;
 constexpr VkFormat kViewportFormat = VK_FORMAT_R8G8B8A8_SRGB;
 
-// Sun direction from the hour (equinox), latitude and an azimuth offset. World: +X east, +Y up, -Z north.
-vec3 sun_direction(f32 clock, f32 latitude_deg, f32 azimuth_deg) {
-    const f32 h = (clock - 12.0f) / 24.0f * kTwoPi;
-    const f32 phi = radians(latitude_deg);
-    const f32 east = -std::sin(h);
-    const f32 up = std::cos(phi) * std::cos(h);
-    const f32 north = -std::sin(phi) * std::cos(h);
-    vec3 d{east, up, -north};
-    const f32 a = radians(azimuth_deg);
-    d = {d.x * std::cos(a) - d.z * std::sin(a), d.y, d.x * std::sin(a) + d.z * std::cos(a)};
-    return normalize(d);
-}
 } // namespace
 
 // The log sink writes into the Output panel's ring buffer (one Studio instance per process).
@@ -354,27 +342,57 @@ void App::apply_theme() {
     }
 }
 
+// Lighting, Sky, Atmosphere and Clouds -> settings_ every frame (cheap). The expensive parts are re-done only when
+// they changed: the atmosphere LUTs (Atmosphere props), the background image (Sky), and the image-based light of the
+// procedural sky when the sun moved by more than half a degree.
 void App::update_lighting(bool force) {
-    world::Instance* light = session_.model().service("Lighting");
-    if (!light) return;
-    const f32 clock = light->get_float("ClockTime", 14.0f);
-    const f32 lat = light->get_float("GeographicLatitude", 20.0f);
-    const f32 az = light->get_float("SunAzimuthOffset", 0.0f);
-    settings_.cloud_coverage = light->get_float("CloudCover", 0.3f);
-    settings_.fog_density = light->get_float("FogDensity", 0.0f);
-    settings_.fog_falloff = light->get_float("FogHeightFalloff", 0.03f);
-    settings_.grade_saturation = light->get_float("Saturation", 1.05f);
-    settings_.grade_contrast = light->get_float("Contrast", 1.05f);
-    const vec3 sun = sun_direction(clock, lat, az);
-    // Exposure follows the sun height (bright noon, darker dusk), plus the user's compensation.
-    const f32 day = saturate((sun.y + 0.05f) / 0.45f);
-    settings_.ev100 = lerp(8.5f, 14.8f, day) - light->get_float("ExposureCompensation", 0.0f);
-    if (!force && clock == applied_clock_ && lat == applied_lat_ && az == applied_az_) return;
-    applied_clock_ = clock;
-    applied_lat_ = lat;
-    applied_az_ = az;
-    settings_.sun_direction = sun.y > -0.02f ? sun : normalize(vec3{sun.x, -0.02f, sun.z});
+    const world::DataModel& dm = session_.model();
+    if (!dm.service("Lighting")) return;
+    world::sky_settings(dm, settings_);
+    const world::SkyBackground bg = world::sky_background(dm);
+    render::AtmosphereParams ap;
+    world::atmosphere_params(dm, ap);
+    const bool atmosphere_changed = !world::same_atmosphere(ap, applied_atmosphere_);
+    const bool background_changed = bg != applied_background_;
+    const bool procedural = bg.mode == world::SkyboxMode::Procedural;
+    // The sun only matters while the procedural sky is the lit one (an image sky has its own light).
+    const f32 cos_turn = dot(normalize(settings_.sun_direction), normalize(applied_sun_));
+    const bool sun_moved = procedural_sky_ && cos_turn < 0.99996f; // ~0.5 degrees
+    if (!force && have_applied_sky_ && !atmosphere_changed && !background_changed && !sun_moved) return;
     frames_->wait_all();
+    if (atmosphere_changed) {
+        atmosphere_ = std::make_unique<render::Atmosphere>(*device_, *heap_, ap);
+        applied_atmosphere_ = ap;
+    }
+    // The image is read only when the background changed (a failed read falls back to the procedural sky and is not
+    // retried on every sun step); an image sky whose background did not change keeps its light.
+    const bool load_image = !procedural && (force || !have_applied_sky_ || background_changed);
+    if (!procedural && !load_image && !procedural_sky_) return;
+    applied_background_ = bg;
+    applied_sun_ = normalize(settings_.sun_direction);
+    have_applied_sky_ = true;
+    procedural_sky_ = true;
+    if (load_image && bg.mode == world::SkyboxMode::Hdri && !bg.hdri.empty()) {
+        if (env_->build_from_hdr(bg.hdri.c_str(), 4500.0f)) {
+            procedural_sky_ = false;
+            return;
+        }
+        TEFRA_LOG_ERROR("Sky: cannot load the HDRI %s; using the procedural sky", bg.hdri.c_str());
+    } else if (load_image && bg.mode == world::SkyboxMode::Cubemap) {
+        bool ok = true;
+        ImageRGBA8 faces[6];
+        for (int i = 0; i < 6 && ok; ++i) {
+            ok = !bg.faces[i].empty() && image_read(bg.faces[i].c_str(), faces[i]);
+            if (!ok) TEFRA_LOG_ERROR("Sky: cannot load the cubemap face %s", bg.faces[i].c_str());
+        }
+        if (ok) {
+            // The six faces become one equirect: the visible background and the source of the image-based light.
+            env_->build_from_equirect(render::equirect_from_cube_faces(faces, 2048, 3000.0f));
+            procedural_sky_ = false;
+            return;
+        }
+    }
+    // Procedural sky, or an image sky that is not available (missing file, empty path).
     env_->build_from_equirect(atmosphere_->render_equirect(settings_.sun_direction, 128));
 }
 
@@ -524,7 +542,8 @@ void App::frame(f32 dt, bool capture_window) {
         render::RenderWorld rw;
         rw.scene = scene_.get();
         rw.env = env_.get();
-        rw.atmosphere = atmosphere_.get();
+        // Cubemap / HDRI skies replace the atmosphere's sky (the renderer then reads the background image).
+        rw.atmosphere = procedural_sky_ ? atmosphere_.get() : nullptr;
         // Particles: simulated in edit mode too (paused while play is paused), capped by the quality preset.
         if (!particles_) particles_ = std::make_unique<world::ParticleSystem>();
         const f64 pdt = particles_time_ < 0.0 ? 0.0 : time_ - particles_time_;

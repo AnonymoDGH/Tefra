@@ -278,12 +278,26 @@ void GameRuntime::step(f32 dt, const InputState& input) {
     if (cfg_.scripts && cfg_.scripts->running()) cfg_.scripts->step(dt);
     for (auto& s : systems_) s->pre_physics(*this, dt);
 
-    // Character intent: WASD relative to the camera, Space jumps (held = jumps again on landing).
-    if (input_.mouse(MouseButton::Right)) {
-        orbit_yaw_ -= input_.mouse_delta.x * 0.005f;
-        orbit_pitch_ = clamp(orbit_pitch_ - input_.mouse_delta.y * 0.005f, radians(-80.0f), radians(60.0f));
+    // Camera control: right mouse orbits; Left Ctrl toggles shift lock (the mouse always steers, the character faces
+    // the camera, over-the-shoulder view); zooming all the way in is first person. The cursor is locked meanwhile.
+    if (input_.key_pressed(Key::LeftControl) || input_.key_pressed(Key::RightControl)) shift_lock_ = !shift_lock_;
+    const bool fp = first_person();
+    const bool orbiting = input_.mouse(MouseButton::Right) || (mouse_locked_ && input_.mouse_down[1]);
+    mouse_locked_ = orbiting || shift_lock_ || fp;
+    if (mouse_locked_ && !input_.mouse_over_ui) {
+        constexpr f32 kSensitivity = 0.0032f; // rad per pixel
+        orbit_yaw_ -= input_.mouse_delta.x * kSensitivity;
+        orbit_pitch_ = clamp(orbit_pitch_ - input_.mouse_delta.y * kSensitivity, radians(-85.0f), radians(80.0f));
     }
-    if (input_.hovered && input_.wheel != 0.0f) orbit_dist_ = clamp(orbit_dist_ - input_.wheel * 1.2f, 0.5f, 40.0f);
+    if ((input_.hovered || mouse_locked_) && input_.wheel != 0.0f) {
+        // Exponential zoom: each notch is a fixed fraction, so it feels the same near and far.
+        orbit_dist_ = orbit_dist_ * std::pow(0.85f, input_.wheel);
+        if (orbit_dist_ < 1.2f && input_.wheel > 0.0f)
+            orbit_dist_ = 0.5f; // snap into first person
+        else if (orbit_dist_ < 1.2f)
+            orbit_dist_ = 1.2f; // and out of it to a close view
+        orbit_dist_ = clamp(orbit_dist_, 0.5f, 40.0f);
+    }
     vec3 move{};
     const vec3 fwd{-std::sin(orbit_yaw_), 0.0f, -std::cos(orbit_yaw_)};
     const vec3 right{std::cos(orbit_yaw_), 0.0f, -std::sin(orbit_yaw_)};
@@ -294,9 +308,16 @@ void GameRuntime::step(f32 dt, const InputState& input) {
     move = length(move) > 0.01f ? normalize(move) : vec3{};
     Instance* hum = humanoid();
     const bool alive = hum && died_at_ < 0.0;
+    sprinting_ = (input_.key(Key::LeftShift) || input_.key(Key::RightShift)) && length(move) > 0.01f;
     if (controller_ && alive) {
         controller_->set_move_direction(move);
-        if (input_.key(Key::Space)) controller_->jump();
+        controller_->set_speed_scale(sprinting_ ? 1.6f : 1.0f);
+        if (input_.key_pressed(Key::Space))
+            controller_->jump();
+        else if (input_.key(Key::Space) && controller_->on_ground())
+            controller_->jump(); // held: hop again on landing
+        controller_->set_jump_held(input_.key(Key::Space));
+        controller_->set_facing(shift_lock_ || fp ? fwd : vec3{});
         hum->set("MoveDirection", Value::vector3(move), true);
     } else if (controller_) {
         controller_->set_move_direction({});
@@ -346,27 +367,60 @@ void GameRuntime::update_camera(f32 dt) {
     Instance* c = character();
     Instance* head = c ? c->find_first_child("Head") : nullptr;
     if (!head) return;
-    const vec3 target = head->get_vec3("Position") + vec3{0, 0.4f, 0};
+    const vec3 head_pos = head->get_vec3("Position");
+    // Follow height eased (stairs and landings do not jerk the view); horizontal follow is exact (the character is
+    // already interpolated between physics steps).
+    const f32 ky = 1.0f - std::exp(-dt * 12.0f);
+    if (!cam_init_) {
+        cam_target_y_ = head_pos.y;
+        cam_dist_ = orbit_dist_;
+        cam_init_ = true;
+    }
+    cam_target_y_ += (head_pos.y - cam_target_y_) * ky;
+    if (std::fabs(head_pos.y - cam_target_y_) > 3.0f) cam_target_y_ = head_pos.y; // teleport / respawn
+    cam_dist_ += (orbit_dist_ - cam_dist_) * (1.0f - std::exp(-dt * 10.0f));
     const vec3 dir{-std::sin(orbit_yaw_) * std::cos(orbit_pitch_), std::sin(orbit_pitch_),
                    -std::cos(orbit_yaw_) * std::cos(orbit_pitch_)};
-    vec3 want = target - dir * orbit_dist_;
-    // Keep the camera out of walls: stop in front of the first solid part (not the character) behind the head.
-    vec3 origin = target;
-    f32 travelled = 0.0f;
-    for (int i = 0; i < 4 && travelled < orbit_dist_; ++i) {
-        physics::RaycastResult hit;
-        if (!physics_->raycast(origin, -dir, orbit_dist_ - travelled, hit) || !hit.instance) break;
-        if (!hit.instance->is_descendant_of(c)) {
-            want = target - dir * max(travelled + hit.distance - 0.3f, 0.5f);
-            break;
+    const vec3 right{std::cos(orbit_yaw_), 0.0f, -std::sin(orbit_yaw_)};
+    const bool fp = first_person();
+    vec3 target{head_pos.x, cam_target_y_ + (fp ? 0.15f : 0.4f), head_pos.z};
+    // Shift lock: over the right shoulder.
+    if (shift_lock_ && !fp) target = target + right * 1.6f;
+    vec3 want = target - dir * cam_dist_;
+    if (!fp) {
+        // Keep the camera out of walls: a sphere-ish probe (three rays) from the head back to the wanted spot. The
+        // distance snaps in at once (never see through a wall) and eases back out.
+        f32 limit = cam_dist_;
+        const vec3 up = cross(right, dir);
+        const vec3 offsets[3] = {vec3{}, right * 0.25f, up * 0.25f};
+        for (const vec3& off : offsets) {
+            vec3 origin = target + off;
+            f32 travelled = 0.0f;
+            for (int i = 0; i < 4 && travelled < cam_dist_; ++i) {
+                physics::RaycastResult hit;
+                if (!physics_->raycast(origin, -dir, cam_dist_ - travelled, hit) || !hit.instance) break;
+                if (!hit.instance->is_descendant_of(c) && hit.instance->get_bool("CanCollide", true)) {
+                    limit = min(limit, max(travelled + hit.distance - 0.35f, 0.4f));
+                    break;
+                }
+                travelled += hit.distance + 0.05f;
+                origin = target + off - dir * travelled;
+            }
         }
-        travelled += hit.distance + 0.05f;
-        origin = target - dir * travelled;
+        cam_hit_dist_ =
+            limit < cam_hit_dist_ ? limit : cam_hit_dist_ + (limit - cam_hit_dist_) * (1.0f - std::exp(-dt * 6.0f));
+        want = target - dir * min(cam_dist_, cam_hit_dist_);
+    } else {
+        want = target;
+        cam_hit_dist_ = cam_dist_;
     }
-    const f32 k = frame_ <= 1 ? 1.0f : 1.0f - std::exp(-dt * 14.0f);
-    camera_.position = camera_.position + (want - camera_.position) * k;
+    camera_.position = want;
     camera_.yaw = orbit_yaw_;
     camera_.pitch = orbit_pitch_;
+    // A touch more field of view while sprinting (sense of speed).
+    const f32 fov_want = radians(sprinting_ ? 76.0f : 70.0f);
+    cam_fov_ += (fov_want - cam_fov_) * (1.0f - std::exp(-dt * 6.0f));
+    camera_.fov_y = cam_fov_;
 }
 
 void GameRuntime::stop() {

@@ -256,6 +256,7 @@ void App::draw_menu_bar() {
         if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S", false, editing)) save_place(true);
         ImGui::Separator();
         if (ImGui::MenuItem("Import Roblox Place...", nullptr, false, editing)) import_roblox_dialog();
+        if (ImGui::MenuItem("Import 3D Model...", nullptr, false, editing)) import_model_dialog();
         if (ImGui::MenuItem("Export Game...", nullptr, false, editing)) export_game_dialog();
         ImGui::Separator();
         if (ImGui::MenuItem("Quit")) confirm_discard([this] { quit_ = true; });
@@ -700,7 +701,7 @@ void App::draw_viewport(f32 dt) {
         ImDrawList* pdl = ImGui::GetWindowDrawList();
         pdl->AddRect(origin, {origin.x + avail.x, origin.y + avail.y}, IM_COL32(60, 200, 90, 255), 0.0f, 0, 3.0f);
         pdl->AddText({origin.x + 8, origin.y + avail.y - 20}, IM_COL32(230, 230, 230, 180),
-                     "PLAY  |  WASD move  |  Space jump  |  RMB orbit  |  wheel zoom  |  F5 stop");
+                     "PLAY  |  WASD move  |  Shift sprint  |  Space jump  |  RMB orbit  |  Ctrl shift-lock  |  wheel zoom (all in = 1st person)  |  F5 stop");
         ImGui::End();
         return;
     }

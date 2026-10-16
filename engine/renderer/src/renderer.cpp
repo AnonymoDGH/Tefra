@@ -16,6 +16,7 @@
 
 #include "tefra/core/log.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
@@ -48,11 +49,18 @@ struct SkinDraw {
 struct LightingPush {
     VkDeviceAddress frame;
     u32 depth, rt0, rt1, rt2, ao, vol;
+    VkDeviceAddress lights;
+    u32 light_count, clouds; // clouds: volumetric cloud texture (0xFFFFFFFF = 2D layer)
+    VkDeviceAddress tiles;   // per-tile light lists (light_cull.comp)
+    u32 tiles_x, history;    // history: last frame's TAA output for SSR and bounce light (0xFFFFFFFF = off)
+    u32 fx;                  // bit0: screen-space reflections, bits 8..11: bounce light rays per pixel
 };
 struct VolumetricPush {
     VkDeviceAddress frame;
     u32 depth;
     u32 pad;
+    VkDeviceAddress lights; // nearest-first local lights (volumetric fog halos)
+    u32 light_count, pad2;
 };
 struct TonemapPush {
     VkDeviceAddress frame;
@@ -106,6 +114,10 @@ constexpr f32 kGrassWind = 0.12f;     // m: tip displacement at full gust
 constexpr f32 kGrassMargin = 1.3f;    // m: cell bounding radius for the frustum test (blade height and slope)
 constexpr i32 kGrassHalf = 61;        // cells from the camera cell to each grid edge (max disc radius + margin)
 constexpr u32 kGrassSide = 2 * kGrassHalf + 1;
+// Local lights: at most kMaxLights per frame, kMaxTileLights per 16x16 tile (light_cull.comp).
+constexpr u32 kMaxLights = 1024;
+constexpr u32 kLightTile = 16;
+constexpr u32 kMaxTileLights = 64;
 constexpr u32 kGrassMaxCells = kGrassSide * kGrassSide;
 constexpr u32 kGrassBladesPerCell = 256; // candidate blades per 1 m^2 at density 1
 struct GrassPush {
@@ -219,6 +231,8 @@ Renderer::~Renderer() {
     for (auto& f : frames_) {
         rhi::destroy_buffer(dev_, f.constants);
         rhi::destroy_buffer(dev_, f.exposure);
+        rhi::destroy_buffer(dev_, f.lights);
+        rhi::destroy_buffer(dev_, f.light_tiles);
         rhi::destroy_buffer(dev_, f.particles);
         rhi::destroy_buffer(dev_, f.instances);
         rhi::destroy_buffer(dev_, f.terrain);
@@ -237,7 +251,8 @@ Renderer::~Renderer() {
          {p_gbuffer_,        p_gbuffer_2s_,  p_shadow_,   p_lighting_,   p_tonemap_,     p_skyview_,    p_terrain_,
           p_terrain_shadow_, p_veg_,         p_veg_2s_,   p_veg_shadow_, p_veg_cull_,    p_water_,      p_taa_,
           p_gtao_,           p_bloom_down_,  p_bloom_up_, p_expo_first_, p_expo_reduce_, p_expo_adapt_, p_volumetric_,
-          p_grass_,          p_grass_count_, p_ocean_,    p_ocean_copy_, p_skin_,        p_particles_})
+          p_grass_,          p_grass_count_, p_ocean_,    p_ocean_copy_, p_skin_,        p_particles_,  p_clouds_,
+          p_light_cull_,     p_rain_})
         if (p) vkDestroyPipeline(dev_.device(), p, nullptr);
     vkDestroyPipelineLayout(dev_.device(), layout_, nullptr);
 }
@@ -248,7 +263,7 @@ void Renderer::create_pipelines(VkFormat output_format) {
                           &p_veg_shadow_, &p_veg_cull_,   &p_water_,          &p_taa_,         &p_gtao_,
                           &p_bloom_down_, &p_bloom_up_,   &p_expo_first_,     &p_expo_reduce_, &p_expo_adapt_,
                           &p_volumetric_, &p_grass_,      &p_grass_count_,    &p_ocean_,       &p_ocean_copy_,
-                          &p_skin_,       &p_particles_}) {
+                          &p_skin_,       &p_particles_,  &p_clouds_,         &p_light_cull_,  &p_rain_}) {
         if (*p) vkDestroyPipeline(dev_.device(), *p, nullptr);
         *p = VK_NULL_HANDLE;
     }
@@ -278,12 +293,17 @@ void Renderer::create_pipelines(VkFormat output_format) {
     VkShaderModule taa_fs = rhi::load_shader(dev_, "taa.frag");
     VkShaderModule gtao_fs = rhi::load_shader(dev_, "gtao.frag");
     VkShaderModule volumetric_fs = rhi::load_shader(dev_, "volumetric.frag");
+    VkShaderModule clouds_fs = rhi::load_shader(dev_, "clouds_vol.frag");
+    VkShaderModule light_cull_cs = rhi::load_shader(dev_, "light_cull.comp");
+    VkShaderModule rain_vs = rhi::load_shader(dev_, "rain.vert");
+    VkShaderModule rain_fs = rhi::load_shader(dev_, "rain.frag");
     VkShaderModule bloom_down_fs = rhi::load_shader(dev_, "bloom_down.frag");
     VkShaderModule bloom_up_fs = rhi::load_shader(dev_, "bloom_up.frag");
     VkShaderModule expo_first_fs = rhi::load_shader(dev_, "exposure_first.frag");
     VkShaderModule expo_reduce_fs = rhi::load_shader(dev_, "exposure_reduce.frag");
     VkShaderModule expo_adapt_cs = rhi::load_shader(dev_, "exposure_adapt.comp");
     p_veg_cull_ = rhi::create_compute_pipeline(dev_, veg_cull_cs, layout_, "veg_cull");
+    p_light_cull_ = rhi::create_compute_pipeline(dev_, light_cull_cs, layout_, "light_cull");
     p_grass_count_ = rhi::create_compute_pipeline(dev_, grass_count_cs, layout_, "grass_count");
     p_skin_ = rhi::create_compute_pipeline(dev_, skin_cs, layout_, "skin");
 
@@ -371,6 +391,10 @@ void Renderer::create_pipelines(VkFormat output_format) {
     w.color_count = 2;
     w.name = "particles";
     p_particles_ = rhi::create_graphics_pipeline(dev_, w);
+    w.vs = rain_vs;
+    w.fs = rain_fs;
+    w.name = "rain";
+    p_rain_ = rhi::create_graphics_pipeline(dev_, w);
 
     auto rp_a = compat_pass(dev_, {VK_FORMAT_R16G16B16A16_SFLOAT}, VK_FORMAT_UNDEFINED);
     rhi::GraphicsPipelineDesc ta;
@@ -391,6 +415,9 @@ void Renderer::create_pipelines(VkFormat output_format) {
     ta.render_pass = rp_v.pass;
     ta.name = "volumetric";
     p_volumetric_ = rhi::create_graphics_pipeline(dev_, ta);
+    ta.fs = clouds_fs;
+    ta.name = "clouds";
+    p_clouds_ = rhi::create_graphics_pipeline(dev_, ta);
 
     auto rp_b = compat_pass(dev_, {hdr_format_}, VK_FORMAT_UNDEFINED);
     rhi::GraphicsPipelineDesc bd;
@@ -456,7 +483,8 @@ void Renderer::create_pipelines(VkFormat output_format) {
                              veg_vs,        veg_shadow_vs, shadow_alpha_fs, veg_cull_cs,    water_vs,
                              water_fs,      particle_vs,   particle_fs,     taa_fs,         gtao_fs,
                              bloom_down_fs, bloom_up_fs,   expo_first_fs,   expo_reduce_fs, expo_adapt_cs,
-                             volumetric_fs, grass_vs,      grass_fs,        grass_count_cs, skin_cs})
+                             volumetric_fs, grass_vs,      grass_fs,        grass_count_cs, skin_cs,
+                             clouds_fs,     light_cull_cs, rain_vs,         rain_fs})
         vkDestroyShaderModule(dev_.device(), m, nullptr);
 }
 
@@ -531,13 +559,34 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     const Vegetation* veg = world.vegetation;
     if (output_format_ != target.format) create_pipelines(target.format);
     RenderSettings s = settings_in;
+    const vec3 sun_true = normalize(s.sun_direction);
     if (atmo) {
         // Sun light at the camera from the atmosphere: color and intensity change with the sun elevation.
         const f32 alt = atmo->params().ground_altitude + max(static_cast<f32>(camera.position.y), 0.0f);
-        const vec3 e = atmo->sun_illuminance(alt, s.sun_direction);
+        const vec3 e = atmo->sun_illuminance(alt, sun_true);
         const f32 lum = 0.2126f * e.x + 0.7152f * e.y + 0.0722f * e.z;
         s.sun_illuminance = lum;
         s.sun_color = lum > 0.0f ? e / lum : vec3{1.0f};
+    }
+    // Night: below the horizon the moon is the directional light (shadows included). The sky itself still comes
+    // from the real sun (sun_true), which is below the horizon and draws no light.
+    constexpr f32 kMoonBelowSun = -0.1f;
+    if (s.moon_illuminance > 0.0f && sun_true.y < kMoonBelowSun) {
+        s.sun_direction = normalize(s.moon_direction);
+        s.sun_illuminance = s.moon_illuminance;
+        s.sun_color = vec3{0.80f, 0.88f, 1.0f};
+    }
+    s.sun_illuminance *= max(s.sun_scale, 0.0f);
+    if (s.flash > 0.0f) {
+        // Lightning: for the length of the flash the strike is the directional light (cascaded shadows included),
+        // cold white, and the clouds and haze light up through the ambient term.
+        const f32 strike = 420.0f * s.flash;
+        if (strike > s.sun_illuminance) {
+            s.sun_direction = normalize(s.flash_direction);
+            s.sun_color = vec3{0.82f, 0.88f, 1.0f};
+            s.sun_illuminance = strike;
+        }
+        s.ambient = s.ambient + vec3{0.75f, 0.82f, 1.0f} * (60.0f * s.flash);
     }
     FrameBuffers& fb = frames_[slot];
     // The slot's fence has been waited on, so last frame's grass counter copy in this slot is complete.
@@ -604,6 +653,23 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     fc.env_background = env.background();
     fc.fog = {s.fog_density, s.fog_falloff, s.fog_height, s.fog_anisotropy};
     fc.clouds = {s.cloud_coverage, s.cloud_altitude, s.cloud_size, s.cloud_wind * time};
+    {
+        const vec3 moon_dir = normalize(s.moon_direction);
+        const f32 night = saturate((-sun_true.y - 0.02f) / 0.10f);
+        const bool moon_disc = s.celestial_shown && s.moon_visible;
+        fc.celestial = {s.celestial_shown ? 1.0f : 0.0f, moon_disc ? 1.0f : 0.0f, s.moon_angular_radius, s.sky_glare};
+        fc.moon = {moon_dir.x, moon_dir.y, moon_dir.z, s.moon_phase};
+        fc.stars = {s.star_count, s.star_brightness, night, 0.0f};
+        fc.fog_tint = {s.fog_tint.x, s.fog_tint.y, s.fog_tint.z, 0.0f};
+        fc.cloud_look = {s.cloud_tint.x, s.cloud_tint.y, s.cloud_tint.z, s.cloud_density};
+        fc.cloud_wind = {s.cloud_wind_dir.x, s.cloud_wind_dir.y, 0.0f, 0.0f};
+        fc.sun_true = {sun_true.x, sun_true.y, sun_true.z, 0.0f};
+    }
+    fc.ambient = {s.ambient.x, s.ambient.y, s.ambient.z, 0.0f};
+    const bool vclouds = s.volumetric_clouds && s.cloud_coverage > 0.0f && atmo != nullptr;
+    fc.weather = {clamp(s.wetness, 0.0f, 1.0f), clamp(s.puddles, 0.0f, 1.0f), clamp(s.rain, 0.0f, 1.0f), s.rain_speed};
+    fc.rain_wind = {s.rain_wind.x, s.rain_wind.y, s.rain_wind.z, s.rain_length};
+    fc.vclouds = {vclouds ? 1.0f : 0.0f, s.cloud_thickness, f32(clamp(s.cloud_steps, 8u, 96u)), 0.0f};
     if (world.ocean) {
         const OceanDesc& od = world.ocean->desc();
         fc.ocean = {od.level, 1.0f, 0.0f, 0.0f};
@@ -618,7 +684,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         fc.canopy = {cb.origin.x, cb.origin.y, cb.size, s.canopy_strength};
     }
     if (atmo)
-        fc.atmo = atmo->gpu(s.sun_direction, 0);
+        fc.atmo = atmo->gpu(sun_true, 0);
     else
         fc.atmo.skyview_lut = 0xFFFFFFFFu;
 
@@ -634,6 +700,12 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     vec4 planes[6];
     frustum_planes(fc.view_proj, planes);
     std::vector<u32> visible, casters[kMaxCascades];
+    struct CasterSphere {
+        vec3 c;
+        f32 r;
+        u32 index;
+    };
+    std::vector<CasterSphere> caster_spheres; // shadow casters for the local light shadow maps
     auto* gpu_inst = static_cast<InstanceGPU*>(fb.instances.mapped);
     const bool have_history = instance_history_.size() == instances.size();
     std::vector<XformHistory> history(instances.size());
@@ -662,6 +734,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         f32 r = mr.bounds.radius * max(max(in.scale.x, in.scale.y), in.scale.z);
         if (dynamic) r = r * 1.5f + 0.5f; // posed vertices can leave the bind-pose sphere
         if (sphere_in_frustum(planes, c, r)) visible.push_back(i);
+        if (in.cast_shadows && (s.local_shadows > 0 || s.rain > 0.0f)) caster_spheres.push_back({c, r, i});
         if (in.cast_shadows)
             for (u32 k = 0; k < cascades; ++k) {
                 // Cylinder test along the light direction approximated by sphere distance in the light plane.
@@ -1193,6 +1266,209 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     }
 
     // Volumetric fog: half-resolution in-scatter and transmittance (volumetric.frag), composed in the lighting pass.
+    // ---- Local lights: the nearest visible ones, camera-relative -------------------------------------------
+    u32 light_count = 0;
+    u32 local_shadow_count = 0;
+    vec3 local_shadow_eye[kMaxLocalShadows];
+    f32 local_shadow_range[kMaxLocalShadows];
+    {
+        const auto& src = scene.lights();
+        vec4 lplanes[6];
+        frustum_planes(fc.view_proj, lplanes);
+        struct Pick {
+            f32 d2;
+            u32 index;
+            vec3 rel;
+        };
+        std::vector<Pick> picks;
+        picks.reserve(src.size());
+        for (u32 i = 0; i < src.size(); ++i) {
+            const LocalLight& l = src[i];
+            if (l.intensity <= 0.0f || l.range <= 0.0f) continue;
+            const vec3 rel{f32(l.position.x - camera.position.x), f32(l.position.y - camera.position.y),
+                           f32(l.position.z - camera.position.z)};
+            bool in_view = true;
+            for (int k = 0; k < 5 && in_view; ++k)
+                if (dot(lplanes[k].xyz(), rel) + lplanes[k].w < -l.range) in_view = false;
+            if (in_view) picks.push_back({dot(rel, rel), i, rel});
+        }
+        const u32 cap = min<u32>(s.max_lights, kMaxLights);
+        if (picks.size() > cap) {
+            std::nth_element(picks.begin(), picks.begin() + cap, picks.end(),
+                             [](const Pick& x, const Pick& y) { return x.d2 < y.d2; });
+            picks.resize(cap);
+        }
+        // Most important first (intensity over squared distance): passes that only afford a few lights (rain,
+        // volumetric fog, halos) take the head of the list, so a distant lighthouse beam beats a nearby lantern.
+        std::sort(picks.begin(), picks.end(), [&src](const Pick& x, const Pick& y) {
+            return src[x.index].intensity / (x.d2 + 4.0f) > src[y.index].intensity / (y.d2 + 4.0f);
+        });
+        light_count = static_cast<u32>(picks.size());
+        if (fb.light_capacity < max(light_count, 1u) || !fb.lights.buffer) {
+            rhi::destroy_buffer(dev_, fb.lights);
+            fb.light_capacity = max<u32>(64u, light_count * 2u);
+            fb.lights = rhi::create_buffer(dev_, sizeof(LightGPU) * fb.light_capacity,
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, rhi::MemoryUsage::Upload, "lights");
+        }
+        auto* dst = static_cast<LightGPU*>(fb.lights.mapped);
+        // When it rains the last atlas tile holds the top-down rain occlusion map instead.
+        const bool rain_occ = s.rain > 0.0f;
+        const u32 max_shadows = min(s.local_shadows, rain_occ ? kMaxLocalShadows - 1 : kMaxLocalShadows);
+        for (u32 i = 0; i < light_count; ++i) {
+            const LocalLight& l = src[picks[i].index];
+            dst[i].pos_range = vec4(picks[i].rel, l.range);
+            dst[i].color = vec4(l.color * l.intensity, 0.0f);
+            dst[i].spot = vec4(l.direction, l.cos_outer);
+            f32 shadow_index = -1.0f;
+            if (l.shadows && local_shadow_count < max_shadows) {
+                // Perspective shadow map along the spot axis (straight down for point lights), at most 120 degrees
+                // wide: lamps light the ground below them. Outside the frustum the light stays unshadowed.
+                const u32 k = local_shadow_count++;
+                const bool spot = l.cos_outer >= -1.0f;
+                const vec3 axis = spot ? l.direction : vec3{0.0f, -1.0f, 0.0f};
+                const f32 half = spot ? min(std::acos(clamp(l.cos_outer, -1.0f, 1.0f)) + 0.05f, 1.047f) : 1.047f;
+                const vec3 up = std::fabs(axis.y) > 0.9f ? vec3{0.0f, 0.0f, 1.0f} : vec3{0.0f, 1.0f, 0.0f};
+                const vec3 eye = picks[i].rel;
+                const mat4 view = look_at(eye, eye + axis, up);
+                // Vulkan right-handed perspective, depth 0 (near) .. 1 (far). The near plane (0.3 m) clips the
+                // fixture's own glass and frame around the light.
+                const f32 n = 0.3f, fz = max(l.range, n + 0.5f), t = 1.0f / std::tan(half);
+                mat4 proj{};
+                proj.c[0].x = t;
+                proj.c[1].y = t;
+                proj.c[2].z = fz / (n - fz);
+                proj.c[2].w = -1.0f;
+                proj.c[3].z = -(fz * n) / (fz - n);
+                fc.local_shadow_vp[k] = proj * view;
+                fc.local_shadow_atlas[k] = {f32(k % 4) * 0.25f, f32(k / 4) * 0.5f, 0.25f, 0.5f};
+                local_shadow_eye[k] = eye;
+                local_shadow_range[k] = fz;
+                shadow_index = f32(k);
+            }
+            dst[i].extra = vec4(l.cos_inner, l.spill, shadow_index, 0.0f);
+        }
+        fc.local_shadow_count = local_shadow_count;
+        if (rain_occ) {
+            // Orthographic view straight down over 80 x 80 m around the camera, 120 m deep, snapped to its texels
+            // so the edges of roofs do not crawl as the camera moves.
+            constexpr f32 kHalf = 40.0f, kDepth = 120.0f;
+            const f32 texel = 2.0f * kHalf / f32(max(s.local_shadow_resolution, 64u));
+            const f64 sx = std::floor(camera.position.x / f64(texel)) * f64(texel);
+            const f64 sz = std::floor(camera.position.z / f64(texel)) * f64(texel);
+            const vec3 eye{f32(sx - camera.position.x), 60.0f, f32(sz - camera.position.z)};
+            const mat4 view = look_at(eye, eye + vec3{0.0f, -1.0f, 0.0f}, vec3{0.0f, 0.0f, -1.0f});
+            mat4 proj{};
+            proj.c[0].x = 1.0f / kHalf;
+            proj.c[1].y = 1.0f / kHalf;
+            proj.c[2].z = -1.0f / kDepth;
+            proj.c[3].z = 0.0f;
+            proj.c[3].w = 1.0f;
+            fc.local_shadow_vp[kMaxLocalShadows - 1] = proj * view;
+            fc.local_shadow_atlas[kMaxLocalShadows - 1] = {0.75f, 0.5f, 0.25f, 0.5f};
+            local_shadow_eye[kMaxLocalShadows - 1] = vec3{eye.x, 0.0f, eye.z};
+            local_shadow_range[kMaxLocalShadows - 1] = kHalf * 1.5f;
+            fc.rain_occlusion = 1;
+        }
+        fc.local_shadow_texel = 1.0f / f32(max(s.local_shadow_resolution, 1u) * 4u);
+        if (light_count) vmaFlushAllocation(dev_.allocator(), fb.lights.allocation, 0, VK_WHOLE_SIZE);
+    }
+    const VkDeviceAddress lights_addr = fb.lights.address;
+
+    // Local light shadow maps: one tile of a 4 x 2 atlas per shadowed light, casters within its range.
+    rg::TextureHandle local_shadow{};
+    if (local_shadow_count > 0 || fc.rain_occlusion != 0u) {
+        std::vector<u32> local_casters[kMaxLocalShadows];
+        if (fc.rain_occlusion != 0u) {
+            // Everything over the 80 x 80 m square, at any height: the occlusion box is a column.
+            const vec3 e = local_shadow_eye[kMaxLocalShadows - 1];
+            for (const CasterSphere& cs : caster_spheres)
+                if (std::fabs(cs.c.x - e.x) < 40.0f + cs.r && std::fabs(cs.c.z - e.z) < 40.0f + cs.r)
+                    local_casters[kMaxLocalShadows - 1].push_back(cs.index);
+        }
+        for (u32 k = 0; k < local_shadow_count; ++k) {
+            vec4 lp[6];
+            frustum_planes(fc.local_shadow_vp[k], lp);
+            for (const CasterSphere& cs : caster_spheres) {
+                const vec3 d = cs.c - local_shadow_eye[k];
+                if (dot(d, d) > (local_shadow_range[k] + cs.r) * (local_shadow_range[k] + cs.r)) continue;
+                if (sphere_in_frustum(lp, cs.c, cs.r)) local_casters[k].push_back(cs.index);
+            }
+        }
+        const u32 lres = max(s.local_shadow_resolution, 64u);
+        graph_.add_pass(
+            "local_shadows", rg::PassType::Raster,
+            [&](rg::PassBuilder& b) {
+                local_shadow = b.create({shadow_format_, lres * 4, lres * 2, "local_shadow_atlas"});
+                b.depth(local_shadow, rg::Load::Clear, 1.0f, true);
+            },
+            [=, this, &fc](const rg::PassContext& ctx) {
+                std::memcpy(frames_[slot].constants.mapped, &fc, sizeof(fc));
+                vmaFlushAllocation(dev_.allocator(), frames_[slot].constants.allocation, 0, VK_WHOLE_SIZE);
+                vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
+                for (u32 k = 0; k < kMaxLocalShadows; ++k) {
+                    if (k >= local_shadow_count && !(k == kMaxLocalShadows - 1 && fc.rain_occlusion != 0u)) continue;
+                    VkViewport vp{f32((k % 4) * lres), f32((k / 4) * lres), f32(lres), f32(lres), 0.0f, 1.0f};
+                    VkRect2D sc_rect{{i32((k % 4) * lres), i32((k / 4) * lres)}, {lres, lres}};
+                    vkCmdSetViewport(ctx.cmd, 0, 1, &vp);
+                    vkCmdSetScissor(ctx.cmd, 0, 1, &sc_rect);
+                    draw_list(ctx.cmd, local_casters[k], kMaxCascades + k, true, p_shadow_, p_shadow_);
+                }
+            });
+    }
+
+    // Tiled light culling: each 16x16 pixel tile keeps the lights whose sphere touches its depth range.
+    const u32 tiles_x = (ext.width + kLightTile - 1) / kLightTile, tiles_y = (ext.height + kLightTile - 1) / kLightTile;
+    {
+        const u32 need = tiles_x * tiles_y * (1u + kMaxTileLights);
+        if (fb.tile_capacity < need || !fb.light_tiles.buffer) {
+            rhi::destroy_buffer(dev_, fb.light_tiles);
+            fb.tile_capacity = need;
+            fb.light_tiles = rhi::create_buffer(dev_, need * 4ull, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                rhi::MemoryUsage::GpuOnly, "light_tiles");
+        }
+    }
+    const VkDeviceAddress tiles_addr = fb.light_tiles.address;
+    if (light_count > 0) {
+        graph_.add_pass(
+            "light_cull", rg::PassType::Compute, [&](rg::PassBuilder& b) { b.read(depth, rg::Access::Sampled); },
+            [=, this](const rg::PassContext& ctx) {
+                struct CullPush {
+                    VkDeviceAddress frame, lights, tiles;
+                    u32 depth, count, tiles_x, tiles_y;
+                } cp{frame_addr, lights_addr, tiles_addr, ctx.sampled(depth), light_count, tiles_x, tiles_y};
+                // Last frame's reads of this slot's tile buffer finished (fence); this frame overwrites it.
+                rhi::cmd_memory_barrier(ctx.cmd, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_NONE,
+                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &bindless, 0, nullptr);
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p_light_cull_);
+                vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(cp), &cp);
+                vkCmdDispatch(ctx.cmd, tiles_x, tiles_y, 1);
+                rhi::cmd_memory_barrier(ctx.cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+            });
+    }
+
+    // Volumetric clouds: sky pixels only, reduced resolution, upsampled in the lighting pass.
+    rg::TextureHandle clouds_tex;
+    if (vclouds) {
+        const u32 div = clamp(s.cloud_res_div, 1u, 8u);
+        const VkExtent2D cext{max(1u, ext.width / div), max(1u, ext.height / div)};
+        graph_.add_pass(
+            "clouds", rg::PassType::Raster,
+            [&](rg::PassBuilder& b) {
+                clouds_tex = b.create({VK_FORMAT_R16G16B16A16_SFLOAT, cext.width, cext.height, "clouds"});
+                b.read(depth, rg::Access::Sampled);
+                b.color(clouds_tex, rg::Load::DontCare);
+            },
+            [=, this](const rg::PassContext& ctx) {
+                vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
+                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_clouds_);
+                VolumetricPush cp{frame_addr, ctx.sampled(depth), 0};
+                vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(cp), &cp);
+                vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
+            });
+    }
     rg::TextureHandle vol;
     const bool volumetric = s.volumetric_fog && s.fog_density > 0.0f;
     if (volumetric) {
@@ -1203,34 +1479,87 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                 vol = b.create({VK_FORMAT_R16G16B16A16_SFLOAT, vol_ext.width, vol_ext.height, "volumetric"});
                 b.read(depth, rg::Access::Sampled);
                 b.read(shadow, rg::Access::Sampled);
+                if (local_shadow.valid()) b.read(local_shadow, rg::Access::Sampled);
                 b.color(vol, rg::Load::DontCare);
             },
             [=, this, &fc](const rg::PassContext& ctx) {
                 // This pass samples the shadow atlas and the frame constants before the lighting pass runs.
                 fc.shadow_atlas = ctx.sampled(shadow);
+                fc.local_shadow_tex = local_shadow.valid() ? ctx.sampled(local_shadow) : kNoTexture;
                 std::memcpy(frames_[slot].constants.mapped, &fc, sizeof(fc));
                 vmaFlushAllocation(dev_.allocator(), frames_[slot].constants.allocation, 0, VK_WHOLE_SIZE);
                 vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
                 vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_volumetric_);
-                VolumetricPush vp{frame_addr, ctx.sampled(depth), 0};
+                VolumetricPush vp{frame_addr, ctx.sampled(depth), 0, lights_addr, min(light_count, 16u), 0};
                 vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(vp), &vp);
                 vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
             });
     }
+
+    // TAA history (imported before the lighting pass: screen-space reflections read last frame's image).
+    rg::TextureHandle taa_prev{}, taa_next{};
+    u32 taa_valid = 0;
+    if (s.taa) {
+        if (history_extent_.width != out_ext.width || history_extent_.height != out_ext.height) {
+            dev_.wait_idle();
+            for (u32 i = 0; i < 2; ++i) {
+                if (history_bindless_[i] != ~0u) heap_.remove_texture(history_bindless_[i]);
+                rhi::destroy_image(dev_, history_[i]);
+                rhi::ImageDesc hd;
+                hd.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+                hd.width = out_ext.width;
+                hd.height = out_ext.height;
+                hd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+                hd.name = i == 0 ? "taa_history_0" : "taa_history_1";
+                history_[i] = rhi::create_image(dev_, hd);
+                history_bindless_[i] = heap_.add_texture(history_[i].view);
+                history_layout_[i] = VK_IMAGE_LAYOUT_UNDEFINED;
+            }
+            history_extent_ = out_ext;
+            history_valid_ = false;
+        }
+        if (camera_cut) history_valid_ = false;
+        const u32 prev_i = history_cur_, next_i = history_cur_ ^ 1u;
+        auto import_history = [&](u32 i, const char* name) {
+            rg::ImportDesc d;
+            d.name = name;
+            d.image = history_[i].image;
+            d.view = history_[i].view;
+            d.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+            d.extent = out_ext;
+            d.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            d.initial_layout = history_layout_[i];
+            d.initial_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+            d.initial_access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+            d.bindless = history_bindless_[i];
+            return graph_.import(d);
+        };
+        taa_prev = import_history(prev_i, "taa_history_prev");
+        taa_next = import_history(next_i, "taa_history_next");
+        taa_valid = history_valid_ ? 1u : 0u;
+    }
+    const bool ssr = s.ssr && taa_valid != 0u;
+    static const bool no_gi = std::getenv("TEFRA_NO_GI") != nullptr; // A/B comparisons of the bounce light
+    const u32 gi_rays = taa_valid != 0u && !no_gi ? min(s.gi_rays, 15u) : 0u;
+    const bool use_history = ssr || gi_rays > 0u;
 
     graph_.add_pass(
         "lighting", rg::PassType::Raster,
         [&](rg::PassBuilder& b) {
             hdr = b.create({hdr_format_, ext.width, ext.height, "hdr"});
             for (auto h : {depth, rt0, rt1, rt2, shadow}) b.read(h, rg::Access::Sampled);
+            if (local_shadow.valid()) b.read(local_shadow, rg::Access::Sampled);
             if (skyview.valid()) b.read(skyview, rg::Access::Sampled);
             if (ao.valid()) b.read(ao, rg::Access::Sampled);
             if (vol.valid()) b.read(vol, rg::Access::Sampled);
+            if (clouds_tex.valid()) b.read(clouds_tex, rg::Access::Sampled);
+            if (use_history) b.read(taa_prev, rg::Access::Sampled);
             b.color(hdr, rg::Load::DontCare);
         },
         [=, this, &fc](const rg::PassContext& ctx) {
             // The shadow atlas index is only known once the graph has bound physical textures.
             fc.shadow_atlas = ctx.sampled(shadow);
+            fc.local_shadow_tex = local_shadow.valid() ? ctx.sampled(local_shadow) : kNoTexture;
             if (skyview.valid()) fc.atmo.skyview_lut = ctx.sampled(skyview);
             std::memcpy(frames_[slot].constants.mapped, &fc, sizeof(fc));
             vmaFlushAllocation(dev_.allocator(), frames_[slot].constants.allocation, 0, VK_WHOLE_SIZE);
@@ -1242,7 +1571,14 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                            ctx.sampled(rt1),
                            ctx.sampled(rt2),
                            ao.valid() ? ctx.sampled(ao) : 0xFFFFFFFFu,
-                           vol.valid() ? ctx.sampled(vol) : 0xFFFFFFFFu};
+                           vol.valid() ? ctx.sampled(vol) : 0xFFFFFFFFu,
+                           lights_addr,
+                           light_count,
+                           clouds_tex.valid() ? ctx.sampled(clouds_tex) : 0xFFFFFFFFu,
+                           tiles_addr,
+                           tiles_x,
+                           use_history ? ctx.sampled(taa_prev) : 0xFFFFFFFFu,
+                           (ssr ? 1u : 0u) | (gi_rays << 8u)};
             vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
             vkCmdDraw(ctx.cmd, 3, 1, 0, 0);
         });
@@ -1322,20 +1658,24 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
 
     rg::TextureHandle particle_mask{};
     bool has_particle_mask = false;
-    if (world.particles && world.particle_count > 0) {
+    const u32 pcount = world.particles ? min<u32>(world.particle_count, 200000u) : 0u;
+    const u32 rain_drops = s.rain > 0.0f ? static_cast<u32>(s.rain * f32(s.rain_drops)) : 0u;
+    if (pcount > 0 || rain_drops > 0) {
         has_particle_mask = true;
-        const u32 n = min<u32>(world.particle_count, 200000u);
-        if (fb.particle_capacity < n || !fb.particles.buffer) {
-            rhi::destroy_buffer(dev_, fb.particles);
-            fb.particle_capacity = max<u32>(1024u, n * 2u);
-            fb.particles =
-                rhi::create_buffer(dev_, sizeof(ParticleGPU) * fb.particle_capacity,
-                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                   rhi::MemoryUsage::Upload, "particles");
+        VkDeviceAddress parts = 0;
+        if (pcount > 0) {
+            if (fb.particle_capacity < pcount || !fb.particles.buffer) {
+                rhi::destroy_buffer(dev_, fb.particles);
+                fb.particle_capacity = max<u32>(1024u, pcount * 2u);
+                fb.particles =
+                    rhi::create_buffer(dev_, sizeof(ParticleGPU) * fb.particle_capacity,
+                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                       rhi::MemoryUsage::Upload, "particles");
+            }
+            std::memcpy(fb.particles.mapped, world.particles, sizeof(ParticleGPU) * pcount);
+            vmaFlushAllocation(dev_.allocator(), fb.particles.allocation, 0, VK_WHOLE_SIZE);
+            parts = fb.particles.address;
         }
-        std::memcpy(fb.particles.mapped, world.particles, sizeof(ParticleGPU) * n);
-        vmaFlushAllocation(dev_.allocator(), fb.particles.allocation, 0, VK_WHOLE_SIZE);
-        const VkDeviceAddress parts = fb.particles.address;
         graph_.add_pass(
             "particles", rg::PassType::Raster,
             [&](rg::PassBuilder& b) {
@@ -1346,14 +1686,27 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                 b.read(depth, rg::Access::Sampled);
             },
             [=, this](const rg::PassContext& ctx) {
-                struct ParticlePush {
-                    VkDeviceAddress frame, parts;
-                    u32 depth;
-                } pp{frame_addr, parts, ctx.sampled(depth)};
                 vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
-                vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_particles_);
-                vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(pp), &pp);
-                vkCmdDraw(ctx.cmd, n * 6u, 1, 0, 0);
+                if (pcount > 0) {
+                    struct ParticlePush {
+                        VkDeviceAddress frame, parts;
+                        u32 depth;
+                    } pp{frame_addr, parts, ctx.sampled(depth)};
+                    vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_particles_);
+                    vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(pp), &pp);
+                    vkCmdDraw(ctx.cmd, pcount * 6u, 1, 0, 0);
+                }
+                if (rain_drops > 0) {
+                    // Rain streaks: procedural (no buffer), wrapped in a box around the camera, lit by the nearest
+                    // local lights (rain is only visible where light catches it).
+                    struct RainPush {
+                        VkDeviceAddress frame, lights;
+                        u32 depth, light_count, drops, pad;
+                    } rp{frame_addr, lights_addr, ctx.sampled(depth), min(light_count, 24u), rain_drops, 0};
+                    vkCmdBindPipeline(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p_rain_);
+                    vkCmdPushConstants(ctx.cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(rp), &rp);
+                    vkCmdDraw(ctx.cmd, rain_drops * 6u, 1, 0, 0);
+                }
             });
     }
 
@@ -1361,43 +1714,8 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     // ---- TAA ---------------------------------------------------------------------------------------
     rg::TextureHandle resolved = hdr;
     if (s.taa) {
-        if (history_extent_.width != out_ext.width || history_extent_.height != out_ext.height) {
-            dev_.wait_idle();
-            for (u32 i = 0; i < 2; ++i) {
-                if (history_bindless_[i] != ~0u) heap_.remove_texture(history_bindless_[i]);
-                rhi::destroy_image(dev_, history_[i]);
-                rhi::ImageDesc hd;
-                hd.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-                hd.width = out_ext.width;
-                hd.height = out_ext.height;
-                hd.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-                hd.name = i == 0 ? "taa_history_0" : "taa_history_1";
-                history_[i] = rhi::create_image(dev_, hd);
-                history_bindless_[i] = heap_.add_texture(history_[i].view);
-                history_layout_[i] = VK_IMAGE_LAYOUT_UNDEFINED;
-            }
-            history_extent_ = out_ext;
-            history_valid_ = false;
-        }
-        if (camera_cut) history_valid_ = false;
-        const u32 prev_i = history_cur_, next_i = history_cur_ ^ 1u;
-        auto import_history = [&](u32 i, const char* name) {
-            rg::ImportDesc d;
-            d.name = name;
-            d.image = history_[i].image;
-            d.view = history_[i].view;
-            d.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-            d.extent = out_ext;
-            d.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-            d.initial_layout = history_layout_[i];
-            d.initial_stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-            d.initial_access = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-            d.bindless = history_bindless_[i];
-            return graph_.import(d);
-        };
-        const rg::TextureHandle hist_prev = import_history(prev_i, "taa_history_prev");
-        const rg::TextureHandle hist_next = import_history(next_i, "taa_history_next");
-        const u32 valid = history_valid_ ? 1u : 0u;
+        const rg::TextureHandle hist_prev = taa_prev, hist_next = taa_next;
+        const u32 valid = taa_valid;
         graph_.add_pass(
             "taa", rg::PassType::Raster,
             [&](rg::PassBuilder& b) {
@@ -1635,6 +1953,23 @@ void limit_quality(RenderSettings& s, Quality q) {
     s.grass_density = min(s.grass_density, t.grass_density);
     s.grass_radius = min(s.grass_radius, t.grass_radius);
     s.vegetation_distance *= t.vegetation;
+    // Volumetric clouds stay optional (Clouds.Volumetric); presets set their cost.
+    static const u32 cloud_steps[4] = {14, 20, 32, 48};
+    static const u32 cloud_div[4] = {4, 4, 2, 2};
+    s.cloud_steps = min(s.cloud_steps, cloud_steps[static_cast<u32>(q)]);
+    s.cloud_res_div = max(s.cloud_res_div, cloud_div[static_cast<u32>(q)]);
+    // Rain streaks, screen-space reflections and local lights per frame.
+    static const u32 rain_drops[4] = {5000, 9000, 16000, 24000};
+    static const u32 max_lights[4] = {128, 256, 512, 1024};
+    s.rain_drops = min(s.rain_drops, rain_drops[static_cast<u32>(q)]);
+    s.max_lights = min(s.max_lights, max_lights[static_cast<u32>(q)]);
+    static const u32 gi_rays[4] = {0, 1, 2, 3};
+    s.gi_rays = min(s.gi_rays, gi_rays[static_cast<u32>(q)]);
+    static const u32 local_shadows[4] = {0, 4, 8, 8};
+    static const u32 local_res[4] = {256, 512, 512, 1024};
+    s.local_shadows = min(s.local_shadows, local_shadows[static_cast<u32>(q)]);
+    s.local_shadow_resolution = min(s.local_shadow_resolution, local_res[static_cast<u32>(q)]);
+    if (q == Quality::Low) s.ssr = false;
     if (q == Quality::Low) {
         s.film_effects = false;
         s.auto_exposure = false;
