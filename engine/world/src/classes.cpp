@@ -50,12 +50,11 @@ struct Builder {
 } // namespace
 
 void register_builtin_classes(ClassRegistry& r) {
-    const EnumInfo* material =
-        r.add_enum("Material", {"Plastic",  "SmoothPlastic", "Wood",        "WoodPlanks", "Metal",  "DiamondPlate",
-                                "Concrete", "Brick",         "Cobblestone", "Granite",    "Marble", "Slate",
-                                "Sand",     "Grass",         "Ground",      "Rock",       "Ice",    "Glass",
-                                "Neon",     "Fabric",        "Foil",        "Wallpaper",  "Carpet", "CeilingTile",
-                                "Facade",   "Asphalt"});
+    const EnumInfo* material = r.add_enum(
+        "Material", {"Plastic",   "SmoothPlastic", "Wood",        "WoodPlanks", "Metal",  "DiamondPlate", "Concrete",
+                     "Brick",     "Cobblestone",   "Granite",     "Marble",     "Slate",  "Sand",         "Grass",
+                     "Ground",    "Rock",          "Ice",         "Glass",      "Neon",   "Fabric",       "Foil",
+                     "Wallpaper", "Carpet",        "CeilingTile", "Facade",     "Asphalt"});
     const EnumInfo* shape = r.add_enum("PartType", {"Block", "Ball", "Cylinder", "Wedge"});
     const EnumInfo* terrain_kind = r.add_enum("TerrainKind", {"None", "Valley", "Coast", "Plains"});
     const EnumInfo* script_ctx = r.add_enum("RunContext", {"Server", "Client"});
@@ -251,6 +250,9 @@ void register_builtin_classes(ClassRegistry& r) {
     b.cls("PointLight", "Light", "Omnidirectional light.", "Lights");
     b.cls("SpotLight", "Light", "Cone light along the part's -Z (front) face.", "Lights");
     b.group("Appearance").prop("Angle", Value::number(45.0), "Cone angle (degrees).");
+    b.prop("Spill", Value::number(0.0),
+           "Fraction of the light that still leaves outside the cone (0 = hard cone, 1 = a point light). A street "
+           "lantern with an opaque cap: Angle 160, Spill 0.05.");
 
     // ---- Scripts ---------------------------------------------------------------------------------------------
     b.cls("BaseScript", "Instance", "C# code that runs in play mode.").abstract();

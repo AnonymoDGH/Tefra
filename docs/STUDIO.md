@@ -288,6 +288,13 @@ Para clientes que solo hablan stdio (Claude Desktop) hay un puente, `tefra_mcp`;
 
 ## Interiores y luces locales
 - `PointLight` y `SpotLight` bajo una Part son luces reales: `Brightness` 1 ≈ 400 cd y `Range` en metros. Se reparten por tiles de 16×16 px en la GPU (hasta 64 por tile; 128–1024 visibles según el preset).
+- **Forma de la luz:** `SpotLight` emite a lo largo del -Z de su Part con `Angle` (cono) y `Spill` (fracción que sale
+  fuera del cono). Una farola con tapa opaca: Part girada hacia abajo (Orientation -90, 0, 0), `Angle` 170 y `Spill`
+  0,07. Así ilumina el suelo y los lados, casi nada hacia arriba, y el halo en la niebla también tiene esa forma.
+- **Sombras de luces locales:** `Shadows = true` da un mapa de sombras a las luces más cercanas que lo piden:
+  - 4 en Medium y 8 en High/Ultra; en Low, ninguna;
+  - cubren 120° alrededor del eje de la luz (hacia abajo en las PointLight);
+  - coches, postes, toldos y escaleras de incendios proyectan sombra, y con niebla volumétrica también rayos de luz.
 - Para un interior sin luz del día, en Lighting:
   - `SunBrightness` 0;
   - `EnvironmentDiffuseScale` 0;

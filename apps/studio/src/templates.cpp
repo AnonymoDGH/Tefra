@@ -770,6 +770,27 @@ void build_city_rain(DataModel& dm) {
         l->set("Range", Value::number(range));
         return src;
     };
+    // Shaped light: a SpotLight whose source part looks along `orient` (pitch, yaw), with spill outside the cone and
+    // optionally a shadow map (street lamps: the cap blocks the light upwards, the post and cars cast shadows).
+    auto spot_at = [&dm](Instance* parent, vec3 pos, vec3 orient, vec3 color, f32 brightness, f32 range, f32 angle,
+                         f32 spill, bool shadows) {
+        Instance* src = dm.create("Part", parent, "LightSource");
+        src->set("Position", Value::vector3(pos));
+        src->set("Orientation", Value::vector3(orient));
+        src->set("Size", Value::vector3({0.1f, 0.1f, 0.1f}));
+        src->set("Transparency", Value::number(1.0));
+        src->set("CanCollide", Value::boolean(false));
+        src->set("CastShadow", Value::boolean(false));
+        src->set("Anchored", Value::boolean(true));
+        Instance* l = dm.create("SpotLight", src, "Light");
+        l->set("Color", Value::color3(color));
+        l->set("Brightness", Value::number(brightness));
+        l->set("Range", Value::number(range));
+        l->set("Angle", Value::number(angle));
+        l->set("Spill", Value::number(spill));
+        l->set("Shadows", Value::boolean(shadows));
+        return src;
+    };
     auto center = [&](int i) { return (f32(i) - f32(kBlocks - 1) * 0.5f) * kPitch; };
 
     Instance* city = dm.create("Model", ws, "City");
@@ -827,14 +848,17 @@ void build_city_rain(DataModel& dm) {
                                 const vec3 c = at + n * 0.95f + vec3{0, 3.9f, 0};
                                 prop(furniture, "NeonSign", kNeon[pick], c, yaw_to(t));
                                 prop(furniture, "NeonSign", kNeon[pick], c, yaw_to(-t));
-                                light_at(furniture, c + n * 0.2f, neon_cols[pick % 4], 1.6f, 7.0f);
+                                light_at(furniture, c + n * 0.2f, neon_cols[pick % 4], 0.8f, 5.0f);
                             } else if (q < 0.38f) {
                                 prop(furniture, "Awning", "awning", at + n * 0.02f + vec3{0, 2.95f, 0}, yaw_to(n));
                             }
                             // Shop light spilling onto the wet sidewalk.
+                            // Shop window light: out of the glass and down onto the wet sidewalk, none back into the
+                            // wall.
                             if (q < 0.55f)
-                                light_at(furniture, at + n * 1.2f + vec3{0, 2.4f, 0},
-                                         rnd() < 0.5f ? vec3{1.0f, 0.82f, 0.6f} : vec3{0.85f, 0.92f, 1.0f}, 1.2f, 7.0f);
+                                spot_at(furniture, at + n * 0.3f + vec3{0, 2.3f, 0}, {-35.0f, yaw_to(n), 0.0f},
+                                        rnd() < 0.5f ? vec3{1.0f, 0.84f, 0.64f} : vec3{0.86f, 0.93f, 1.0f}, 2.0f, 8.0f,
+                                        130.0f, 0.0f, false);
                         }
                     }
                 }
@@ -852,7 +876,9 @@ void build_city_rain(DataModel& dm) {
                     if (slot % 2 == 0) {
                         // Cast-iron lamp post (CC0, Poly Haven): warm lantern 4 m up.
                         prop(lamps, "StreetLamp", "lamp_classic", p, yaw_to(n));
-                        light_at(lamps, p + vec3{0, 3.95f, 0}, {1.0f, 0.74f, 0.45f}, 12.0f, 22.0f);
+                        // The lantern lights downwards and sideways; its cap lets only a little light upwards.
+                        spot_at(lamps, p + vec3{0, 3.9f, 0}, {-90.0f, 0.0f, 0.0f}, {1.0f, 0.76f, 0.5f}, 14.0f, 22.0f,
+                                172.0f, 0.07f, true);
                     } else {
                         const f32 r = rnd();
                         const char* what = r < 0.12f   ? "trash_bin"
@@ -890,7 +916,8 @@ void build_city_rain(DataModel& dm) {
             }
             {
                 prop(furniture, "SecurityLight", "security_light", {cx + 1.85f, kCurb + 3.2f, cz}, 90.0f);
-                light_at(furniture, {cx + 1.0f, kCurb + 3.0f, cz}, {0.85f, 0.92f, 1.0f}, 2.5f, 10.0f);
+                spot_at(furniture, {cx + 1.6f, kCurb + 3.05f, cz}, {-60.0f, 90.0f, 0.0f}, {0.86f, 0.93f, 1.0f}, 4.0f,
+                        12.0f, 110.0f, 0.04f, true);
             }
         }
     // Intersections: lane markings, crosswalks, traffic lights, steam from manholes.
@@ -959,13 +986,17 @@ void build_city_rain(DataModel& dm) {
     l->set("CloudCover", Value::number(0.95));
     l->set("SunBrightness", Value::number(0.0));
     l->set("EnvironmentDiffuseScale", Value::number(0.05));
-    l->set("IndoorAmbient", Value::color3({0.85f, 0.62f, 0.45f})); // sodium-orange city glow
-    l->set("IndoorAmbientBrightness", Value::number(0.018));
-    l->set("ExposureCompensation", Value::number(2.4));
-    l->set("FogDensity", Value::number(0.0045));
+    l->set("IndoorAmbient", Value::color3({0.6f, 0.66f, 0.78f})); // cool bounce from wet streets and clouds
+    l->set("IndoorAmbientBrightness", Value::number(0.03));
+    l->set("ExposureCompensation", Value::number(2.9));
+    l->set("FogDensity", Value::number(0.003));
     l->set("FogHeightFalloff", Value::number(0.015));
     l->set("Saturation", Value::number(1.1));
     l->set("Contrast", Value::number(1.08));
+    // Neutral blue-grey haze: the lamps tint it locally, the distance stays cold (no sepia wash).
+    Instance* atmo = dm.create("Atmosphere", l, "Atmosphere");
+    atmo->set("Color", Value::color3({0.7f, 0.77f, 0.9f}));
+    atmo->set("Density", Value::number(0.0));
     Instance* rain = dm.create("Rain", l, "Rain");
     rain->set("Intensity", Value::number(0.85));
     rain->set("Wetness", Value::number(0.92));

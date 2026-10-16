@@ -56,10 +56,12 @@ struct RenderSettings {
     vec3 sun_color{1.0f, 0.86f, 0.70f};                         // normalized to luminance 1 internally
     f32 sun_illuminance = 30000.0f;                             // lux
     f32 ibl_intensity = 1.0f;
-    f32 sun_scale = 1.0f;           // multiplies the sun / moon light (0 = interiors without daylight)
-    vec3 ambient{0.0f, 0.0f, 0.0f}; // flat indoor/bounce irradiance (lux): interiors lit by local lights
-    bool ssr = true;                // screen-space reflections on glossy surfaces (needs TAA history)
-    u32 max_lights = 512;           // nearest visible local lights per frame (tiled: 64 per 16x16 tile)
+    f32 sun_scale = 1.0f;              // multiplies the sun / moon light (0 = interiors without daylight)
+    vec3 ambient{0.0f, 0.0f, 0.0f};    // flat indoor/bounce irradiance (lux): interiors lit by local lights
+    bool ssr = true;                   // screen-space reflections on glossy surfaces (needs TAA history)
+    u32 local_shadows = 8;             // nearest local lights with Shadows = true that get a shadow map
+    u32 local_shadow_resolution = 512; // per light (atlas of 4 x 2 tiles)
+    u32 max_lights = 512;              // nearest visible local lights per frame (tiled: 64 per 16x16 tile)
     // Height fog (spec 2 §2). density = 0 disables.
     f32 fog_density = 0.0f;  // 1/m at fog_height
     f32 fog_falloff = 0.02f; // 1/m

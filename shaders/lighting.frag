@@ -216,6 +216,13 @@ vec3 light_halos(Frame f, vec3 dir, float tmax) {
         float h = sqrt(h2);
         float integral = (atan((tmax - s0) / h) - atan(-s0 / h)) / h;
         float fade = 1.0 - smoothstep(0.4 * r * r, r * r, h2);
+        if (l.spot.w >= -1.0) {
+            // Shaped emission: weight the glow by the profile towards the closest point of the ray (a lantern with
+            // a cap glows below and around it, not above).
+            vec3 q = dir * clamp(s0, 0.0, tmax) - c;
+            float cone = smoothstep(l.spot.w, max(l.extra.x, l.spot.w + 1e-3), dot(normalize(q + vec3(1e-4)), l.spot.xyz));
+            fade *= mix(l.extra.y, 1.0, cone);
+        }
         sum += l.color.rgb * integral * fade;
     }
     return sum * sigma * (1.0 / (4.0 * BRDF_PI)) * 1.2;
@@ -330,7 +337,15 @@ void main() {
         if (nl <= 0.0) continue;
         float win = clamp(1.0 - (d2 * d2) / (range * range * range * range), 0.0, 1.0);
         float atten = win * win / max(d2, 0.04);
-        if (lt.spot.w >= -1.0) atten *= smoothstep(lt.spot.w, max(lt.extra.x, lt.spot.w + 1e-3), dot(-Ll, lt.spot.xyz));
+        float cone = 1.0;
+        if (lt.spot.w >= -1.0) {
+            // Emission profile: full inside the cone, `spill` outside it (an opaque lamp cap still lets a little
+            // light through the glass and off the fixture).
+            cone = smoothstep(lt.spot.w, max(lt.extra.x, lt.spot.w + 1e-3), dot(-Ll, lt.spot.xyz));
+            atten *= mix(lt.extra.y, 1.0, cone);
+        }
+        if (lt.extra.z >= 0.0 && atten > 0.0)
+            atten *= local_shadow(f, int(lt.extra.z), p, N, sqrt(d2), true);
         vec3 Hl = normalize(V + Ll);
         vec3 Fl = F_Schlick(f0, max(dot(V, Hl), 0.0));
         vec3 specl = D_GGX(max(dot(N, Hl), 0.0), a) * V_SmithGGX(ndv, nl, a) * Fl;

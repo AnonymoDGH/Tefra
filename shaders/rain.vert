@@ -52,7 +52,10 @@ void main() {
         if (d2 > r * r) continue;
         float win = clamp(1.0 - d2 * d2 / (r * r * r * r), 0.0, 1.0);
         float fwd = pow(max(dot(normalize(d), -V), 0.0), 8.0);
-        col += l.color.rgb * win * win / max(d2, 0.2) * (0.06 + 1.4 * fwd);
+        float prof = 1.0;
+        if (l.spot.w >= -1.0)
+            prof = mix(l.extra.y, 1.0, smoothstep(l.spot.w, max(l.extra.x, l.spot.w + 1e-3), dot(-normalize(d), l.spot.xyz)));
+        col += l.color.rgb * win * win / max(d2, 0.2) * (0.06 + 1.4 * fwd) * prof;
     }
     v_color = col * f.exposure.x;
     v_alpha = f.weather.z * dim * smoothstep(0.4, 1.5, dist) * (1.0 - smoothstep(10.0, 15.0, dist));

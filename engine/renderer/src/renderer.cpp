@@ -688,6 +688,12 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     vec4 planes[6];
     frustum_planes(fc.view_proj, planes);
     std::vector<u32> visible, casters[kMaxCascades];
+    struct CasterSphere {
+        vec3 c;
+        f32 r;
+        u32 index;
+    };
+    std::vector<CasterSphere> caster_spheres; // shadow casters for the local light shadow maps
     auto* gpu_inst = static_cast<InstanceGPU*>(fb.instances.mapped);
     const bool have_history = instance_history_.size() == instances.size();
     std::vector<XformHistory> history(instances.size());
@@ -716,6 +722,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         f32 r = mr.bounds.radius * max(max(in.scale.x, in.scale.y), in.scale.z);
         if (dynamic) r = r * 1.5f + 0.5f; // posed vertices can leave the bind-pose sphere
         if (sphere_in_frustum(planes, c, r)) visible.push_back(i);
+        if (in.cast_shadows && s.local_shadows > 0) caster_spheres.push_back({c, r, i});
         if (in.cast_shadows)
             for (u32 k = 0; k < cascades; ++k) {
                 // Cylinder test along the light direction approximated by sphere distance in the light plane.
@@ -1249,6 +1256,9 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
     // Volumetric fog: half-resolution in-scatter and transmittance (volumetric.frag), composed in the lighting pass.
     // ---- Local lights: the nearest visible ones, camera-relative -------------------------------------------
     u32 light_count = 0;
+    u32 local_shadow_count = 0;
+    vec3 local_shadow_eye[kMaxLocalShadows];
+    f32 local_shadow_range[kMaxLocalShadows];
     {
         const auto& src = scene.lights();
         vec4 lplanes[6];
@@ -1286,16 +1296,79 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, rhi::MemoryUsage::Upload, "lights");
         }
         auto* dst = static_cast<LightGPU*>(fb.lights.mapped);
+        const u32 max_shadows = min(s.local_shadows, kMaxLocalShadows);
         for (u32 i = 0; i < light_count; ++i) {
             const LocalLight& l = src[picks[i].index];
             dst[i].pos_range = vec4(picks[i].rel, l.range);
             dst[i].color = vec4(l.color * l.intensity, 0.0f);
             dst[i].spot = vec4(l.direction, l.cos_outer);
-            dst[i].extra = vec4(l.cos_inner, 0.0f, 0.0f, 0.0f);
+            f32 shadow_index = -1.0f;
+            if (l.shadows && local_shadow_count < max_shadows) {
+                // Perspective shadow map along the spot axis (straight down for point lights), at most 120 degrees
+                // wide: lamps light the ground below them. Outside the frustum the light stays unshadowed.
+                const u32 k = local_shadow_count++;
+                const bool spot = l.cos_outer >= -1.0f;
+                const vec3 axis = spot ? l.direction : vec3{0.0f, -1.0f, 0.0f};
+                const f32 half = spot ? min(std::acos(clamp(l.cos_outer, -1.0f, 1.0f)) + 0.05f, 1.047f) : 1.047f;
+                const vec3 up = std::fabs(axis.y) > 0.9f ? vec3{0.0f, 0.0f, 1.0f} : vec3{0.0f, 1.0f, 0.0f};
+                const vec3 eye = picks[i].rel;
+                const mat4 view = look_at(eye, eye + axis, up);
+                // Vulkan right-handed perspective, depth 0 (near) .. 1 (far). The near plane (0.3 m) clips the
+                // fixture's own glass and frame around the light.
+                const f32 n = 0.3f, fz = max(l.range, n + 0.5f), t = 1.0f / std::tan(half);
+                mat4 proj{};
+                proj.c[0].x = t;
+                proj.c[1].y = t;
+                proj.c[2].z = fz / (n - fz);
+                proj.c[2].w = -1.0f;
+                proj.c[3].z = -(fz * n) / (fz - n);
+                fc.local_shadow_vp[k] = proj * view;
+                fc.local_shadow_atlas[k] = {f32(k % 4) * 0.25f, f32(k / 4) * 0.5f, 0.25f, 0.5f};
+                local_shadow_eye[k] = eye;
+                local_shadow_range[k] = fz;
+                shadow_index = f32(k);
+            }
+            dst[i].extra = vec4(l.cos_inner, l.spill, shadow_index, 0.0f);
         }
+        fc.local_shadow_count = local_shadow_count;
+        fc.local_shadow_texel = 1.0f / f32(max(s.local_shadow_resolution, 1u) * 4u);
         if (light_count) vmaFlushAllocation(dev_.allocator(), fb.lights.allocation, 0, VK_WHOLE_SIZE);
     }
     const VkDeviceAddress lights_addr = fb.lights.address;
+
+    // Local light shadow maps: one tile of a 4 x 2 atlas per shadowed light, casters within its range.
+    rg::TextureHandle local_shadow{};
+    if (local_shadow_count > 0) {
+        std::vector<u32> local_casters[kMaxLocalShadows];
+        for (u32 k = 0; k < local_shadow_count; ++k) {
+            vec4 lp[6];
+            frustum_planes(fc.local_shadow_vp[k], lp);
+            for (const CasterSphere& cs : caster_spheres) {
+                const vec3 d = cs.c - local_shadow_eye[k];
+                if (dot(d, d) > (local_shadow_range[k] + cs.r) * (local_shadow_range[k] + cs.r)) continue;
+                if (sphere_in_frustum(lp, cs.c, cs.r)) local_casters[k].push_back(cs.index);
+            }
+        }
+        const u32 lres = max(s.local_shadow_resolution, 64u);
+        graph_.add_pass(
+            "local_shadows", rg::PassType::Raster,
+            [&](rg::PassBuilder& b) {
+                local_shadow = b.create({shadow_format_, lres * 4, lres * 2, "local_shadow_atlas"});
+                b.depth(local_shadow, rg::Load::Clear, 1.0f, true);
+            },
+            [=, this, &fc](const rg::PassContext& ctx) {
+                std::memcpy(frames_[slot].constants.mapped, &fc, sizeof(fc));
+                vmaFlushAllocation(dev_.allocator(), frames_[slot].constants.allocation, 0, VK_WHOLE_SIZE);
+                vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
+                for (u32 k = 0; k < local_shadow_count; ++k) {
+                    VkViewport vp{f32((k % 4) * lres), f32((k / 4) * lres), f32(lres), f32(lres), 0.0f, 1.0f};
+                    VkRect2D sc_rect{{i32((k % 4) * lres), i32((k / 4) * lres)}, {lres, lres}};
+                    vkCmdSetViewport(ctx.cmd, 0, 1, &vp);
+                    vkCmdSetScissor(ctx.cmd, 0, 1, &sc_rect);
+                    draw_list(ctx.cmd, local_casters[k], kMaxCascades + k, true, p_shadow_, p_shadow_);
+                }
+            });
+    }
 
     // Tiled light culling: each 16x16 pixel tile keeps the lights whose sphere touches its depth range.
     const u32 tiles_x = (ext.width + kLightTile - 1) / kLightTile, tiles_y = (ext.height + kLightTile - 1) / kLightTile;
@@ -1360,11 +1433,13 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
                 vol = b.create({VK_FORMAT_R16G16B16A16_SFLOAT, vol_ext.width, vol_ext.height, "volumetric"});
                 b.read(depth, rg::Access::Sampled);
                 b.read(shadow, rg::Access::Sampled);
+                if (local_shadow.valid()) b.read(local_shadow, rg::Access::Sampled);
                 b.color(vol, rg::Load::DontCare);
             },
             [=, this, &fc](const rg::PassContext& ctx) {
                 // This pass samples the shadow atlas and the frame constants before the lighting pass runs.
                 fc.shadow_atlas = ctx.sampled(shadow);
+                fc.local_shadow_tex = local_shadow.valid() ? ctx.sampled(local_shadow) : kNoTexture;
                 std::memcpy(frames_[slot].constants.mapped, &fc, sizeof(fc));
                 vmaFlushAllocation(dev_.allocator(), frames_[slot].constants.allocation, 0, VK_WHOLE_SIZE);
                 vkCmdBindDescriptorSets(ctx.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &bindless, 0, nullptr);
@@ -1424,6 +1499,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         [&](rg::PassBuilder& b) {
             hdr = b.create({hdr_format_, ext.width, ext.height, "hdr"});
             for (auto h : {depth, rt0, rt1, rt2, shadow}) b.read(h, rg::Access::Sampled);
+            if (local_shadow.valid()) b.read(local_shadow, rg::Access::Sampled);
             if (skyview.valid()) b.read(skyview, rg::Access::Sampled);
             if (ao.valid()) b.read(ao, rg::Access::Sampled);
             if (vol.valid()) b.read(vol, rg::Access::Sampled);
@@ -1434,6 +1510,7 @@ void Renderer::render(VkCommandBuffer cmd, u32 slot, u64 frame_index, rhi::GpuTi
         [=, this, &fc](const rg::PassContext& ctx) {
             // The shadow atlas index is only known once the graph has bound physical textures.
             fc.shadow_atlas = ctx.sampled(shadow);
+            fc.local_shadow_tex = local_shadow.valid() ? ctx.sampled(local_shadow) : kNoTexture;
             if (skyview.valid()) fc.atmo.skyview_lut = ctx.sampled(skyview);
             std::memcpy(frames_[slot].constants.mapped, &fc, sizeof(fc));
             vmaFlushAllocation(dev_.allocator(), frames_[slot].constants.allocation, 0, VK_WHOLE_SIZE);
@@ -1836,6 +1913,10 @@ void limit_quality(RenderSettings& s, Quality q) {
     static const u32 max_lights[4] = {128, 256, 512, 1024};
     s.rain_drops = min(s.rain_drops, rain_drops[static_cast<u32>(q)]);
     s.max_lights = min(s.max_lights, max_lights[static_cast<u32>(q)]);
+    static const u32 local_shadows[4] = {0, 4, 8, 8};
+    static const u32 local_res[4] = {256, 512, 512, 1024};
+    s.local_shadows = min(s.local_shadows, local_shadows[static_cast<u32>(q)]);
+    s.local_shadow_resolution = min(s.local_shadow_resolution, local_res[static_cast<u32>(q)]);
     if (q == Quality::Low) s.ssr = false;
     if (q == Quality::Low) {
         s.film_effects = false;

@@ -252,7 +252,9 @@ void SceneSync::sync_lights() {
             const f32 half = clamp(l->get_float("Angle", 45.0f), 1.0f, 179.0f) * 0.5f * 0.0174533f;
             ll.cos_outer = std::cos(half);
             ll.cos_inner = std::cos(half * 0.8f);
+            ll.spill = clamp(l->get_float("Spill", 0.0f), 0.0f, 1.0f);
         }
+        ll.shadows = l->get_bool("Shadows", false);
         out.push_back(ll);
     }
 }

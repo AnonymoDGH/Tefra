@@ -62,6 +62,7 @@ struct ParticleGPU {
 static_assert(sizeof(ParticleGPU) == 64);
 
 constexpr u32 kMaxCascades = 4;
+constexpr u32 kMaxLocalShadows = 8; // shadow-mapped local lights per frame (cascade index 4.. in shadow.vert)
 
 struct FrameConstants {
     mat4 view_proj; // camera-relative
@@ -107,6 +108,12 @@ struct FrameConstants {
     vec4 vclouds;    // x volumetric clouds on (1), y thickness (m), z view steps, w unused
     vec4 weather;    // x wetness, y puddles, z rain intensity, w drop speed (m/s)
     vec4 rain_wind;  // xyz wind (m/s) tilting the rain, w drop length (m)
+    mat4 local_shadow_vp[kMaxLocalShadows];    // camera-relative view-projection of each shadowed local light
+    vec4 local_shadow_atlas[kMaxLocalShadows]; // xy offset, zw scale in the local shadow atlas (uv)
+    u32 local_shadow_tex = kNoTexture;         // bindless 2D index of the local shadow atlas
+    u32 local_shadow_count = 0;
+    f32 local_shadow_texel = 0.0f; // atlas texel size (uv)
+    f32 local_shadow_pad = 0.0f;
 };
 
 // Local light as the lighting pass reads it (camera-relative position).
@@ -114,7 +121,7 @@ struct LightGPU {
     vec4 pos_range; // xyz camera-relative position (m), w range (m)
     vec4 color;     // rgb = linear colour x intensity (cd)
     vec4 spot;      // xyz spot axis, w cos outer (< -1: point light)
-    vec4 extra;     // x cos inner
+    vec4 extra;     // x cos inner, y spill (intensity outside the cone), z local shadow index (< 0: none)
 };
 static_assert(sizeof(LightGPU) == 64);
 static_assert(sizeof(FrameConstants) % 16 == 0);

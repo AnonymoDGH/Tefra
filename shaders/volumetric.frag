@@ -50,7 +50,7 @@ void main() {
         }
         // Integral of sigma(s) * T(s) over the step equals T(start) - T(end) (exact for exponential density).
         // Local lights (nearest first): halos and light cones in the haze around street lamps. Isotropic-ish phase
-        // with a forward lobe; no shadows for local lights.
+        // with a forward lobe; shadow-mapped lights get one shadow tap.
         vec3 local = vec3(0.0);
         for (uint li = 0u; li < pc.light_count; ++li) {
             LightGPU l = pc.lights.l[li];
@@ -59,7 +59,10 @@ void main() {
             if (d2 > r * r) continue;
             float win = clamp(1.0 - d2 * d2 / (r * r * r * r), 0.0, 1.0);
             float atten = win * win / max(d2, 0.25);
-            if (l.spot.w >= -1.0) atten *= smoothstep(l.spot.w, max(l.extra.x, l.spot.w + 1e-3), dot(-normalize(d), l.spot.xyz));
+            if (l.spot.w >= -1.0)
+                atten *= mix(l.extra.y, 1.0, smoothstep(l.spot.w, max(l.extra.x, l.spot.w + 1e-3), dot(-normalize(d), l.spot.xyz)));
+            // Shadowed lights cast shafts through the haze (fire escapes, awnings, cars).
+            if (l.extra.z >= 0.0 && atten > 0.0) atten *= local_shadow(f, int(l.extra.z), x, vec3(0.0), length(d), false);
             float cosv = dot(normalize(d), dir);
             float phase = 0.012 + 0.08 * pow(max(cosv, 0.0), 8.0);
             local += l.color.rgb * atten * phase;

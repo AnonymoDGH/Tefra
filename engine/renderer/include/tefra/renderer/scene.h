@@ -48,6 +48,8 @@ struct LocalLight {
     f32 range = 16.0f;                 // m
     f32 cos_outer = -2.0f;             // spot cone (cos of the half angle); < -1 = point light
     f32 cos_inner = -2.0f;
+    f32 spill = 0.0f;     // fraction of the intensity outside the cone (fixture glass, reflections)
+    bool shadows = false; // gets a shadow map when it is among the nearest shadowed lights
 };
 
 // A skeleton's palette (joint matrices in the mesh's own space: joint_global * inverse_bind). The renderer keeps the

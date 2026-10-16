@@ -28,6 +28,7 @@ Las sesiones no recuerdan nada: este archivo es la memoria. Actualízalo al fina
     - semáforos, neones con texto (`make_city_props.py`).
   - Kits en `build/polyhaven` (no versionado).
   - Coste sin medir en la HD 520 (edificios de 55–186 k triángulos).
+- **Luces con forma y sombra (2026-10-16):** `SpotLight.Spill` (perfil fuera del cono, también en halos, volumétrica y lluvia); `Shadows=true` → atlas de sombras locales 4×2 (`local_shadows` pass, cascade 4.. en `shadow.vert`, `local_shadow()` en `shadow.glsl`; 0/4/8/8 por preset). Niebla de ciudad neutra (Atmosphere azul gris, ambiente desaturado en `fog_ambient`).
 - **POM + interior mapping** (`gbuffer.frag`, flags 32/64, extras glTF `tefra_parallax`/`tefra_height`/`tefra_interior`; `docs/research/parallax/REPORT.md`).
 - **Cámara y personaje en juego:** interpolación de física (`character_post_step` con alpha), inercia/giro suave/coyote time/buffer de salto/salto variable/sprint (`physics/character.cpp`); cámara con cursor bloqueado, shift-lock (Ctrl), primera persona, zoom exponencial, colisión con 3 rayos (`GameRuntime::update_camera`).
 - **Nubes volumétricas opcionales** (`Clouds.Volumetric`; `shaders/clouds_vol.frag`, pase `clouds` a 1/2-1/4 de resolución solo en píxeles de cielo, compuesto en `lighting.frag` `sky_with_clouds`; presets en `limit_quality`). Pendiente: sombras de nubes sobre el suelo, reproyección temporal propia.
