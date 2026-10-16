@@ -65,7 +65,7 @@ Las sesiones no recuerdan nada: este archivo es la memoria. Actualízalo al fina
 - Assets CC0 de demo: `python3 scripts/fetch_assets.py` → `assets/cache/` (no versionado). Ejemplo: `tefra_bench --gltf assets/cache/models/dead_tree_trunk/dead_tree_trunk.gltf --hdr assets/cache/hdri/dark_autumn_forest.hdr --capture out.png`.
 - El usuario concedió **autonomía total** (2026-10-10): sin preguntas, push libre, decisiones con criterio. Corrige al ver resultados.
 - Spec vigente: `docs/specs/2026-10-10-tefra-vision-y-fundaciones.md`. Plan M0: `docs/plans/2026-10-10-m0-fundaciones.md`.
-- Repo `AnonymoDGH/Tefra` (público; el usuario autorizó el push). Rama de trabajo: `claude/new-session-ksgl0m`.
+- Repo `AnonymoDGH/Tefra` (público desde 2026-10-16; mientras fue privado se agotaron los minutos de Actions y los jobs morían sin runner; el usuario autorizó el push). CI exige `clang-format` limpio: pasarlo antes de cada push. Rama de trabajo: `claude/new-session-ksgl0m`.
 - Pendiente del usuario: ejecutar `scripts/bench-windows.bat` en su PC (build en el artifact `tefra-windows` de CI) y devolver `info.json` y `bench-*.json`.
 
 ## Decisiones (ADR cortos; detalle en el spec §3)
