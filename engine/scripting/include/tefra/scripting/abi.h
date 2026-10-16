@@ -98,17 +98,17 @@ typedef struct TefraNativeApi {
     uint64_t (*root)(void);                          // the DataModel root (source of InputBegan / InputEnded)
     // Attributes (ABI 3). Values use TefraValue; attr_get/attr_set accept Bool, Int, Float, String, Vector3, Color3.
     // String pointers returned here stay valid until the next call that mutates the model.
-    int32_t (*attr_count)(uint64_t id);                                         // -1 if the id is gone
-    const char* (*attr_name_at)(uint64_t id, int32_t index);                    // nullptr when out of range
-    int32_t (*attr_get)(uint64_t id, const char* name, TefraValue* out);        // 1 = found
+    int32_t (*attr_count)(uint64_t id);                                          // -1 if the id is gone
+    const char* (*attr_name_at)(uint64_t id, int32_t index);                     // nullptr when out of range
+    int32_t (*attr_get)(uint64_t id, const char* name, TefraValue* out);         // 1 = found
     int32_t (*attr_set)(uint64_t id, const char* name, const TefraValue* value); // 1 = ok, 0 = rejected
-    int32_t (*attr_remove)(uint64_t id, const char* name);                      // 1 = removed
+    int32_t (*attr_remove)(uint64_t id, const char* name);                       // 1 = removed
     // Tags (ABI 3).
     int32_t (*tag_add)(uint64_t id, const char* tag);    // 1 = added, 0 = already tagged or rejected
     int32_t (*tag_remove)(uint64_t id, const char* tag); // 1 = removed
     int32_t (*tag_has)(uint64_t id, const char* tag);
-    int32_t (*tag_count)(uint64_t id);                   // -1 if the id is gone
-    const char* (*tag_at)(uint64_t id, int32_t index);   // nullptr when out of range
+    int32_t (*tag_count)(uint64_t id);                 // -1 if the id is gone
+    const char* (*tag_at)(uint64_t id, int32_t index); // nullptr when out of range
     int32_t (*tagged_count)(const char* tag);
     uint64_t (*tagged_at)(const char* tag, int32_t index); // attached instances, in id order; 0 when out of range
     // Workspace:Spherecast(origin, radius, direction): the length of direction is the distance. Same out[7] and result.

@@ -134,7 +134,8 @@ bool App::init(std::string* error) {
     }
     u32 w = 0, h = 0;
     window_->framebuffer_size(w, h);
-    swapchain_ = std::make_unique<rhi::Swapchain>(*device_, surface, w, h, rhi::PresentMode::Mailbox); // low latency; falls back to fifo
+    swapchain_ = std::make_unique<rhi::Swapchain>(*device_, surface, w, h,
+                                                  rhi::PresentMode::Mailbox); // low latency; falls back to fifo
     frames_ = std::make_unique<rhi::FrameLoop>(*device_, kFramesInFlight);
     heap_ = std::make_unique<rhi::BindlessHeap>(*device_, kFramesInFlight);
     scene_ = std::make_unique<render::Scene>(*device_, *heap_);

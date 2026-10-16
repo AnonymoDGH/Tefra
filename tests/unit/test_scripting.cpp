@@ -50,7 +50,6 @@ const std::filesystem::path kDatastoreDir = std::filesystem::temp_directory_path
 #endif
 }();
 
-
 } // namespace
 
 TEST_CASE("scripting: a missing managed assembly is reported and the host stays unavailable") {
